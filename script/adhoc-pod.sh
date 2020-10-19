@@ -19,18 +19,36 @@ kind: Pod
 metadata:
   name: ${name}
   labels:
-    square-envoy-injection: true
+    square-envoy-injection: enabled
 spec:
   containers:
-    - name: main
-      image: golang
-      command: ["sleep"]
-      args: ["86400"]
+  - name: main
+    image: golang
+    command: ["sleep"]
+    args: ["86400"]
+    volumeMounts:
+    - mountPath: /root
+      name: home-volume
+    - mountPath: /etc/config
+      name: config-files-volume
+      readOnly: true
+    - mountPath: /etc/config/db
+      name: db-config
+      readOnly: true
+    - mountPath: /etc/secrets/db
+      name: db-secrets
+      readOnly: true
+    - mountPath: /etc/secrets/service
+      name: service-secrets-volume
+      readOnly: true
+    - mountPath: /etc/secrets/ssl
+      name: ssl-secrets-volume
+      readOnly: true
   volumes:
-  - configMap:
+  - name: db-config
+    configMap:
       defaultMode: 420
       name: db-config
-    name: db-config
   - name: db-secrets
     secret:
       defaultMode: 420
@@ -43,4 +61,10 @@ spec:
     secret:
       defaultMode: 420
       secretName: ssl-secrets
+  - name: config-files-volume
+    configMap:
+      defaultMode: 420
+      name: config-files
+  - name: home-volume
+    emptyDir: {}
 EOF

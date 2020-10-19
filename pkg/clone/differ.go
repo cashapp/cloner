@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 type DiffType string
@@ -75,22 +79,43 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 	}
 }
 
-func DiffChunks(ctx context.Context, from *sql.Conn, to *sql.Conn, chunks chan Chunk, diffs chan Diff) error {
+func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunks chan Chunk, diffs chan Diff) error {
 	for {
 		select {
 		case chunk, more := <-chunks:
 			if more {
-				fromStream := StreamChunk(ctx, from, chunk)
-				toStream := StreamChunk(ctx, to, chunk)
-				err := StreamDiff(ctx, fromStream, toStream, diffs)
+				err := diffChunk(ctx, source, target, targetFilter, chunk, diffs)
 				if err != nil {
 					return err
 				}
 			} else {
+				log.Debugf("Differ done!")
+				close(diffs)
 				return nil
 			}
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
+	// TODO start off by running a fast checksum query
+
+	sourceStream, err := StreamChunk(ctx, source, chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	targetStream, err := StreamChunk(ctx, target, chunk)
+	if len(targetFilter) > 0 {
+		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
+	}
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = StreamDiff(ctx, sourceStream, targetStream, diffs)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }

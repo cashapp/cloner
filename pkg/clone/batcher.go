@@ -1,6 +1,10 @@
 package clone
 
-import "context"
+import (
+	"context"
+
+	log "github.com/sirupsen/logrus"
+)
 
 type Batch struct {
 	Type  DiffType
@@ -10,17 +14,17 @@ type Batch struct {
 
 // BatchWrites consumes diffs and batches them up into batches by type and table
 func BatchWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
-	batchesInProgress := make(map[DiffType]map[string]Batch)
+	batchesByType := make(map[DiffType]map[string]Batch)
 
 readChannel:
 	for {
 		select {
 		case diff, more := <-diffs:
 			if more {
-				batchesByTable, ok := batchesInProgress[diff.Type]
+				batchesByTable, ok := batchesByType[diff.Type]
 				if !ok {
 					batchesByTable = make(map[string]Batch)
-					batchesInProgress[diff.Type] = batchesByTable
+					batchesByType[diff.Type] = batchesByTable
 				}
 				batch, ok := batchesByTable[diff.Row.Table.Name]
 				if !ok {
@@ -45,7 +49,7 @@ readChannel:
 	}
 
 	// Write the final unfilled batches
-	for _, batchesByTable := range batchesInProgress {
+	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {
 				batches <- batch
@@ -53,5 +57,8 @@ readChannel:
 		}
 	}
 	close(batches)
+
+	log.Debugf("Batcher done!")
+
 	return nil
 }

@@ -1,0 +1,6 @@
+{
+  "sharded": false,
+  "tables": {
+    "customers_seq": {"type": "sequence"}
+  }
+}

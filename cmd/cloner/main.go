@@ -9,8 +9,8 @@ import (
 var cli struct {
 	clone.Globals
 
-	Clone clone.Config `cmd:"" help:"Clone database."`
-	Ping  clone.Ping   `cmd:"" help:"Ping the databases"`
+	Clone clone.Clone `cmd:"" help:"Clone database."`
+	Ping  clone.Ping  `cmd:"" help:"Ping the databases"`
 }
 
 func main() {

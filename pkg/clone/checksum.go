@@ -3,21 +3,16 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	_ "net/http/pprof"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"vitess.io/vitess/go/vt/key"
-	"vitess.io/vitess/go/vt/proto/query"
-	"vitess.io/vitess/go/vt/proto/topodata"
-	"vitess.io/vitess/go/vt/topo/topoproto"
 )
 
-type Clone struct {
+type Checksum struct {
 	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
 	QueueSize      int `help:"Queue size of the chunk queue" default:"1000"`
@@ -29,13 +24,24 @@ type Clone struct {
 }
 
 // Run applies the necessary changes to target to make it look like source
-func (cmd *Clone) Run(globals Globals) error {
+func (cmd *Checksum) Run(globals Globals) error {
 	go func() {
 		log.Infof("Serving diagnostics on http://localhost:6060")
 		err := http.ListenAndServe("localhost:6060", nil)
 		log.Fatalf("%v", err)
 	}()
 
+	diffs, err := cmd.run(globals)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if len(diffs) > 0 {
+		return errors.Errorf("Found diffs")
+	}
+	return nil
+}
+
+func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	var err error
 
 	// TODO timeout?
@@ -44,24 +50,25 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	source, err := globals.Source.DB()
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 	target, err := globals.Target.DB()
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 
 	// Create synced source and chunker conns
 	var sourceConns []*sql.Conn
 	if cmd.HighFidelity {
 		sourceConns, err = OpenSyncedConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
+		// TODO sync up the target connections
 		if err != nil {
-			return err
+			return nil, errors.WithStack(err)
 		}
 	} else {
 		sourceConns, err = OpenConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
 		if err != nil {
-			return err
+			return nil, errors.WithStack(err)
 		}
 	}
 	defer CloseConnections(sourceConns)
@@ -72,36 +79,28 @@ func (cmd *Clone) Run(globals Globals) error {
 	// Create synced target reader conns
 	targetConns, err := OpenConnections(ctx, target, cmd.ReaderCount)
 	if err != nil {
-		return err
+		return nil, errors.WithStack(err)
 	}
 	defer CloseConnections(targetConns)
-
-	// Create writer connections
-	writerConns, err := OpenConnections(ctx, target, cmd.WriterCount)
-	if err != nil {
-		return err
-	}
-	defer CloseConnections(writerConns)
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 
 	// Parse the keyrange on the source so that we can filter the target
 	shardingSpec, err := key.ParseShardingSpec(sourceVitessTarget.Shard)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 
 	chunks := make(chan Chunk, cmd.QueueSize)
 	diffs := make(chan Diff, cmd.QueueSize)
-	batches := make(chan Batch, cmd.QueueSize)
 	errCh := make(chan error)
 	wg := &sync.WaitGroup{}
 	waitCh := make(chan struct{})
@@ -115,29 +114,6 @@ func (cmd *Clone) Run(globals Globals) error {
 			errCh <- err
 		}
 	}()
-
-	// Batch writes
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := BatchWrites(ctx, cmd.WriteBatchSize, diffs, batches)
-		if err != nil {
-			errCh <- err
-		}
-	}()
-
-	// Write batches
-	for i, _ := range writerConns {
-		conn := writerConns[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := Write(ctx, conn, batches)
-			if err != nil {
-				errCh <- err
-			}
-		}()
-	}
 
 	// Diff chunks
 	for i, _ := range sourceConns {
@@ -153,6 +129,16 @@ func (cmd *Clone) Run(globals Globals) error {
 		}()
 	}
 
+	// Reporter
+	wg.Add(1)
+	var foundDiffs []Diff
+	go func() {
+		defer wg.Done()
+		for diff := range diffs {
+			foundDiffs = append(foundDiffs, diff)
+		}
+	}()
+
 	// Wrap the wait group in a channel so that we can select on it below
 	go func() {
 		wg.Wait()
@@ -163,43 +149,12 @@ func (cmd *Clone) Run(globals Globals) error {
 	select {
 	case <-waitCh:
 		log.Debugf("Done")
-		return nil
+		return foundDiffs, nil
 	case err := <-errCh:
 		close(errCh)
 		// Return the first error only, ignore the rest (they should have logged)
-		return err
+		return nil, err
 	case <-ctx.Done():
-		return errors.Errorf("Timed out")
+		return nil, errors.Errorf("Timed out")
 	}
-}
-
-func parseTarget(targetString string) (*query.Target, error) {
-	// Default tablet type is master.
-	target := &query.Target{
-		TabletType: topodata.TabletType_MASTER,
-	}
-	last := strings.LastIndexAny(targetString, "@")
-	if last != -1 {
-		// No need to check the error. UNKNOWN will be returned on
-		// error and it will fail downstream.
-		tabletType, err := topoproto.ParseTabletType(targetString[last+1:])
-		if err != nil {
-			return target, err
-		}
-		target.TabletType = tabletType
-		targetString = targetString[:last]
-	}
-	last = strings.LastIndexAny(targetString, "/:")
-	if last != -1 {
-		target.Shard = targetString[last+1:]
-		targetString = targetString[:last]
-	}
-	target.Keyspace = targetString
-	if target.Keyspace == "" {
-		return target, fmt.Errorf("no keyspace in: %v", targetString)
-	}
-	if target.Shard == "" {
-		return target, fmt.Errorf("no shard in: %v", targetString)
-	}
-	return target, nil
 }

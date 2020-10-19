@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	log "github.com/sirupsen/logrus" // nolint: depguard
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 type Ping struct {
@@ -17,31 +18,52 @@ func (cmd *Ping) Run(globals Globals) error {
 	defer cancelFunc()
 	sourceDB, err := globals.Source.DB()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
+
 	err = sourceDB.PingContext(ctx)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
+
 	tx, err := sourceDB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 
-	row := tx.QueryRowContext(ctx, "SELECT NOW()")
 	var now time.Time
-	err = row.Scan(now)
-	if err != nil {
-		return err
+	{
+		row := tx.QueryRowContext(ctx, "SELECT NOW()")
+		err = row.Scan(&now)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 
-	tableRow := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT * FROM %s LIMIT 1", cmd.Table))
-	var tableData []interface{}
-	err = tableRow.Scan(tableData...)
-	if err != nil {
-		return err
+	var row []interface{}
+	if cmd.Table != "" {
+		rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s LIMIT 1", cmd.Table))
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		cols, err := rows.Columns()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		row = make([]interface{}, len(cols))
+		for rows.Next() {
+			for i, _ := range row {
+				row[i] = new(interface{})
+			}
+			err = rows.Scan(row...)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
 	}
-	log.Infof("successfully pinged source (now = %v, row = %v)", now, tableData)
+
+	log.Infof("successfully pinged source (now = %v, row = %v)", now, row)
+
 	// TODO ping target
 	return nil
 }

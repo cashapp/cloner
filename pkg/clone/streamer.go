@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"strings"
+	"reflect"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -70,27 +70,36 @@ func filterStreamByShard(stream RowStream, table *Table, targetFilter []*topodat
 	return newRejectStream(stream, func(row *Row) (bool, error) {
 		shardingValue, err := toUint64(row.Data[table.ShardingColumnIndex])
 		if err != nil {
-			return false, errors.WithStack(err)
+			return false, errors.Wrapf(err, "could not read column %s.%s", table.Name, table.ShardingColumn)
 		}
 		return !InShard(shardingValue, targetFilter), nil
 	})
 }
 
 func toUint64(val interface{}) (uint64, error) {
+	// TODO there's gotta be a better way to do this...
 	maybeUint64, ok := val.(*uint64)
 	if ok {
 		return *maybeUint64, nil
 	}
-	maybeInt64, ok := val.(*int64)
+	maybePInt64, ok := val.(*int64)
 	if ok {
-		return uint64(*maybeInt64), nil
+		return uint64(*maybePInt64), nil
+	}
+	maybeInt64, ok := val.(int64)
+	if ok {
+		return uint64(maybeInt64), nil
 	}
 	maybeBytes, ok := val.([]byte)
 	if ok {
 		// mysql uses little endian
 		return binary.LittleEndian.Uint64(maybeBytes), nil
 	}
-	return 0, errors.Errorf("Could not convert to uint64: %#v", val)
+	maybePointer, ok := val.(*interface{})
+	if ok {
+		return toUint64(*maybePointer)
+	}
+	return 0, errors.Errorf("Could not convert to uint64: %v", reflect.TypeOf(val))
 }
 
 func InShard(id uint64, shard []*topodata.KeyRange) bool {
@@ -133,7 +142,7 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 
 func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, error) {
 	table := chunk.Table
-	columns := strings.Join(table.Columns, ",")
+	columns := table.ColumnList
 
 	if chunk.First {
 		log.Debugf("Reading chunk -%v", chunk.End)

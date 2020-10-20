@@ -78,7 +78,7 @@ func countRowsShardFilter(target DBConfig, shard string) (int, error) {
 	return rowCount, err
 }
 
-func TestClone(t *testing.T) {
+func TestCloneWithTargetData(t *testing.T) {
 	source := vitessContainer.Config()
 	target := mysqlContainer.Config()
 

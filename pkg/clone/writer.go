@@ -7,8 +7,23 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
+
+var (
+	writeCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_total",
+			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(writeCounter)
+}
 
 func Write(ctx context.Context, conn *sql.Conn, batches chan Batch) error {
 	log.Debugf("Starting writer")
@@ -46,7 +61,7 @@ func writeBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 
 func deleteBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	rows := batch.Rows
-	log.Debugf("Deleting %d rows", len(rows))
+	log.Debugf("deleting %d rows", len(rows))
 
 	table := batch.Table
 	questionMarks := make([]string, 0, len(rows))
@@ -61,11 +76,15 @@ func deleteBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	stmt := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
 	_, err := conn.ExecContext(ctx, stmt, valueArgs...)
-	return err
+	if err != nil {
+		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	writeCounter.WithLabelValues(batch.Table.Name, "delete").Add(float64(len(rows)))
+	return nil
 }
 
 func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
-	log.Debugf("Inserting %d rows", len(batch.Rows))
+	log.Debugf("inserting %d rows", len(batch.Rows))
 
 	table := batch.Table
 	columns := table.Columns
@@ -85,14 +104,18 @@ func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 		}
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
-		table.Name, strings.Join(table.Columns, ","), strings.Join(valueStrings, ","))
+		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 	_, err := conn.ExecContext(ctx, stmt, valueArgs...)
-	return err
+	if err != nil {
+		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	writeCounter.WithLabelValues(batch.Table.Name, "insert").Add(float64(len(rows)))
+	return nil
 }
 
 func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	rows := batch.Rows
-	log.Debugf("Updating %d rows", len(rows))
+	log.Debugf("updating %d rows", len(rows))
 
 	// Use a transaction to do some limited level of batching
 	// Golang doesn't yet support "real" batching of multiple statements
@@ -101,6 +124,20 @@ func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 		return errors.WithStack(err)
 	}
 
+	err = updatedBatchInTx(ctx, tx, batch)
+
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	} else {
+		err := tx.Commit()
+		writeCounter.WithLabelValues(batch.Table.Name, "update").Add(float64(len(rows)))
+		return err
+	}
+}
+
+func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
+	rows := batch.Rows
 	table := batch.Table
 	columns := table.Columns
 	columnValues := make([]string, 0, len(columns))
@@ -112,6 +149,13 @@ func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 		}
 	}
 
+	stmt := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
+		table.Name, strings.Join(columnValues, ","), table.IDColumn)
+	prepared, err := tx.PrepareContext(ctx, stmt)
+	if err != nil {
+		return errors.Wrapf(err, "could not prepare: %s", stmt)
+	}
+
 	for _, row := range rows {
 		args := make([]interface{}, 0, len(columns))
 		for i, column := range columns {
@@ -121,18 +165,10 @@ func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 		}
 		args = append(args, row.ID)
 
-		stmt := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
-			table.Name, strings.Join(columnValues, ","), table.IDColumn)
-		_, err = tx.ExecContext(ctx, stmt, args)
+		_, err = prepared.ExecContext(ctx, args...)
 		if err != nil {
-			break
+			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 	}
-
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	} else {
-		return tx.Commit()
-	}
+	return nil
 }

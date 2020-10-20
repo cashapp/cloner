@@ -2,7 +2,6 @@ package clone
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -16,17 +15,36 @@ type Ping struct {
 func (cmd *Ping) Run(globals Globals) error {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancelFunc()
-	sourceDB, err := globals.Source.DB()
+
+	log.Infof("pinging source")
+	err := cmd.pingDatabase(ctx, globals.Source)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	log.Infof("success")
+
+	log.Infof("pinging target")
+	err = cmd.pingDatabase(ctx, globals.Target)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	log.Infof("success")
+
+	return nil
+}
+
+func (cmd *Ping) pingDatabase(ctx context.Context, config DBConfig) error {
+	db, err := config.DB()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	err = sourceDB.PingContext(ctx)
+	err = db.PingContext(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	tx, err := sourceDB.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -39,31 +57,5 @@ func (cmd *Ping) Run(globals Globals) error {
 			return errors.WithStack(err)
 		}
 	}
-
-	var row []interface{}
-	if cmd.Table != "" {
-		rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT * FROM %s LIMIT 1", cmd.Table))
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		cols, err := rows.Columns()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		row = make([]interface{}, len(cols))
-		for rows.Next() {
-			for i, _ := range row {
-				row[i] = new(interface{})
-			}
-			err = rows.Scan(row...)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-		}
-	}
-
-	log.Infof("successfully pinged source (now = %v, row = %v)", now, row)
-
-	// TODO ping target
 	return nil
 }

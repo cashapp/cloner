@@ -12,9 +12,9 @@ import (
 type DiffType string
 
 const (
-	Insert DiffType = "Insert"
-	Update DiffType = "Update"
-	Delete DiffType = "Delete"
+	Insert DiffType = "insert"
+	Update DiffType = "update"
+	Delete DiffType = "delete"
 )
 
 type Diff struct {

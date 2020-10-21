@@ -114,7 +114,6 @@ func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table
 //}
 
 func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
-	log.WithField("table", table.Name).WithField("task", "chunker").Infof("Start")
 	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from  %s order by %s asc",
 		table.IDColumn, table.Name, table.IDColumn))
 	if err != nil {
@@ -171,6 +170,5 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 		}
 		first = false
 	}
-	log.WithField("table", table.Name).WithField("task", "chunker").Infof("Done")
 	return nil
 }

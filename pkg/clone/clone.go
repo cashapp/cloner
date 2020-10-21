@@ -47,7 +47,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sourceReader, err := globals.Source.DB()
+	sourceReader, err := globals.Source.ReaderDB()
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -155,6 +155,8 @@ func (cmd *Clone) Run(globals Globals) error {
 		return err
 	})
 
+	log.Infof("done cloning %d tables", len(tables))
+
 	// Wait for everything to complete or we get an error
 	return g.Wait()
 }
@@ -198,7 +200,7 @@ func PeriodicallyDumpMetrics(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	for {
 		describe := make(chan *prometheus.Desc)
-		writeCounter.Describe(describe)
+		writesProcessed.Describe(describe)
 		description := <-describe
 		log.Infof("writes = %v", description)
 		select {

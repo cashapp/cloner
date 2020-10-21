@@ -3,8 +3,22 @@ package clone
 import (
 	"context"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var (
+	writesEnqueued = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_enqueued",
+			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(writesEnqueued)
+}
 
 type Batch struct {
 	Type  DiffType
@@ -34,7 +48,7 @@ readChannel:
 
 				if len(batch.Rows) >= batchSize {
 					// Batch is full send it
-					batches <- batch
+					enqueueBatch(batches, batch)
 					// and clear it
 					batch.Rows = nil
 				}
@@ -52,13 +66,11 @@ readChannel:
 	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {
-				batches <- batch
+				enqueueBatch(batches, batch)
 			}
 		}
 	}
 	close(batches)
-
-	log.Debugf("Batcher done!")
 
 	return nil
 }
@@ -80,7 +92,7 @@ readChannel:
 
 				if len(batch.Rows) >= batchSize {
 					// Batch is full send it
-					batches <- batch
+					enqueueBatch(batches, batch)
 					// and clear it
 					batch.Rows = nil
 				}
@@ -97,9 +109,14 @@ readChannel:
 	// Write the final unfilled batches
 	for _, batch := range batchesByType {
 		if len(batch.Rows) > 0 {
-			batches <- batch
+			enqueueBatch(batches, batch)
 		}
 	}
 
 	return nil
+}
+
+func enqueueBatch(batches chan Batch, batch Batch) {
+	writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+	batches <- batch
 }

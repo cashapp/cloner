@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	writeCounter = prometheus.NewCounterVec(
+	writesProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "writes_total",
+			Name: "writes_processed",
 			Help: "How many writes, partitioned by table and type (insert, update, delete).",
 		},
 		[]string{"table", "type"},
@@ -22,7 +22,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(writeCounter)
+	prometheus.MustRegister(writesProcessed)
 }
 
 func Write(ctx context.Context, conn *sql.Conn, batches chan Batch) error {
@@ -80,7 +80,7 @@ func deleteBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
-	writeCounter.WithLabelValues(batch.Table.Name, "delete").Add(float64(len(rows)))
+	writesProcessed.WithLabelValues(batch.Table.Name, "delete").Add(float64(len(rows)))
 	return nil
 }
 
@@ -110,7 +110,7 @@ func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
-	writeCounter.WithLabelValues(batch.Table.Name, "insert").Add(float64(len(rows)))
+	writesProcessed.WithLabelValues(batch.Table.Name, "insert").Add(float64(len(rows)))
 	return nil
 }
 
@@ -132,7 +132,7 @@ func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 		return err
 	} else {
 		err := tx.Commit()
-		writeCounter.WithLabelValues(batch.Table.Name, "update").Add(float64(len(rows)))
+		writesProcessed.WithLabelValues(batch.Table.Name, "update").Add(float64(len(rows)))
 		return err
 	}
 }

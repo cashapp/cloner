@@ -26,18 +26,19 @@ func init() {
 }
 
 func Write(ctx context.Context, conn *sql.Conn, batches chan Batch) error {
-	log.Debugf("Starting writer")
 	for {
 		select {
 		case batch, more := <-batches:
-			if more {
-				err := writeBatch(ctx, conn, batch)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-			} else {
-				log.Debugf("Writer done!")
+			if !more {
 				return nil
+			}
+			err := writeBatch(ctx, conn, batch)
+			if err != nil {
+				log.WithField("task", "writer").
+					WithField("table", batch.Table.Name).
+					WithError(err).
+					Errorf("")
+				return errors.WithStack(err)
 			}
 		case <-ctx.Done():
 			return nil

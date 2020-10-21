@@ -6,7 +6,6 @@ import (
 	"reflect"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
@@ -83,15 +82,12 @@ func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetF
 	for {
 		select {
 		case chunk, more := <-chunks:
-			if more {
-				err := diffChunk(ctx, source, target, targetFilter, chunk, diffs)
-				if err != nil {
-					return err
-				}
-			} else {
-				log.Debugf("Differ done!")
-				close(diffs)
+			if !more {
 				return nil
+			}
+			err := diffChunk(ctx, source, target, targetFilter, chunk, diffs)
+			if err != nil {
+				return err
 			}
 		case <-ctx.Done():
 			return nil

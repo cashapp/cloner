@@ -144,8 +144,9 @@ func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, e
 	table := chunk.Table
 	columns := table.ColumnList
 
+	logger := log.WithField("table", chunk.Table.Name).WithField("task", "reader")
 	if chunk.First {
-		log.Debugf("Reading chunk -%v", chunk.End)
+		logger.Debugf("reading chunk -%v", chunk.End)
 		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s <= ?",
 			columns, table.Name, table.IDColumn), chunk.End)
 		if err != nil {
@@ -153,7 +154,7 @@ func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, e
 		}
 		return newRowStream(table, rows)
 	} else if chunk.Last {
-		log.Debugf("Reading chunk %v-", chunk.Start)
+		logger.Debugf("reading chunk %v-", chunk.Start)
 		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s >= ?",
 			columns, table.Name, table.IDColumn), chunk.Start)
 		if err != nil {
@@ -161,7 +162,7 @@ func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, e
 		}
 		return newRowStream(table, rows)
 	} else {
-		log.Debugf("Reading chunk %v-%v", chunk.Start, chunk.End)
+		logger.Debugf("reading chunk %v-%v", chunk.Start, chunk.End)
 		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s >= ? and %s <= ?",
 			columns, table.Name, table.IDColumn, table.IDColumn), chunk.Start, chunk.End)
 		if err != nil {

@@ -7,13 +7,13 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
 	"vitess.io/vitess/go/vt/proto/query"
 	"vitess.io/vitess/go/vt/proto/topodata"
@@ -112,96 +112,89 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 
-	chunks := make(chan Chunk, cmd.QueueSize)
-	diffs := make(chan Diff, cmd.QueueSize)
 	batches := make(chan Batch, cmd.QueueSize)
-	errCh := make(chan error)
-	wg := &sync.WaitGroup{}
-	waitCh := make(chan struct{})
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	// Periodically dump metrics
-	wg.Add(1)
+	// we don't wait for this one since it never ends, we just cancel the context
 	go func() {
-		defer wg.Done()
-		err := PeriodicallyDumpMetrics(ctx)
-		if err != nil {
-			errCh <- err
-		}
-	}()
-
-	// Generate chunks of all source tables
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
-		if err != nil {
-			log.WithField("task", "chunker").WithError(err).Errorf("")
-			errCh <- err
-		}
-	}()
-
-	// Batch writes
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := BatchWrites(ctx, cmd.WriteBatchSize, diffs, batches)
-		if err != nil {
-			log.WithField("task", "batcher").WithError(err).Errorf("")
-			errCh <- err
-		}
+		PeriodicallyDumpMetrics(ctx)
 	}()
 
 	// Write batches
 	for i, _ := range writerConns {
 		conn := writerConns[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := Write(ctx, conn, batches)
-			if err != nil {
-				log.WithField("task", "writer").WithError(err).Errorf("")
-				errCh <- err
-			}
-		}()
+		g.Go(func() error {
+			return Write(ctx, conn, batches)
+		})
 	}
 
-	// Diff chunks
-	for i, _ := range sourceConns {
-		sourceConn := sourceConns[i]
-		targetConn := targetConns[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := DiffChunks(ctx, sourceConn, targetConn, shardingSpec, chunks, diffs)
-			if err != nil {
-				log.WithField("task", "differ").WithError(err).Errorf("")
-				errCh <- err
-			}
-		}()
+	// Queue up tables to read
+	tableCh := make(chan *Table, len(tables))
+	for _, table := range tables {
+		tableCh <- table
 	}
+	close(tableCh)
 
-	// Wrap the wait group in a channel so that we can select on it below
-	go func() {
-		wg.Wait()
-		close(waitCh)
-	}()
+	// Chunk, diff table and generate batches to write
+	g.Go(func() error {
+		err := readers(
+			ctx,
+			chunkerConns,
+			sourceConns,
+			targetConns,
+			shardingSpec,
+			tableCh,
+			cmd.ChunkSize,
+			cmd.WriteBatchSize,
+			batches,
+		)
+		// All the readers are done, close the write batches channel
+		close(batches)
+		return err
+	})
 
 	// Wait for everything to complete or we get an error
-	select {
-	case <-waitCh:
-		log.Debugf("Done")
-		return nil
-	case err := <-errCh:
-		cancel() // cancel before we close the channel so we don't panic by writing on a closed channel
-		close(errCh)
-		// Return the first error only, ignore the rest (they should have logged)
-		return err
-	case <-ctx.Done():
-		return errors.Errorf("Timed out")
-	}
+	return g.Wait()
 }
 
-func PeriodicallyDumpMetrics(ctx context.Context) error {
+// readers runs all the readers in parallel and returns when they are all done
+func readers(
+	ctx context.Context,
+	chunkerConns []*sql.Conn,
+	sourceConns []*sql.Conn,
+	targetConns []*sql.Conn,
+	shardingSpec []*topodata.KeyRange,
+	tableCh chan *Table,
+	chunkSize int,
+	batchSize int,
+	batches chan Batch,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	for i, _ := range sourceConns {
+		chunkerConn := chunkerConns[i]
+		sourceConn := sourceConns[i]
+		targetConn := targetConns[i]
+		g.Go(func() error {
+			err := ReadTables(
+				ctx,
+				chunkerConn,
+				sourceConn,
+				targetConn,
+				shardingSpec,
+				tableCh,
+				chunkSize,
+				batchSize,
+				batches,
+			)
+			return err
+		})
+	}
+	return g.Wait()
+}
+
+func PeriodicallyDumpMetrics(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	for {
 		describe := make(chan *prometheus.Desc)
@@ -211,7 +204,6 @@ func PeriodicallyDumpMetrics(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			ticker.Stop()
-			return nil
 		case <-ticker.C:
 		}
 	}

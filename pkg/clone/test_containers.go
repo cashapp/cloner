@@ -69,7 +69,7 @@ func (c *DatabaseContainer) Config() DBConfig {
 }
 
 func startVitess() (*DatabaseContainer, error) {
-	log.Debugf("Starting Vitess")
+	log.Debugf("starting Vitess")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
 	if err != nil {
@@ -153,7 +153,7 @@ func startVitess() (*DatabaseContainer, error) {
 }
 
 func startMysql() (*DatabaseContainer, error) {
-	log.Debugf("Starting MySQL")
+	log.Debugf("starting mysql")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
 	if err != nil {

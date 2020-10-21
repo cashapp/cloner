@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"net/http"
 	_ "net/http/pprof"
-	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
+	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 type Checksum struct {
@@ -101,60 +102,49 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 
 	chunks := make(chan Chunk, cmd.QueueSize)
 	diffs := make(chan Diff, cmd.QueueSize)
-	errCh := make(chan error)
-	wg := &sync.WaitGroup{}
-	waitCh := make(chan struct{})
+	g, ctx := errgroup.WithContext(ctx)
 
 	// Generate chunks of all source tables
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
-		if err != nil {
-			errCh <- err
-		}
-	}()
+	g.Go(func() error {
+		return GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
+	})
 
 	// Diff chunks
-	for i, _ := range sourceConns {
-		sourceConn := sourceConns[i]
-		targetConn := targetConns[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := DiffChunks(ctx, sourceConn, targetConn, shardingSpec, chunks, diffs)
-			if err != nil {
-				errCh <- err
-			}
-		}()
-	}
+	g.Go(func() error {
+		err := differs(ctx, sourceConns, targetConns, shardingSpec, chunks, diffs)
+		close(diffs)
+		return err
+	})
 
 	// Reporter
-	wg.Add(1)
 	var foundDiffs []Diff
-	go func() {
-		defer wg.Done()
+	g.Go(func() error {
 		for diff := range diffs {
 			foundDiffs = append(foundDiffs, diff)
 		}
-	}()
+		return nil
+	})
 
-	// Wrap the wait group in a channel so that we can select on it below
-	go func() {
-		wg.Wait()
-		close(waitCh)
-	}()
+	return foundDiffs, g.Wait()
+}
 
-	// Wait for everything to complete or we get an error
-	select {
-	case <-waitCh:
-		log.Debugf("Done")
-		return foundDiffs, nil
-	case err := <-errCh:
-		close(errCh)
-		// Return the first error only, ignore the rest (they should have logged)
-		return nil, err
-	case <-ctx.Done():
-		return nil, errors.Errorf("Timed out")
+// differs runs all the differs in parallel and returns when they are all done
+func differs(
+	ctx context.Context,
+	sourceConns []*sql.Conn,
+	targetConns []*sql.Conn,
+	shardingSpec []*topodata.KeyRange,
+	chunks chan Chunk,
+	diffs chan Diff,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	for i, _ := range sourceConns {
+		sourceConn := sourceConns[i]
+		targetConn := targetConns[i]
+		g.Go(func() error {
+			err := DiffChunks(ctx, sourceConn, targetConn, shardingSpec, chunks, diffs)
+			return err
+		})
 	}
+	return g.Wait()
 }

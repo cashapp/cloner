@@ -3,9 +3,7 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"encoding/binary"
 	"fmt"
-	"reflect"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -15,7 +13,7 @@ import (
 
 type Row struct {
 	Table *Table
-	ID    int64
+	ID    uint64
 	Data  []interface{}
 }
 
@@ -36,6 +34,37 @@ func newRowStream(table *Table, rows *sql.Rows) (*rowStream, error) {
 		return nil, errors.WithStack(err)
 	}
 	return &rowStream{table, rows, columns}, nil
+}
+
+func (r *rowStream) Next(ctx context.Context) (*Row, error) {
+	if !r.rows.Next() {
+		return nil, nil
+	}
+	cols, err := r.rows.Columns()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	var id uint64
+	var shardingId uint64
+	row := make([]interface{}, len(cols))
+	for i, _ := range row {
+		if r.table.IDColumnIndex == i {
+			row[i] = &id
+		} else if r.table.ShardingColumnIndex == i {
+			row[i] = &shardingId
+		} else {
+			row[i] = new(interface{})
+		}
+	}
+	err = r.rows.Scan(row...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &Row{
+		Table: r.table,
+		ID:    id,
+		Data:  row,
+	}, nil
 }
 
 type rejectStream struct {
@@ -68,38 +97,9 @@ func newRejectStream(stream RowStream, filter func(row *Row) (bool, error)) RowS
 
 func filterStreamByShard(stream RowStream, table *Table, targetFilter []*topodata.KeyRange) RowStream {
 	return newRejectStream(stream, func(row *Row) (bool, error) {
-		shardingValue, err := toUint64(row.Data[table.ShardingColumnIndex])
-		if err != nil {
-			return false, errors.Wrapf(err, "could not read column %s.%s", table.Name, table.ShardingColumn)
-		}
-		return !InShard(shardingValue, targetFilter), nil
+		shardingValue := row.Data[table.ShardingColumnIndex].(*uint64)
+		return !InShard(*shardingValue, targetFilter), nil
 	})
-}
-
-func toUint64(val interface{}) (uint64, error) {
-	// TODO there's gotta be a better way to do this...
-	maybeUint64, ok := val.(*uint64)
-	if ok {
-		return *maybeUint64, nil
-	}
-	maybePInt64, ok := val.(*int64)
-	if ok {
-		return uint64(*maybePInt64), nil
-	}
-	maybeInt64, ok := val.(int64)
-	if ok {
-		return uint64(maybeInt64), nil
-	}
-	maybeBytes, ok := val.([]byte)
-	if ok {
-		// mysql uses little endian
-		return binary.LittleEndian.Uint64(maybeBytes), nil
-	}
-	maybePointer, ok := val.(*interface{})
-	if ok {
-		return toUint64(*maybePointer)
-	}
-	return 0, errors.Errorf("Could not convert to uint64: %v", reflect.TypeOf(val))
 }
 
 func InShard(id uint64, shard []*topodata.KeyRange) bool {
@@ -110,34 +110,6 @@ func InShard(id uint64, shard []*topodata.KeyRange) bool {
 		}
 	}
 	return false
-}
-
-func (r *rowStream) Next(ctx context.Context) (*Row, error) {
-	if !r.rows.Next() {
-		return nil, nil
-	}
-	cols, err := r.rows.Columns()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	var id int64
-	row := make([]interface{}, len(cols))
-	for i, _ := range row {
-		if r.table.IDColumnIndex == i {
-			row[i] = &id
-		} else {
-			row[i] = new(interface{})
-		}
-	}
-	err = r.rows.Scan(row...)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return &Row{
-		Table: r.table,
-		ID:    id,
-		Data:  row,
-	}, nil
 }
 
 func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, error) {

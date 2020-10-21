@@ -24,11 +24,11 @@ func TestChecksum(t *testing.T) {
 	err := insertBunchaData(vitessContainer.Config(), rowCount)
 	assert.NoError(t, err)
 
-	err = deleteAllData(mysqlContainer.Config())
+	err = deleteAllData(tidbContainer.Config())
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
-	target := mysqlContainer.Config()
+	target := tidbContainer.Config()
 	source.Database = "customer/-80@replica"
 
 	// Check how many rows end up in the -80 shard

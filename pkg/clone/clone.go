@@ -44,8 +44,8 @@ func (cmd *Clone) Run(globals Globals) error {
 	var err error
 
 	// TODO timeout?
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
+	g, ctx := errgroup.WithContext(ctx)
 
 	sourceReader, err := globals.Source.ReaderDB()
 	if err != nil {
@@ -113,8 +113,6 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 
 	batches := make(chan Batch, cmd.QueueSize)
-
-	g, ctx := errgroup.WithContext(ctx)
 
 	// Periodically dump metrics
 	// we don't wait for this one since it never ends, we just cancel the context

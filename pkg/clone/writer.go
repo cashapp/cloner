@@ -106,6 +106,7 @@ func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
+	fmt.Println(stmt)
 	_, err := conn.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
@@ -145,12 +146,12 @@ func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
 
 	for _, column := range columns {
 		if column != table.IDColumn {
-			c := fmt.Sprintf("%s = ?", column)
+			c := fmt.Sprintf("`%s` = ?", column)
 			columnValues = append(columnValues, c)
 		}
 	}
 
-	stmt := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
+	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s = ?",
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {

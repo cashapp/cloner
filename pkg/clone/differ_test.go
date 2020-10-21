@@ -9,7 +9,7 @@ import (
 )
 
 type testRow struct {
-	id    int64
+	id    uint64
 	table string
 	data  string
 }

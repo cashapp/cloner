@@ -1,16 +1,17 @@
 package clone
 
 import (
+	"context"
 	"os"
-	"sync"
 	"testing"
 
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 // yep, globals, we should only have one container per test run
 var vitessContainer *DatabaseContainer
-var mysqlContainer *DatabaseContainer
+var tidbContainer *DatabaseContainer
 
 func TestMain(m *testing.M) {
 	os.Exit(testMain(m))
@@ -23,33 +24,29 @@ func testMain(m *testing.M) int {
 		if vitessContainer != nil {
 			vitessContainer.Close()
 		}
-		if mysqlContainer != nil {
-			mysqlContainer.Close()
+		if tidbContainer != nil {
+			tidbContainer.Close()
 		}
 	}()
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	ctx := context.Background()
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
 		var err error
 		vitessContainer, err = startVitess()
-		if err != nil {
-			log.Fatalf("%+v", err)
-		}
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+		return err
+	})
+	g.Go(func() error {
 		var err error
-		mysqlContainer, err = startMysql()
-		if err != nil {
-			log.Fatalf("%+v", err)
-		}
-	}()
+		tidbContainer, err = startTidb()
+		return err
+	})
 
-	wg.Wait()
+	err := g.Wait()
+	if err != nil {
+		log.Panic(err)
+	}
 
 	// call flag.Parse() here if TestMain uses flags
 	return m.Run()

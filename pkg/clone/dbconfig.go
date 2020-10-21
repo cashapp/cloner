@@ -60,7 +60,7 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 	//logger := log.StandardLogger()
 	//logger.SetLevel(log.DebugLevel)
 	//grpclog.ReplaceGrpcLogger(log.NewEntry(logger))
-	options := []grpc.DialOption{}
+	var options []grpc.DialOption
 	if c.EgressSocket != "" {
 		options = append(options,
 			grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {

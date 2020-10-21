@@ -12,7 +12,7 @@ func TestPing(t *testing.T) {
 	}
 	err := ping.Run(Globals{
 		Source: vitessContainer.Config(),
-		Target: mysqlContainer.Config(),
+		Target: tidbContainer.Config(),
 	})
 	assert.NoError(t, err)
 }

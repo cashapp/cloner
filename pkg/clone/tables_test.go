@@ -44,7 +44,7 @@ func dropTables(config DBConfig) error {
 func TestCopySchema(t *testing.T) {
 	source := vitessContainer.Config()
 	source.Database = "customer/-80"
-	target := mysqlContainer.Config()
+	target := tidbContainer.Config()
 
 	err := dropTables(target)
 	assert.NoError(t, err)

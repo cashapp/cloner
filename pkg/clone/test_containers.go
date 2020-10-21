@@ -208,3 +208,60 @@ func startMysql() (*DatabaseContainer, error) {
 
 	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
 }
+
+func startTidb() (*DatabaseContainer, error) {
+	log.Debugf("starting TiDB")
+	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		log.Fatalf("Could not connect to docker: %s", err)
+	}
+
+	// pulls an image, creates a container based on it and runs it
+	resource, err := pool.Run("pingcap/tidb", "latest", []string{})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	err = resource.Expire(60)
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	config := DBConfig{
+		Type:     MySQL,
+		Host:     "localhost:" + resource.GetPort("4000/tcp"),
+		Username: "root",
+		Password: "",
+		Database: "mysql",
+	}
+
+	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
+	if err := pool.Retry(func() error {
+		var err error
+		db, err := config.DB()
+		if err != nil {
+			return err
+		}
+		return db.Ping()
+	}); err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	err = createSchema(config, "mydatabase")
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	config.Database = "mydatabase"
+
+	err = insertBaseData(config)
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
+}

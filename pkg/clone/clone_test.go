@@ -80,14 +80,24 @@ func countRowsShardFilter(target DBConfig, shard string) (int, error) {
 
 func TestCloneWithTargetData(t *testing.T) {
 	source := vitessContainer.Config()
-	target := mysqlContainer.Config()
+	target := tidbContainer.Config()
 
+	// make sure there are diffs
 	rowCount := 1000
 	err := insertBunchaData(source, rowCount)
+	assert.NoError(t, err)
+	err = deleteAllData(source)
+	assert.NoError(t, err)
+	err = insertBunchaData(source, rowCount)
 	assert.NoError(t, err)
 
 	// Insert some stuff in the target too so that there's a real diff
 	err = insertBunchaData(target, 50)
+	assert.NoError(t, err)
+	err = deleteAllData(target)
+	assert.NoError(t, err)
+	err = insertBunchaData(target, 50)
+	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
 	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
 	assert.NoError(t, err)

@@ -1,8 +1,11 @@
 ```puml
 @startuml component
 package onprem {
-    database mysql
     node vtgate
+    package ods {
+        node vttablet
+        database mysql
+    }
 }
 package cloud {
     node cloner
@@ -10,7 +13,8 @@ package cloud {
 }
 
 cloner -> vtgate : grpc over square-envoy
-vtgate -> mysql
+vtgate -> vttablet
+vttablet -> mysql
 cloner -> tidb
 
 @enduml

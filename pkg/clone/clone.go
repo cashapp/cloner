@@ -118,9 +118,9 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Periodically dump metrics
 	// we don't wait for this one since it never ends, we just cancel the context
-	go func() {
-		PeriodicallyDumpMetrics(ctx)
-	}()
+	//go func() {
+	//	PeriodicallyDumpMetrics(ctx)
+	//}()
 
 	// Write batches
 	for i, _ := range writerConns {
@@ -199,10 +199,15 @@ func readers(
 func PeriodicallyDumpMetrics(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	for {
-		describe := make(chan *prometheus.Desc)
-		writesProcessed.Describe(describe)
-		description := <-describe
-		log.Infof("writes = %v", description)
+		metricCh := make(chan prometheus.Metric)
+		go func() {
+			writesProcessed.Collect(metricCh)
+		}()
+		go func() {
+			for metric := range metricCh {
+				log.Infof("writes = %v", metric.Desc())
+			}
+		}()
 		select {
 		case <-ctx.Done():
 			ticker.Stop()

@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
@@ -16,6 +17,20 @@ const (
 	Update DiffType = "update"
 	Delete DiffType = "delete"
 )
+
+var (
+	readsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "reads_processed",
+			Help: "How many rows read by table.",
+		},
+		[]string{"table", "side"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(readsProcessed)
+}
 
 type Diff struct {
 	Type DiffType
@@ -36,11 +51,17 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 			if err != nil {
 				return err
 			}
+			if sourceRow != nil {
+				readsProcessed.WithLabelValues(sourceRow.Table.Name, "source").Inc()
+			}
 		}
 		if advanceTarget {
 			targetRow, err = target.Next(ctx)
 			if err != nil {
 				return err
+			}
+			if targetRow != nil {
+				readsProcessed.WithLabelValues(targetRow.Table.Name, "target").Inc()
 			}
 		}
 		advanceSource = false

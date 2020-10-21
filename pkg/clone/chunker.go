@@ -50,8 +50,9 @@ type Chunk struct {
 	Table *Table
 	Start int64
 	End   int64
-	First bool // first chunk
-	Last  bool
+
+	First bool // first chunk of a table
+	Last  bool // last chunk of a table
 	Size  int
 }
 
@@ -114,7 +115,7 @@ func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table
 //}
 
 func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from  %s order by %s asc",
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",
 		table.IDColumn, table.Name, table.IDColumn))
 	if err != nil {
 		return errors.WithStack(err)

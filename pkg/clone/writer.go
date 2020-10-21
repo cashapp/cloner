@@ -106,7 +106,6 @@ func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	fmt.Println(stmt)
 	_, err := conn.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)

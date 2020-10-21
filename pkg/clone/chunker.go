@@ -91,7 +91,6 @@ func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table
 //		group by floor((tmp.row_num - 1) / ?)
 //		order by start_rowid
 //	`, table.Name)
-//	fmt.Println(sql)
 //	rows, err := conn.QueryContext(ctx, sql, chunkSize)
 //	if err != nil {
 //		return errors.WithStack(err)

@@ -10,7 +10,7 @@ import (
 	"vitess.io/vitess/go/vt/key"
 )
 
-func insertBunchaData(config DBConfig, rowCount int) error {
+func insertBunchaData(config DBConfig, namePrefix string, rowCount int) error {
 	err := deleteAllData(config)
 	if err != nil {
 		return errors.WithStack(err)
@@ -22,7 +22,7 @@ func insertBunchaData(config DBConfig, rowCount int) error {
 	for i := 0; i < rowCount; i++ {
 		_, err = db.Exec(`
 		INSERT INTO customers (name) VALUES (?)
-	`, fmt.Sprintf("Name %d", i))
+	`, fmt.Sprintf("%s %d", namePrefix, i))
 	}
 	if err != nil {
 		return errors.WithStack(err)
@@ -82,22 +82,15 @@ func TestCloneWithTargetData(t *testing.T) {
 	source := vitessContainer.Config()
 	target := tidbContainer.Config()
 
-	// Make sure there are diffs by inserting some data, then deleting data, then inserting again
-	// Insert/delete/insert messes with the auto increment columns to make sure we handle that
 	rowCount := 1000
-	err := insertBunchaData(source, rowCount)
-	assert.NoError(t, err)
-	err = deleteAllData(source)
-	assert.NoError(t, err)
-	err = insertBunchaData(source, rowCount)
+	err := insertBunchaData(source, "Name", rowCount)
 	assert.NoError(t, err)
 
-	// Insert some stuff in the target too so that there's a real diff
-	err = insertBunchaData(target, 50)
+	// Insert some stuff that matches
+	err = insertBunchaData(target, "Name", 50)
 	assert.NoError(t, err)
-	err = deleteAllData(target)
-	assert.NoError(t, err)
-	err = insertBunchaData(target, 50)
+	// Insert some stuff that DOES NOT match to trigger updates
+	err = insertBunchaData(target, "AnotherName", 50)
 	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
 	rightRowCountBefore, err := countRowsShardFilter(target, "80-")

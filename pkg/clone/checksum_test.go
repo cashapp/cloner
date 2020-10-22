@@ -21,7 +21,7 @@ func deleteAllData(config DBConfig) error {
 
 func TestChecksum(t *testing.T) {
 	rowCount := 1000
-	err := insertBunchaData(vitessContainer.Config(), rowCount)
+	err := insertBunchaData(vitessContainer.Config(), "Name", rowCount)
 	assert.NoError(t, err)
 
 	err = deleteAllData(tidbContainer.Config())

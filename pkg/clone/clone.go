@@ -6,6 +6,8 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -25,7 +27,7 @@ type Clone struct {
 	ChunkerCount    int      `help:"Number of readers for chunks" default:"10"`
 	ReaderCount     int      `help:"Number of readers for diffing" default:"10"`
 	WriterCount     int      `help:"Number of writers" default:"10"`
-	WriteRetryCount int      `help:"Number of writers" default:"5"`
+	WriteRetryCount int      `help:"Number of retries" default:"5"`
 	CopySchema      bool     `help:"Copy schema" default:"false"`
 	Tables          []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
 }
@@ -105,11 +107,13 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 
 	// Start writers
+	// we might want to wrap up this channel and the WaitGroup in a single object
+	writesInFlight := &sync.WaitGroup{}
 	writeRequests := make(chan Batch, cmd.QueueSize)
 	for i, _ := range writerConns {
 		conn := writerConns[i]
 		g.Go(func() error {
-			return Write(ctx, cmd, conn, writeRequests)
+			return Write(ctx, cmd, conn, writeRequests, writesInFlight)
 		})
 	}
 
@@ -132,10 +136,15 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Chunk, diff table and generate batches to write
 	g.Go(func() error {
-		err := readers(ctx, chunkerConns, tableCh, cmd, writeRequests, diffRequests)
+		err := readers(ctx, chunkerConns, tableCh, cmd, writeRequests, writesInFlight, diffRequests)
 		// All tables are done, close the channels used to request work
-		close(writeRequests)
 		close(diffRequests)
+
+		// closing this channel here means we can't use this channel for retries...
+		// instead we need to wait for the channel to become empty before we close it?
+		WaitGroupWait(ctx, writesInFlight)
+		close(writeRequests)
+
 		return err
 	})
 
@@ -144,20 +153,27 @@ func (cmd *Clone) Run(globals Globals) error {
 	return err
 }
 
+func WaitUntilEmpty(ctx context.Context, writeRequests chan Batch) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		// TODO this is so horrendous
+		case <-time.After(1 * time.Second):
+			if len(writeRequests) == -0 {
+				return
+			}
+		}
+	}
+}
+
 // readers runs all the readers in parallel and returns when they are all done
-func readers(
-	ctx context.Context,
-	chunkerConns []*sql.Conn,
-	tableCh chan *Table,
-	cmd *Clone,
-	batches chan Batch,
-	diffRequests chan DiffRequest,
-) error {
+func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i, _ := range chunkerConns {
 		chunkerConn := chunkerConns[i]
 		g.Go(func() error {
-			err := ReadTables(ctx, chunkerConn, tableCh, cmd, batches, diffRequests)
+			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writeRequests, writesInFlight, diffRequests)
 			return err
 		})
 	}

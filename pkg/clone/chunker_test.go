@@ -21,7 +21,7 @@ func TestChunker(t *testing.T) {
 	source := vitessContainer.Config()
 
 	rowCount := 100
-	err := insertBunchaData(source, rowCount)
+	err := insertBunchaData(source, "Name", rowCount)
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"

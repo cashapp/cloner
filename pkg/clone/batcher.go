@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -50,7 +51,7 @@ readChannel:
 
 				if len(batch.Rows) >= batchSize {
 					// Batch is full send it
-					enqueueBatch(batches, batch)
+					requestWrite(batches, nil, batch)
 					// and clear it
 					batch.Rows = nil
 				}
@@ -68,7 +69,7 @@ readChannel:
 	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {
-				enqueueBatch(batches, batch)
+				requestWrite(batches, nil, batch)
 			}
 		}
 	}
@@ -78,7 +79,7 @@ readChannel:
 }
 
 // BatchTableWrites consumes diffs for a single table and batches them up into batches by type
-func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
+func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, writeRequests chan Batch, writesInFlight *sync.WaitGroup) error {
 	batchesByType := make(map[DiffType]Batch)
 
 	for {
@@ -86,15 +87,8 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 		case diff, more := <-diffs:
 			if !more {
 				// Write the final unfilled batches
-
-				// Send the delete batch first
-				deleteBatch := batchesByType[Delete]
-				enqueueBatch(batches, deleteBatch)
-				// and clear it
-				deleteBatch.Rows = nil
-
 				for _, batch := range batchesByType {
-					enqueueBatch(batches, batch)
+					requestWrite(writeRequests, writesInFlight, batch)
 				}
 				return nil
 			}
@@ -106,15 +100,8 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 			batch.Rows = append(batch.Rows, diff.Row)
 
 			if len(batch.Rows) >= batchSize {
-				// Before we send any insert/update batch we need to send any outstanding deletes,
-				// this is to avoid hitting duplicate constraint issues
-				deleteBatch := batchesByType[Delete]
-				enqueueBatch(batches, deleteBatch)
-				// and clear it
-				deleteBatch.Rows = nil
-
-				// Batch is full send it
-				enqueueBatch(batches, batch)
+				// Batch is full, send it
+				requestWrite(writeRequests, writesInFlight, batch)
 				// and clear it
 				batch.Rows = nil
 			}
@@ -126,9 +113,10 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 	}
 }
 
-func enqueueBatch(batches chan Batch, batch Batch) {
+func requestWrite(writeRequests chan Batch, writesInFlight *sync.WaitGroup, batch Batch) {
 	if len(batch.Rows) > 0 {
 		writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-		batches <- batch
+		writesInFlight.Add(1)
+		writeRequests <- batch
 	}
 }

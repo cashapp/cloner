@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,39 +26,46 @@ func init() {
 	prometheus.MustRegister(writesProcessed)
 }
 
-func Write(ctx context.Context, cmd *Clone, conn *sql.Conn, batches chan Batch) error {
+func Write(ctx context.Context, cmd *Clone, conn *sql.Conn, writeRequests chan Batch, writesInFlight *sync.WaitGroup) error {
 	for {
 		select {
-		case batch, more := <-batches:
+		case batch, more := <-writeRequests:
 			if !more {
 				return nil
 			}
-			// TODO retries and backoff
+			// TODO backoff
 			err := writeBatch(ctx, conn, batch)
 			if err != nil {
-				err = maybeRetry(cmd.WriteRetryCount, err, batch, batches)
+				err := maybeRetry(cmd.WriteRetryCount, err, batch, writeRequests)
+				if err != nil {
+					log.WithField("task", "writer").
+						WithField("table", batch.Table.Name).
+						WithError(err).
+						Errorf("")
+					return errors.WithStack(err)
+				}
+				continue
 			}
-			if err != nil {
-				log.WithField("task", "writer").
-					WithField("table", batch.Table.Name).
-					WithError(err).
-					Errorf("")
-				return errors.WithStack(err)
-			}
+			writesInFlight.Done()
 		case <-ctx.Done():
 			return nil
 		}
 	}
 }
 
-func maybeRetry(retryCount int, err error, batch Batch, batches chan Batch) error {
+func maybeRetry(retryCount int, err error, batch Batch, retries chan Batch) error {
 	if batch.Retries >= retryCount {
 		return err
 	}
 
+	log.WithField("task", "writer").
+		WithField("table", batch.Table.Name).
+		WithError(err).
+		Warnf("failed to write batch, retrying %d times", retryCount-batch.Retries)
+
 	batch.Retries += 1
 	batch.LastError = err
-	batches <- batch
+	retries <- batch
 	return nil
 }
 
@@ -182,6 +190,11 @@ func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	}
 
 	for _, row := range rows {
+		if batch.Table.Name == "customer_passcodes" && row.ID == 100020406 {
+			log.WithField("task", "writer").
+				WithField("table", batch.Table.Name).
+				Infof("updating peculiar customer_passcodes row: %#v", row.Data)
+		}
 		args := make([]interface{}, 0, len(columns))
 		for i, column := range columns {
 			if column != table.IDColumn {

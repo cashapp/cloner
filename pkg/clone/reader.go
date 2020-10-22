@@ -11,21 +11,14 @@ import (
 )
 
 // ReadTables generates batches for each table
-func ReadTables(
-	ctx context.Context,
-	chunkerConn *sql.Conn,
-	tableCh chan *Table,
-	cmd *Clone,
-	batches chan Batch,
-	diffRequests chan DiffRequest,
-) error {
+func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, table, cmd, batches, diffRequests)
+			err := readTable(ctx, chunkerConn, table, cmd, writeRequests, writesInFlight, diffRequests)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -36,14 +29,7 @@ func ReadTables(
 }
 
 // readTables generates write batches for one table
-func readTable(
-	ctx context.Context,
-	chunkerConn *sql.Conn,
-	table *Table,
-	cmd *Clone,
-	batches chan Batch,
-	diffRequests chan DiffRequest,
-) error {
+func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	logger.Infof("start")
 	defer logger.Infof("done")
@@ -78,7 +64,7 @@ func readTable(
 		return nil
 	})
 	g.Go(func() error {
-		return BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
+		return BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, writeRequests, writesInFlight)
 	})
 
 	if err := g.Wait(); err != nil {

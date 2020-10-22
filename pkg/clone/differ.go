@@ -26,10 +26,18 @@ var (
 		},
 		[]string{"table", "side"},
 	)
+	chunksProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "chunks_processed",
+			Help: "How many chunks has been processed, partitioned by table.",
+		},
+		[]string{"table"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(readsProcessed)
+	prometheus.MustRegister(chunksEnqueued)
 }
 
 type Diff struct {
@@ -134,5 +142,6 @@ func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFi
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 	return nil
 }

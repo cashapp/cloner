@@ -7,7 +7,18 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+)
+
+var (
+	chunksEnqueued = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "chunks_enqueued",
+			Help: "How many chunks has been enqueued, partitioned by table.",
+		},
+		[]string{"table"},
+	)
 )
 
 // GenerateChunks generates chunks from all tables and then closes the channel, blocks until done
@@ -142,6 +153,7 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 		next = rows.Next()
 
 		if currentChunkSize == chunkSize {
+			chunksEnqueued.WithLabelValues(table.Name).Inc()
 			chunks <- Chunk{
 				Table: table,
 				Start: startId,
@@ -160,6 +172,7 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 	}
 	// Send any partial chunk we might have
 	if currentChunkSize > 0 {
+		chunksEnqueued.WithLabelValues(table.Name).Inc()
 		chunks <- Chunk{
 			Table: table,
 			Start: startId,

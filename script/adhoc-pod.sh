@@ -20,12 +20,25 @@ metadata:
   name: ${name}
   labels:
     square-envoy-injection: enabled
+    istio-envoy-injection: enabled
+    square_task: cloner
+    component: cloner
 spec:
   containers:
-  - name: main
+  - name: cloner
     image: golang
     command: ["sleep"]
     args: ["86400"]
+    ports:
+    - name: metrics
+      containerPort: 9102
+      protocol: TCP
+    - name: envoy-admin
+      containerPort: 8081
+      protocol: TCP
+    - name: http-envoy-prom
+      containerPort: 15090
+      protocol: TCP
     volumeMounts:
     - mountPath: /root
       name: home-volume

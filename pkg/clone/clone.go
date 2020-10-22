@@ -4,12 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
 	_ "net/http/pprof"
 	"strings"
 
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
@@ -21,24 +19,20 @@ import (
 type Clone struct {
 	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	QueueSize      int      `help:"Queue size of the chunk queue" default:"10000"`
-	ChunkSize      int      `help:"Size of the chunks to diff" default:"1000"`
-	WriteBatchSize int      `help:"Size of the write batches" default:"100"`
-	ChunkerCount   int      `help:"Number of readers for chunks" default:"10"`
-	ReaderCount    int      `help:"Number of readers for diffing" default:"10"`
-	WriterCount    int      `help:"Number of writers" default:"10"`
-	CopySchema     bool     `help:"Copy schema" default:"false"`
-	Tables         []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
+	QueueSize       int      `help:"Queue size of the chunk queue" default:"10000"`
+	ChunkSize       int      `help:"Size of the chunks to diff" default:"1000"`
+	WriteBatchSize  int      `help:"Size of the write batches" default:"100"`
+	ChunkerCount    int      `help:"Number of readers for chunks" default:"10"`
+	ReaderCount     int      `help:"Number of readers for diffing" default:"10"`
+	WriterCount     int      `help:"Number of writers" default:"10"`
+	WriteRetryCount int      `help:"Number of writers" default:"5"`
+	CopySchema      bool     `help:"Copy schema" default:"false"`
+	Tables          []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
 func (cmd *Clone) Run(globals Globals) error {
-	go func() {
-		log.Infof("Serving diagnostics on http://localhost:6060/metrics and http://localhost:6060/debug/pprof")
-		http.Handle("/metrics", promhttp.Handler())
-		err := http.ListenAndServe("localhost:6060", nil)
-		log.Fatalf("%v", err)
-	}()
+	globals.startMetricsServer()
 
 	var err error
 
@@ -115,7 +109,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	for i, _ := range writerConns {
 		conn := writerConns[i]
 		g.Go(func() error {
-			return Write(ctx, conn, writeRequests)
+			return Write(ctx, cmd, conn, writeRequests)
 		})
 	}
 

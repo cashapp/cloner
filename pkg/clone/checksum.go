@@ -3,12 +3,10 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"net/http"
 	_ "net/http/pprof"
 	"sync"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
 )
@@ -26,11 +24,7 @@ type Checksum struct {
 
 // Run applies the necessary changes to target to make it look like source
 func (cmd *Checksum) Run(globals Globals) error {
-	go func() {
-		log.Infof("Serving diagnostics on http://localhost:6060")
-		err := http.ListenAndServe("localhost:6060", nil)
-		log.Fatalf("%v", err)
-	}()
+	globals.startMetricsServer()
 
 	diffs, err := cmd.run(globals)
 	if err != nil {

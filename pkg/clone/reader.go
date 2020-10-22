@@ -11,14 +11,14 @@ import (
 )
 
 // ReadTables generates batches for each table
-func ReadTables(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, tableCh chan *Table, chunkSize int, batchSize int, batches chan Batch) error {
+func ReadTables(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, tableCh chan *Table, cmd *Clone, batches chan Batch) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, sourceConn, targetConn, shardingSpec, table, chunkSize, batchSize, batches)
+			err := readTable(ctx, chunkerConn, sourceConn, targetConn, shardingSpec, table, cmd, batches)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -29,18 +29,18 @@ func ReadTables(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn
 }
 
 // readTables generates write batches for one table
-func readTable(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, table *Table, chunkSize int, batchSize int, batches chan Batch) error {
+func readTable(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, table *Table, cmd *Clone, batches chan Batch) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	logger.Infof("start")
 	defer logger.Infof("done")
 
-	chunks := make(chan Chunk)
-	diffs := make(chan Diff)
+	chunks := make(chan Chunk, cmd.QueueSize)
+	diffs := make(chan Diff, cmd.QueueSize)
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		err := generateTableChunks(ctx, chunkerConn, table, chunkSize, chunks)
+		err := generateTableChunks(ctx, chunkerConn, table, cmd.ChunkSize, chunks)
 		close(chunks)
 		return err
 	})
@@ -50,7 +50,7 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn,
 		return err
 	})
 	g.Go(func() error {
-		return BatchTableWrites(ctx, batchSize, diffs, batches)
+		return BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 	})
 
 	if err := g.Wait(); err != nil {

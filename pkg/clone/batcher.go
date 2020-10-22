@@ -84,10 +84,15 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 		case diff, more := <-diffs:
 			if !more {
 				// Write the final unfilled batches
+
+				// Send the delete batch first
+				deleteBatch := batchesByType[Delete]
+				enqueueBatch(batches, deleteBatch)
+				// and clear it
+				deleteBatch.Rows = nil
+
 				for _, batch := range batchesByType {
-					if len(batch.Rows) > 0 {
-						enqueueBatch(batches, batch)
-					}
+					enqueueBatch(batches, batch)
 				}
 				return nil
 			}
@@ -99,6 +104,13 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 			batch.Rows = append(batch.Rows, diff.Row)
 
 			if len(batch.Rows) >= batchSize {
+				// Before we send any insert/update batch we need to send any outstanding deletes,
+				// this is to avoid hitting duplicate constraint issues
+				deleteBatch := batchesByType[Delete]
+				enqueueBatch(batches, deleteBatch)
+				// and clear it
+				deleteBatch.Rows = nil
+
 				// Batch is full send it
 				enqueueBatch(batches, batch)
 				// and clear it
@@ -113,6 +125,8 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 }
 
 func enqueueBatch(batches chan Batch, batch Batch) {
-	writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-	batches <- batch
+	if len(batch.Rows) > 0 {
+		writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+		batches <- batch
+	}
 }

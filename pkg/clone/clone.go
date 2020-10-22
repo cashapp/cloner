@@ -7,10 +7,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -23,13 +21,14 @@ import (
 type Clone struct {
 	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	QueueSize      int  `help:"Queue size of the chunk queue" default:"1000"`
-	ChunkSize      int  `help:"Size of the chunks to diff" default:"1000"`
-	WriteBatchSize int  `help:"Size of the write batches" default:"100"`
-	ChunkerCount   int  `help:"Number of readers for chunks" default:"10"`
-	ReaderCount    int  `help:"Number of readers for diffing" default:"10"`
-	WriterCount    int  `help:"Number of writers" default:"10"`
-	CopySchema     bool `help:"Copy schema" default:"false"`
+	QueueSize      int      `help:"Queue size of the chunk queue" default:"1000"`
+	ChunkSize      int      `help:"Size of the chunks to diff" default:"1000"`
+	WriteBatchSize int      `help:"Size of the write batches" default:"100"`
+	ChunkerCount   int      `help:"Number of readers for chunks" default:"10"`
+	ReaderCount    int      `help:"Number of readers for diffing" default:"10"`
+	WriterCount    int      `help:"Number of writers" default:"10"`
+	CopySchema     bool     `help:"Copy schema" default:"false"`
+	Tables         []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -44,8 +43,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	var err error
 
 	// TODO timeout?
-	ctx := context.Background()
-	g, ctx := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(context.Background())
 
 	sourceReader, err := globals.Source.ReaderDB()
 	if err != nil {
@@ -93,7 +91,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace)
+	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace, cmd.Tables)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -113,12 +111,6 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 
 	batches := make(chan Batch, cmd.QueueSize)
-
-	// Periodically dump metrics
-	// we don't wait for this one since it never ends, we just cancel the context
-	//go func() {
-	//	PeriodicallyDumpMetrics(ctx)
-	//}()
 
 	// Write batches
 	for i, _ := range writerConns {
@@ -144,8 +136,7 @@ func (cmd *Clone) Run(globals Globals) error {
 			targetConns,
 			shardingSpec,
 			tableCh,
-			cmd.ChunkSize,
-			cmd.WriteBatchSize,
+			cmd,
 			batches,
 		)
 		// All the readers are done, close the write batches channel
@@ -167,8 +158,7 @@ func readers(
 	targetConns []*sql.Conn,
 	shardingSpec []*topodata.KeyRange,
 	tableCh chan *Table,
-	chunkSize int,
-	batchSize int,
+	cmd *Clone,
 	batches chan Batch,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
@@ -184,34 +174,13 @@ func readers(
 				targetConn,
 				shardingSpec,
 				tableCh,
-				chunkSize,
-				batchSize,
+				cmd,
 				batches,
 			)
 			return err
 		})
 	}
 	return g.Wait()
-}
-
-func PeriodicallyDumpMetrics(ctx context.Context) {
-	ticker := time.NewTicker(60 * time.Second)
-	for {
-		metricCh := make(chan prometheus.Metric)
-		go func() {
-			writesProcessed.Collect(metricCh)
-		}()
-		go func() {
-			for metric := range metricCh {
-				log.Infof("writes = %v", metric.Desc())
-			}
-		}()
-		select {
-		case <-ctx.Done():
-			ticker.Stop()
-		case <-ticker.C:
-		}
-	}
 }
 
 func parseTarget(targetString string) (*query.Target, error) {

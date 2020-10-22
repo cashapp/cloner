@@ -89,7 +89,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace)
+	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

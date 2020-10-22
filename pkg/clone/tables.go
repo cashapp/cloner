@@ -27,7 +27,7 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn, schema string) ([]*Table, error) {
+func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn, schema string, includeTables []string) ([]*Table, error) {
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {
@@ -66,6 +66,9 @@ func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn
 			continue
 		}
 		if tableName == "schema_version" {
+			continue
+		}
+		if len(includeTables) > 0 && !contains(includeTables, tableName) {
 			continue
 		}
 		table, err := loadTable(ctx, databaseType, conn, schema, tableName)

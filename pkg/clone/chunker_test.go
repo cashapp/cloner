@@ -32,7 +32,7 @@ func TestChunker(t *testing.T) {
 	db, err := source.DB()
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
-	tables, err := LoadTables(ctx, source.Type, conns[0], "customer")
+	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", nil)
 	err = GenerateChunks(ctx, conns, tables, 50, chunks)
 	assert.NoError(t, err)
 

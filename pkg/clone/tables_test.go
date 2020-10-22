@@ -15,7 +15,7 @@ func TestLoadTables(t *testing.T) {
 	assert.NoError(t, err)
 	conn, err := db.Conn(ctx)
 	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, Vitess, conn, "customer")
+	tables, err := LoadTables(ctx, Vitess, conn, "customer", nil)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{
@@ -60,7 +60,7 @@ func TestCopySchema(t *testing.T) {
 	targetConn, err := targetDB.Conn(ctx)
 	assert.NoError(t, err)
 
-	tables, err := LoadTables(ctx, Vitess, sourceConn, "customer")
+	tables, err := LoadTables(ctx, Vitess, sourceConn, "customer", nil)
 	err = CopySchema(ctx, tables, sourceConn, targetConn)
 	assert.NoError(t, err)
 }

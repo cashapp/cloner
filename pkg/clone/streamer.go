@@ -139,7 +139,7 @@ func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, e
 		}
 		return newRowStream(table, rows)
 	} else {
-		logger.Debugf("reading chunk %v-%v", chunk.Start, chunk.End)
+		logger.Debugf("reading chunk [%v-%v)", chunk.Start, chunk.End)
 		rows, err := conn.QueryContext(ctx,
 			fmt.Sprintf("select %s from %s where %s >= ? and %s <= ? order by %s asc",
 				columns, table.Name, table.IDColumn, table.IDColumn, table.IDColumn), chunk.Start, chunk.End)

@@ -64,6 +64,12 @@ func deleteBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	rows := batch.Rows
 	log.Debugf("deleting %d rows", len(rows))
 
+	//for _, row := range batch.Rows {
+	//	log.WithField("task", "writer").
+	//		WithField("table", batch.Table.Name).
+	//		Infof("NOT deleting %d", row.ID)
+	//}
+
 	table := batch.Table
 	questionMarks := make([]string, 0, len(rows))
 	for range rows {

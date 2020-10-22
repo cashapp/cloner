@@ -52,7 +52,6 @@ func GenerateChunks(ctx context.Context, conns []*sql.Conn, tables []*Table, chu
 	case err := <-errCh:
 		return err
 	case <-waitCh:
-		close(chunks)
 		return nil
 	}
 }

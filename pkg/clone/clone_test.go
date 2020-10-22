@@ -82,7 +82,8 @@ func TestCloneWithTargetData(t *testing.T) {
 	source := vitessContainer.Config()
 	target := tidbContainer.Config()
 
-	// make sure there are diffs
+	// Make sure there are diffs by inserting some data, then deleting data, then inserting again
+	// Insert/delete/insert messes with the auto increment columns to make sure we handle that
 	rowCount := 1000
 	err := insertBunchaData(source, rowCount)
 	assert.NoError(t, err)

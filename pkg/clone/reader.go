@@ -3,22 +3,29 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 // ReadTables generates batches for each table
-func ReadTables(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, tableCh chan *Table, cmd *Clone, batches chan Batch) error {
+func ReadTables(
+	ctx context.Context,
+	chunkerConn *sql.Conn,
+	tableCh chan *Table,
+	cmd *Clone,
+	batches chan Batch,
+	diffRequests chan DiffRequest,
+) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, sourceConn, targetConn, shardingSpec, table, cmd, batches)
+			err := readTable(ctx, chunkerConn, table, cmd, batches, diffRequests)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -29,7 +36,14 @@ func ReadTables(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn
 }
 
 // readTables generates write batches for one table
-func readTable(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn, targetConn *sql.Conn, shardingSpec []*topodata.KeyRange, table *Table, cmd *Clone, batches chan Batch) error {
+func readTable(
+	ctx context.Context,
+	chunkerConn *sql.Conn,
+	table *Table,
+	cmd *Clone,
+	batches chan Batch,
+	diffRequests chan DiffRequest,
+) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	logger.Infof("start")
 	defer logger.Infof("done")
@@ -44,10 +58,17 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, sourceConn *sql.Conn,
 		close(chunks)
 		return err
 	})
+	// Request diffing for every chunk
 	g.Go(func() error {
-		err := DiffChunks(ctx, sourceConn, targetConn, shardingSpec, chunks, diffs)
+		done := &sync.WaitGroup{}
+		for chunk := range chunks {
+			done.Add(1)
+			diffRequests <- DiffRequest{chunk, diffs, done}
+		}
+		done.Wait()
+		// All diffing done, close the diffs channel
 		close(diffs)
-		return err
+		return nil
 	})
 	g.Go(func() error {
 		return BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)

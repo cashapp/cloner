@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"net/http"
 	_ "net/http/pprof"
+	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
-	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 type Checksum struct {
@@ -104,16 +104,34 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	diffs := make(chan Diff, cmd.QueueSize)
 	g, ctx := errgroup.WithContext(ctx)
 
+	// Start differs
+	diffRequests := make(chan DiffRequest, cmd.QueueSize)
+	for i, _ := range targetConns {
+		source := sourceConns[i]
+		target := targetConns[i]
+		g.Go(func() error {
+			return DiffChunks(ctx, source, target, shardingSpec, diffRequests)
+		})
+	}
+
 	// Generate chunks of all source tables
 	g.Go(func() error {
-		return GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
+		err := GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
+		close(chunks)
+		return err
 	})
 
-	// Diff chunks
+	// Forward chunks to differs
 	g.Go(func() error {
-		err := differs(ctx, sourceConns, targetConns, shardingSpec, chunks, diffs)
+		done := &sync.WaitGroup{}
+		for chunk := range chunks {
+			done.Add(1)
+			diffRequests <- DiffRequest{chunk, diffs, done}
+		}
+		done.Wait()
+		close(diffRequests)
 		close(diffs)
-		return err
+		return nil
 	})
 
 	// Reporter
@@ -126,25 +144,4 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	})
 
 	return foundDiffs, g.Wait()
-}
-
-// differs runs all the differs in parallel and returns when they are all done
-func differs(
-	ctx context.Context,
-	sourceConns []*sql.Conn,
-	targetConns []*sql.Conn,
-	shardingSpec []*topodata.KeyRange,
-	chunks chan Chunk,
-	diffs chan Diff,
-) error {
-	g, ctx := errgroup.WithContext(ctx)
-	for i, _ := range sourceConns {
-		sourceConn := sourceConns[i]
-		targetConn := targetConns[i]
-		g.Go(func() error {
-			err := DiffChunks(ctx, sourceConn, targetConn, shardingSpec, chunks, diffs)
-			return err
-		})
-	}
-	return g.Wait()
 }

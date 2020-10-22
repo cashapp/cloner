@@ -21,7 +21,7 @@ import (
 type Clone struct {
 	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	QueueSize      int      `help:"Queue size of the chunk queue" default:"1000"`
+	QueueSize      int      `help:"Queue size of the chunk queue" default:"10000"`
 	ChunkSize      int      `help:"Size of the chunks to diff" default:"1000"`
 	WriteBatchSize int      `help:"Size of the write batches" default:"100"`
 	ChunkerCount   int      `help:"Number of readers for chunks" default:"10"`
@@ -110,13 +110,22 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 
-	batches := make(chan Batch, cmd.QueueSize)
-
-	// Write batches
+	// Start writers
+	writeRequests := make(chan Batch, cmd.QueueSize)
 	for i, _ := range writerConns {
 		conn := writerConns[i]
 		g.Go(func() error {
-			return Write(ctx, conn, batches)
+			return Write(ctx, conn, writeRequests)
+		})
+	}
+
+	// Start differs
+	diffRequests := make(chan DiffRequest, cmd.QueueSize)
+	for i, _ := range targetConns {
+		source := sourceConns[i]
+		target := targetConns[i]
+		g.Go(func() error {
+			return DiffChunks(ctx, source, target, shardingSpec, diffRequests)
 		})
 	}
 
@@ -129,54 +138,32 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Chunk, diff table and generate batches to write
 	g.Go(func() error {
-		err := readers(
-			ctx,
-			chunkerConns,
-			sourceConns,
-			targetConns,
-			shardingSpec,
-			tableCh,
-			cmd,
-			batches,
-		)
-		// All the readers are done, close the write batches channel
-		close(batches)
+		err := readers(ctx, chunkerConns, tableCh, cmd, writeRequests, diffRequests)
+		// All tables are done, close the channels used to request work
+		close(writeRequests)
+		close(diffRequests)
 		return err
 	})
 
+	err = g.Wait()
 	log.Infof("done cloning %d tables", len(tables))
-
-	// Wait for everything to complete or we get an error
-	return g.Wait()
+	return err
 }
 
 // readers runs all the readers in parallel and returns when they are all done
 func readers(
 	ctx context.Context,
 	chunkerConns []*sql.Conn,
-	sourceConns []*sql.Conn,
-	targetConns []*sql.Conn,
-	shardingSpec []*topodata.KeyRange,
 	tableCh chan *Table,
 	cmd *Clone,
 	batches chan Batch,
+	diffRequests chan DiffRequest,
 ) error {
 	g, ctx := errgroup.WithContext(ctx)
-	for i, _ := range sourceConns {
+	for i, _ := range chunkerConns {
 		chunkerConn := chunkerConns[i]
-		sourceConn := sourceConns[i]
-		targetConn := targetConns[i]
 		g.Go(func() error {
-			err := ReadTables(
-				ctx,
-				chunkerConn,
-				sourceConn,
-				targetConn,
-				shardingSpec,
-				tableCh,
-				cmd,
-				batches,
-			)
+			err := ReadTables(ctx, chunkerConn, tableCh, cmd, batches, diffRequests)
 			return err
 		})
 	}

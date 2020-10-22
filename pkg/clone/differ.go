@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,6 +44,15 @@ func init() {
 type Diff struct {
 	Type DiffType
 	Row  *Row
+}
+
+type DiffRequest struct {
+	// Chunk to diff
+	Chunk Chunk
+	// Channel to send the diffs to
+	Diffs chan Diff
+	// Use this to signal we're done
+	Done *sync.WaitGroup
 }
 
 // StreamDiff sends the changes need to make target become exactly like source
@@ -107,14 +117,14 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 	}
 }
 
-func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunks chan Chunk, diffs chan Diff) error {
+func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunks chan DiffRequest) error {
 	for {
 		select {
-		case chunk, more := <-chunks:
+		case request, more := <-chunks:
 			if !more {
 				return nil
 			}
-			err := diffChunk(ctx, source, target, targetFilter, chunk, diffs)
+			err := diffChunk(ctx, source, target, targetFilter, request)
 			if err != nil {
 				return err
 			}
@@ -124,8 +134,11 @@ func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetF
 	}
 }
 
-func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
+func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, request DiffRequest) error {
 	// TODO start off by running a fast checksum query
+
+	chunk := request.Chunk
+	diffs := request.Diffs
 
 	sourceStream, err := StreamChunk(ctx, source, chunk)
 	if err != nil {
@@ -143,5 +156,7 @@ func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFi
 		return errors.WithStack(err)
 	}
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+	// Signal we're done to the requester
+	request.Done.Done()
 	return nil
 }

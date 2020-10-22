@@ -12,9 +12,10 @@ import (
 )
 
 type Row struct {
-	Table *Table
-	ID    uint64
-	Data  []interface{}
+	Table      *Table
+	ID         int64
+	ShardingID int64
+	Data       []interface{}
 }
 
 type RowStream interface {
@@ -44,26 +45,30 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	var id uint64
-	var shardingId uint64
+	var id int64
+	var shardingID int64
 	row := make([]interface{}, len(cols))
 	for i, _ := range row {
 		if r.table.IDColumnIndex == i {
 			row[i] = &id
 		} else if r.table.ShardingColumnIndex == i {
-			row[i] = &shardingId
+			row[i] = &shardingID
 		} else {
 			row[i] = new(interface{})
 		}
 	}
 	err = r.rows.Scan(row...)
+	if r.table.ShardingColumnIndex == r.table.IDColumnIndex {
+		shardingID = id
+	}
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return &Row{
-		Table: r.table,
-		ID:    id,
-		Data:  row,
+		Table:      r.table,
+		ID:         id,
+		ShardingID: shardingID,
+		Data:       row,
 	}, nil
 }
 
@@ -97,8 +102,8 @@ func newRejectStream(stream RowStream, filter func(row *Row) (bool, error)) RowS
 
 func filterStreamByShard(stream RowStream, table *Table, targetFilter []*topodata.KeyRange) RowStream {
 	return newRejectStream(stream, func(row *Row) (bool, error) {
-		shardingValue := row.Data[table.ShardingColumnIndex].(*uint64)
-		return !InShard(*shardingValue, targetFilter), nil
+		shardingValue := row.ShardingID
+		return !InShard(uint64(shardingValue), targetFilter), nil
 	})
 }
 

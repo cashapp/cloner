@@ -65,7 +65,7 @@ func readTable(
 			done.Add(1)
 			diffRequests <- DiffRequest{chunk, diffs, done}
 		}
-		done.Wait()
+		WaitGroupWait(ctx, done)
 		// All diffing done, close the diffs channel
 		close(diffs)
 		return nil
@@ -80,4 +80,17 @@ func readTable(
 	}
 
 	return nil
+}
+
+// WaitGroupWait is a context friendly wait on a WaitGroup
+func WaitGroupWait(ctx context.Context, wg *sync.WaitGroup) {
+	ch := make(chan struct{})
+	go func() {
+		wg.Wait()
+		ch <- struct{}{}
+	}()
+	select {
+	case <-ctx.Done():
+	case <-ch:
+	}
 }

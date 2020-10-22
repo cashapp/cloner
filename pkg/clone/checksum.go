@@ -128,7 +128,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 			done.Add(1)
 			diffRequests <- DiffRequest{chunk, diffs, done}
 		}
-		done.Wait()
+		WaitGroupWait(ctx, done)
 		close(diffRequests)
 		close(diffs)
 		return nil

@@ -104,10 +104,13 @@ func insertBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	rows := batch.Rows
 	valueStrings := make([]string, 0, len(rows))
 	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
-	for _, post := range rows {
+	for _, row := range rows {
+		if row.ID == 1016 {
+			log.Debugf("inserting 1016!")
+		}
 		valueStrings = append(valueStrings, values)
 		for i, _ := range columns {
-			valueArgs = append(valueArgs, post.Data[i])
+			valueArgs = append(valueArgs, row.Data[i])
 		}
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",

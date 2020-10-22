@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -29,41 +29,30 @@ func GenerateChunks(ctx context.Context, conns []*sql.Conn, tables []*Table, chu
 	}
 	close(tableChan)
 
-	wg := &sync.WaitGroup{}
-	errCh := make(chan error)
-	waitCh := make(chan interface{})
-	go func() {
-		wg.Wait()
-		close(waitCh)
-	}()
+	g, ctx := errgroup.WithContext(ctx)
 	for i, _ := range conns {
 		conn := conns[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := GenerateTableChunks(ctx, conn, tableChan, chunkSize, chunks)
-			if err != nil {
-				log.Errorf("Chunker error: %v", err)
-				errCh <- err
-			}
-		}()
+		g.Go(func() error {
+			return GenerateTableChunks(ctx, conn, tableChan, chunkSize, chunks)
+		})
 	}
-	select {
-	case err := <-errCh:
-		return err
-	case <-waitCh:
-		return nil
-	}
+	return g.Wait()
 }
 
+// Chunk is an chunk of rows closed to the left [start,end)
 type Chunk struct {
 	Table *Table
+	// Start is the first id of the chunk inclusive
 	Start int64
-	End   int64
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusive)
+	End int64 // exclusive
 
-	First bool // first chunk of a table
-	Last  bool // last chunk of a table
-	Size  int
+	// First chunk of a table
+	First bool
+	// Last chunk of a table
+	Last bool
+	// Size is the expected number of rows in the chunk
+	Size int
 }
 
 func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table, chunkSize int, chunks chan Chunk) error {
@@ -132,8 +121,7 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 	defer rows.Close()
 	currentChunkSize := 0
 	first := true
-	var startId int64
-	startIdSet := false
+	startId := int64(0)
 	var id int64
 	next := rows.Next()
 	for next {
@@ -143,11 +131,6 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 		}
 
 		currentChunkSize++
-
-		if !startIdSet {
-			startId = id
-			startIdSet = true
-		}
 
 		next = rows.Next()
 
@@ -162,7 +145,7 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 				Size:  currentChunkSize,
 			}
 			// Next id should be the next start id
-			startIdSet = false
+			startId = id
 			// We are no longer the first chunk
 			first = false
 			// We have no rows in the next chunk yet

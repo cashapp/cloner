@@ -63,8 +63,15 @@ func readTable(
 		done := &sync.WaitGroup{}
 		for chunk := range chunks {
 			done.Add(1)
+			// This channel can fill up so we check if the context is cancelled before we enqueue so we don't block
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
 			diffRequests <- DiffRequest{chunk, diffs, done}
 		}
+		// TODO this is a smell that we have to do a context friendly WaitGroup wait here...
 		WaitGroupWait(ctx, done)
 		// All diffing done, close the diffs channel
 		close(diffs)
@@ -87,7 +94,7 @@ func WaitGroupWait(ctx context.Context, wg *sync.WaitGroup) {
 	ch := make(chan struct{})
 	go func() {
 		wg.Wait()
-		ch <- struct{}{}
+		close(ch)
 	}()
 	select {
 	case <-ctx.Done():

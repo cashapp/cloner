@@ -21,9 +21,11 @@ func init() {
 }
 
 type Batch struct {
-	Type  DiffType
-	Table *Table
-	Rows  []*Row
+	Type      DiffType
+	Table     *Table
+	Rows      []*Row
+	Retries   int
+	LastError error
 }
 
 // BatchWrites consumes diffs and batches them up into batches by type and table
@@ -42,7 +44,7 @@ readChannel:
 				}
 				batch, ok := batchesByTable[diff.Row.Table.Name]
 				if !ok {
-					batch = Batch{diff.Type, diff.Row.Table, nil}
+					batch = Batch{diff.Type, diff.Row.Table, nil, 0, nil}
 				}
 				batch.Rows = append(batch.Rows, diff.Row)
 
@@ -99,7 +101,7 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 
 			batch, ok := batchesByType[diff.Type]
 			if !ok {
-				batch = Batch{diff.Type, diff.Row.Table, nil}
+				batch = Batch{diff.Type, diff.Row.Table, nil, 0, nil}
 			}
 			batch.Rows = append(batch.Rows, diff.Row)
 

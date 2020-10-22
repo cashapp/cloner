@@ -25,14 +25,18 @@ func init() {
 	prometheus.MustRegister(writesProcessed)
 }
 
-func Write(ctx context.Context, conn *sql.Conn, batches chan Batch) error {
+func Write(ctx context.Context, cmd *Clone, conn *sql.Conn, batches chan Batch) error {
 	for {
 		select {
 		case batch, more := <-batches:
 			if !more {
 				return nil
 			}
+			// TODO retries and backoff
 			err := writeBatch(ctx, conn, batch)
+			if err != nil {
+				err = maybeRetry(cmd.WriteRetryCount, err, batch, batches)
+			}
 			if err != nil {
 				log.WithField("task", "writer").
 					WithField("table", batch.Table.Name).
@@ -46,8 +50,18 @@ func Write(ctx context.Context, conn *sql.Conn, batches chan Batch) error {
 	}
 }
 
+func maybeRetry(retryCount int, err error, batch Batch, batches chan Batch) error {
+	if batch.Retries >= retryCount {
+		return err
+	}
+
+	batch.Retries += 1
+	batch.LastError = err
+	batches <- batch
+	return nil
+}
+
 func writeBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
-	// TODO retries and backoff
 	switch batch.Type {
 	case Insert:
 		return insertBatch(ctx, conn, batch)
@@ -56,7 +70,8 @@ func writeBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 	case Update:
 		return updateBatch(ctx, conn, batch)
 	default:
-		return errors.Errorf("Unknown batch type %s", batch.Type)
+		log.Panicf("Unknown batch type %s", batch.Type)
+		return nil
 	}
 }
 

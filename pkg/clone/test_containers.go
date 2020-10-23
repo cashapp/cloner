@@ -243,7 +243,7 @@ func startTidb() (*DatabaseContainer, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	err = resource.Expire(60)
+	err = resource.Expire(15 * 60)
 	if err != nil {
 		_ = pool.Purge(resource)
 		return nil, errors.WithStack(err)

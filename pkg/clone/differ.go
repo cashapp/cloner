@@ -43,7 +43,11 @@ func init() {
 
 type Diff struct {
 	Type DiffType
-	Row  *Row
+	// Row is the row to update to or insert or delete
+	Row *Row
+
+	// Target is in case of the Update DiffType also set so that it can be compared
+	Target *Row
 }
 
 type DiffRequest struct {
@@ -88,15 +92,15 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 		if sourceRow != nil {
 			if targetRow != nil {
 				if sourceRow.ID < targetRow.ID {
-					diffs <- Diff{Insert, sourceRow}
+					diffs <- Diff{Insert, sourceRow, nil}
 					advanceSource = true
 					advanceTarget = false
 				} else if sourceRow.ID > targetRow.ID {
-					diffs <- Diff{Delete, targetRow}
+					diffs <- Diff{Delete, targetRow, nil}
 					advanceSource = false
 					advanceTarget = true
 				} else if !reflect.DeepEqual(sourceRow.Data, targetRow.Data) {
-					diffs <- Diff{Update, sourceRow}
+					diffs <- Diff{Update, sourceRow, targetRow}
 					advanceSource = true
 					advanceTarget = true
 				} else {
@@ -105,11 +109,11 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 					advanceTarget = true
 				}
 			} else {
-				diffs <- Diff{Insert, sourceRow}
+				diffs <- Diff{Insert, sourceRow, nil}
 				advanceSource = true
 			}
 		} else if targetRow != nil {
-			diffs <- Diff{Delete, targetRow}
+			diffs <- Diff{Delete, targetRow, nil}
 			advanceTarget = true
 		} else {
 			return nil

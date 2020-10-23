@@ -28,7 +28,7 @@ type testDiff struct {
 }
 
 func (d testDiff) toDiff() Diff {
-	return Diff{d.diffType, d.row.toRow()}
+	return Diff{d.diffType, d.row.toRow(), nil}
 }
 
 func toTestDiff(diff Diff) testDiff {

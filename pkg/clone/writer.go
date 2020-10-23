@@ -161,7 +161,7 @@ func updateBatch(ctx context.Context, conn *sql.Conn, batch Batch) error {
 
 	if err != nil {
 		_ = tx.Rollback()
-		return err
+		return errors.WithStack(err)
 	} else {
 		err := tx.Commit()
 		writesProcessed.WithLabelValues(batch.Table.Name, "update").Add(float64(len(rows)))
@@ -182,7 +182,7 @@ func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
 		}
 	}
 
-	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s = ?",
+	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE `%s` = ?",
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {

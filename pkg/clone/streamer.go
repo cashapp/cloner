@@ -47,20 +47,33 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 	}
 
 	row := make([]interface{}, len(cols))
-	row[r.table.IDColumnIndex] = int64(0)
-	row[r.table.ShardingColumnIndex] = int64(0)
+
+	var id int64
+	var shardingID int64
 
 	scanArgs := make([]interface{}, len(row))
 	for i := range row {
-		scanArgs[i] = &row[i]
+		if i == r.table.IDColumnIndex {
+			scanArgs[i] = &id
+		} else if i == r.table.ShardingColumnIndex {
+			scanArgs[i] = &shardingID
+		} else {
+			scanArgs[i] = &row[i]
+		}
 	}
 	err = r.rows.Scan(scanArgs...)
-
-	id := row[r.table.IDColumnIndex].(int64)
-	shardingID := row[r.table.ShardingColumnIndex].(int64)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	// If the id column is used as a sharding column we never put in the pointer to the shardingID local var
+	// in that case use the id as the shardingID
+	if r.table.IDColumnIndex == r.table.ShardingColumnIndex {
+		shardingID = id
+	}
+	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
+	row[r.table.IDColumnIndex] = id
+	row[r.table.ShardingColumnIndex] = shardingID
 	return &Row{
 		Table:      r.table,
 		ID:         id,
@@ -119,7 +132,15 @@ func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, e
 	columns := table.ColumnList
 
 	logger := log.WithField("table", chunk.Table.Name).WithField("task", "reader")
-	if chunk.First {
+	if chunk.First && chunk.Last {
+		logger.Debugf("reading chunk -")
+		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",
+			columns, table.Name, table.IDColumn))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return newRowStream(table, rows)
+	} else if chunk.First {
 		logger.Debugf("reading chunk -%v", chunk.End)
 		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s < ? order by %s asc",
 			columns, table.Name, table.IDColumn, table.IDColumn), chunk.End)

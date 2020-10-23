@@ -154,6 +154,10 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 	}
 	// Send any partial chunk we might have
 	if currentChunkSize > 0 {
+		if first {
+			// This is the first AND last chunk, the startId doesn't make sense because we never got a second chunk
+			startId = 0
+		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
 		chunks <- Chunk{
 			Table: table,

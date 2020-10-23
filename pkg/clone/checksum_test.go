@@ -32,7 +32,7 @@ func TestChecksum(t *testing.T) {
 	source.Database = "customer/-80@replica"
 
 	// Check how many rows end up in the -80 shard
-	shardRowCount, err := countRows(source)
+	shardRowCount, err := countRows(source, "customers")
 
 	checksum := &Checksum{
 		HighFidelity:   false,

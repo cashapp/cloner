@@ -1,6 +1,7 @@
 {
   "sharded": false,
   "tables": {
-    "customers_seq": {"type": "sequence"}
+    "customers_seq": {"type": "sequence"},
+    "customer_passcodes_seq": {"type": "sequence"}
   }
 }

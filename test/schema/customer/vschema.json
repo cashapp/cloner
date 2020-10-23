@@ -17,6 +17,18 @@
         "column": "id",
         "sequence": "main.customers_seq"
       }
+    },
+    "customer_passcodes": {
+      "column_vindexes": [
+        {
+          "column": "id",
+          "name": "hash"
+        }
+      ],
+      "auto_increment": {
+        "column": "id",
+        "sequence": "main.customers_seq"
+      }
     }
   }
 }

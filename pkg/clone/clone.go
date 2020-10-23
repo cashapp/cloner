@@ -68,19 +68,13 @@ func (cmd *Clone) Run(globals Globals) error {
 	chunkerConns := sourceConns[:cmd.ChunkerCount]
 	sourceConns = sourceConns[cmd.ChunkerCount:]
 
-	// Create synced target reader conns
+	// Create target reader conns
+	// TODO how do we synchronize these, do we have to?
 	targetConns, err := OpenConnections(ctx, target, cmd.ReaderCount)
 	if err != nil {
 		return err
 	}
 	defer CloseConnections(targetConns)
-
-	// Create writer connections
-	writerConns, err := OpenConnections(ctx, target, cmd.WriterCount)
-	if err != nil {
-		return err
-	}
-	defer CloseConnections(writerConns)
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)
@@ -94,7 +88,7 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Copy schema
 	if cmd.CopySchema {
-		err := CopySchema(ctx, tables, chunkerConns[0], writerConns[0])
+		err := CopySchema(ctx, tables, chunkerConns[0], target)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -110,10 +104,9 @@ func (cmd *Clone) Run(globals Globals) error {
 	// we might want to wrap up this channel and the WaitGroup in a single object
 	writesInFlight := &sync.WaitGroup{}
 	writeRequests := make(chan Batch, cmd.QueueSize)
-	for i, _ := range writerConns {
-		conn := writerConns[i]
+	for i := 0; i < cmd.WriterCount; i++ {
 		g.Go(func() error {
-			return Write(ctx, cmd, conn, writeRequests, writesInFlight)
+			return Write(ctx, cmd, target, writeRequests, writesInFlight)
 		})
 	}
 
@@ -149,7 +142,11 @@ func (cmd *Clone) Run(globals Globals) error {
 	})
 
 	err = g.Wait()
-	log.Infof("done cloning %d tables", len(tables))
+	if err != nil {
+		log.Infof("done cloning %d tables", len(tables))
+	} else {
+		log.WithError(err).Errorf("failed cloning %d tables", len(tables))
+	}
 	return err
 }
 

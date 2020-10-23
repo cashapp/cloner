@@ -134,16 +134,21 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 		targetValue := targetRow.Data[i]
 
 		// Different database drivers interpret SQL types differently (it seems)
-		// If they have the same type we just use reflect.DeepEqual and trust that
 		sourceType := reflect.TypeOf(sourceValue)
 		targetType := reflect.TypeOf(targetValue)
 		if sourceType == targetType {
+			// If they have the same type we just use reflect.DeepEqual and trust that
 			if reflect.DeepEqual(sourceValue, targetValue) {
 				continue
+			} else {
+				return false, nil
 			}
 		}
+
 		if targetValue == nil {
-			if sourceValue != nil {
+			if sourceValue == nil {
+				continue
+			} else {
 				return false, nil
 			}
 		}
@@ -163,8 +168,17 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 			if sourceValue.(int64) != coerced {
 				return false, nil
 			}
+		case uint64:
+			coerced, err := coerceUint64(targetValue)
+			if err != nil {
+				return false, errors.WithStack(err)
+			}
+			if sourceValue.(uint64) != coerced {
+				return false, nil
+			}
 		default:
-			return false, errors.Errorf("type combination %v -> %v not supported yet", sourceType, targetType)
+			return false, errors.Errorf("type combination %v -> %v not supported yet: source=%v target=%v",
+				sourceType, targetType, sourceValue, targetValue)
 		}
 	}
 	return true, nil
@@ -175,6 +189,15 @@ func coerceInt64(value interface{}) (int64, error) {
 	case []byte:
 		// This means it was sent as a unicode encoded string
 		return strconv.ParseInt(string(value.([]byte)), 10, 64)
+	default:
+		return 0, nil
+	}
+}
+
+func coerceUint64(value interface{}) (uint64, error) {
+	switch value.(type) {
+	case int64:
+		return uint64(value.(int64)), nil
 	default:
 		return 0, nil
 	}

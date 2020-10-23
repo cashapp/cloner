@@ -213,9 +213,11 @@ func TestRowsEqual(t *testing.T) {
 	sourceRow := &Row{nil, 0, 0, []interface{}{
 		100020406,
 		int64(30027935561),
+		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},
 	}}
 	targetRow := &Row{nil, 0, 0, []interface{}{
 		100020406,
+		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},
 		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},
 	}}
 	isEqual, err := RowsEqual(

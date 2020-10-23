@@ -183,7 +183,7 @@ func loadTable(ctx context.Context, databaseType DataSourceType, conn *sql.Conn,
 	}, nil
 }
 
-func CopySchema(ctx context.Context, tables []*Table, source *sql.Conn, target *sql.Conn) error {
+func CopySchema(ctx context.Context, tables []*Table, source *sql.Conn, target *sql.DB) error {
 	for _, table := range tables {
 		row := source.QueryRowContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %s", table.Name))
 		var name string

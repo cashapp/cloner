@@ -48,17 +48,22 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 	g.Go(func() error {
 		done := &sync.WaitGroup{}
 		for chunk := range chunks {
-			done.Add(1)
 			// This channel can fill up so we check if the context is cancelled before we enqueue so we don't block
 			select {
 			case <-ctx.Done():
 				return nil
 			default:
 			}
+			done.Add(1)
 			diffRequests <- DiffRequest{chunk, diffs, done}
 		}
 		// TODO this is a smell that we have to do a context friendly WaitGroup wait here...
 		WaitGroupWait(ctx, done)
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
 		// All diffing done, close the diffs channel
 		close(diffs)
 		return nil

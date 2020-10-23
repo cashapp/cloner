@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"reflect"
+	"strconv"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -99,14 +100,20 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 					diffs <- Diff{Delete, targetRow, nil}
 					advanceSource = false
 					advanceTarget = true
-				} else if !reflect.DeepEqual(sourceRow.Data, targetRow.Data) {
-					diffs <- Diff{Update, sourceRow, targetRow}
-					advanceSource = true
-					advanceTarget = true
 				} else {
-					// Same!
-					advanceSource = true
-					advanceTarget = true
+					isEqual, err := RowsEqual(sourceRow, targetRow)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+					if !isEqual {
+						diffs <- Diff{Update, sourceRow, targetRow}
+						advanceSource = true
+						advanceTarget = true
+					} else {
+						// Same!
+						advanceSource = true
+						advanceTarget = true
+					}
 				}
 			} else {
 				diffs <- Diff{Insert, sourceRow, nil}
@@ -118,6 +125,58 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 		} else {
 			return nil
 		}
+	}
+}
+
+func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
+	for i := range sourceRow.Data {
+		sourceValue := sourceRow.Data[i]
+		targetValue := targetRow.Data[i]
+
+		// Different database drivers interpret SQL types differently (it seems)
+		// If they have the same type we just use reflect.DeepEqual and trust that
+		sourceType := reflect.TypeOf(sourceValue)
+		targetType := reflect.TypeOf(targetValue)
+		if sourceType == targetType {
+			if reflect.DeepEqual(sourceValue, targetValue) {
+				continue
+			}
+		}
+		if targetValue == nil {
+			if sourceValue != nil {
+				return false, nil
+			}
+		}
+
+		// If they do NOT have same type, we coerce the target type to the source type and then compare
+		// We only support the combinations we've encountered in the wild here
+		switch sourceValue.(type) {
+		case nil:
+			if targetValue == nil {
+				continue
+			}
+		case int64:
+			coerced, err := coerceInt64(targetValue)
+			if err != nil {
+				return false, errors.WithStack(err)
+			}
+			if sourceValue.(int64) != coerced {
+				return false, nil
+			}
+		default:
+			return false, errors.Errorf("type combination %v -> %v not supported yet", sourceType, targetType)
+		}
+	}
+	return true, nil
+}
+
+func coerceInt64(value interface{}) (int64, error) {
+	switch value.(type) {
+	case []byte:
+		// This means it was sent as a unicode encoded string
+		return strconv.ParseInt(string(value.([]byte)), 10, 64)
+	default:
+		return 0, nil
 	}
 }
 

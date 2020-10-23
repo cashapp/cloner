@@ -45,22 +45,19 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	var id int64
-	var shardingID int64
+
 	row := make([]interface{}, len(cols))
-	for i, _ := range row {
-		if r.table.IDColumnIndex == i {
-			row[i] = &id
-		} else if r.table.ShardingColumnIndex == i {
-			row[i] = &shardingID
-		} else {
-			row[i] = new(interface{})
-		}
+	row[r.table.IDColumnIndex] = int64(0)
+	row[r.table.ShardingColumnIndex] = int64(0)
+
+	scanArgs := make([]interface{}, len(row))
+	for i := range row {
+		scanArgs[i] = &row[i]
 	}
-	err = r.rows.Scan(row...)
-	if r.table.ShardingColumnIndex == r.table.IDColumnIndex {
-		shardingID = id
-	}
+	err = r.rows.Scan(scanArgs...)
+
+	id := row[r.table.IDColumnIndex].(int64)
+	shardingID := row[r.table.ShardingColumnIndex].(int64)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

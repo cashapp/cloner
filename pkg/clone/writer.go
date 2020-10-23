@@ -190,11 +190,6 @@ func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	}
 
 	for _, row := range rows {
-		if batch.Table.Name == "customer_passcodes" && row.ID == 100020406 {
-			log.WithField("task", "writer").
-				WithField("table", batch.Table.Name).
-				Infof("updating peculiar customer_passcodes row: %#v", row.Data)
-		}
 		args := make([]interface{}, 0, len(columns))
 		for i, column := range columns {
 			if column != table.IDColumn {

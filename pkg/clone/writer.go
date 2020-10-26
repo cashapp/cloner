@@ -36,7 +36,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, writeRequests chan Batch
 			// TODO backoff
 			err := writeBatch(ctx, db, batch)
 			if err != nil {
-				err := maybeRetry(cmd.WriteRetryCount, err, batch, writeRequests)
+				err := maybeRetry(ctx, cmd.WriteRetryCount, err, batch, writeRequests)
 				if err != nil {
 					if !cmd.HighFidelity {
 						// If we're doing a best effort clone we just give up on this batch
@@ -62,7 +62,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, writeRequests chan Batch
 	}
 }
 
-func maybeRetry(retryCount int, err error, batch Batch, retries chan Batch) error {
+func maybeRetry(ctx context.Context, retryCount int, err error, batch Batch, retries chan Batch) error {
 	if batch.Retries >= retryCount {
 		return err
 	}
@@ -74,6 +74,14 @@ func maybeRetry(retryCount int, err error, batch Batch, retries chan Batch) erro
 
 	batch.Retries += 1
 	batch.LastError = err
+
+	// Check if the context has been cancelled before we retry
+	// otherwise we might post on a closed channel
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
 	retries <- batch
 	return nil
 }

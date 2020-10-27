@@ -12,8 +12,6 @@ import (
 )
 
 type Checksum struct {
-	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
-
 	QueueSize      int `help:"Queue size of the chunk queue" default:"1000"`
 	ChunkSize      int `help:"Size of the chunks to diff" default:"1000"`
 	WriteBatchSize int `help:"Size of the write batches" default:"100"`
@@ -54,17 +52,9 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 
 	// Create synced source and chunker conns
 	var sourceConns []*sql.Conn
-	if cmd.HighFidelity {
-		sourceConns, err = OpenSyncedConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
-		// TODO sync up the target connections
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-	} else {
-		sourceConns, err = OpenConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
+	sourceConns, err = OpenConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 	defer CloseConnections(sourceConns)
 

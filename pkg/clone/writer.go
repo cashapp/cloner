@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
@@ -15,6 +16,7 @@ import (
 func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	err := autotx.TransactWithRetry(ctx, db, autotx.RetryOptions{
 		MaxRetries: cmd.WriteRetryCount,
+		BackOff:    newSimpleExponentialBackOff(5 * time.Minute).NextBackOff,
 	}, func(tx *sql.Tx) error {
 		switch batch.Type {
 		case Insert:
@@ -30,7 +32,11 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	})
 
 	if err != nil {
-		if !cmd.HighFidelity {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+
+		if !cmd.Consistent {
 			// If we're doing a best effort clone we just give up on this batch
 			log.WithField("task", "writer").
 				WithField("table", batch.Table.Name).

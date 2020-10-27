@@ -97,7 +97,7 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.NoError(t, err)
 
 	clone := &Clone{
-		HighFidelity:   false,
+		Consistent:     false,
 		QueueSize:      1000,
 		ChunkSize:      5,
 		WriteBatchSize: 5,
@@ -124,7 +124,6 @@ func TestCloneWithTargetData(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		HighFidelity:   false,
 		QueueSize:      1000,
 		ChunkSize:      5,
 		WriteBatchSize: 5,
@@ -216,7 +215,7 @@ func TestCloneWithNullBoolColumn(t *testing.T) {
 	assert.Equal(t, 1, rows)
 
 	clone := &Clone{
-		HighFidelity:   false,
+		Consistent:     false,
 		QueueSize:      1000,
 		ChunkSize:      5,
 		WriteBatchSize: 5,
@@ -232,7 +231,6 @@ func TestCloneWithNullBoolColumn(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		HighFidelity:   false,
 		QueueSize:      1000,
 		ChunkSize:      5,
 		WriteBatchSize: 5,

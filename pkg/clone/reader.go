@@ -57,14 +57,14 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
-	defer func() {
-		elapsed := time.Since(start)
-		logger.WithField("duration", elapsed).Infof("done")
-	}()
 
 	chunks := make(chan Chunk, cmd.QueueSize)
 	diffs := make(chan Diff, cmd.QueueSize)
 	batches := make(chan Batch, cmd.QueueSize)
+
+	updates := 0
+	deletes := 0
+	inserts := 0
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -107,11 +107,19 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 		g, ctx := errgroup.WithContext(ctx)
 		for b := range batches {
 			batch := b
-			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+			size := len(batch.Rows)
+			switch batch.Type {
+			case Update:
+				updates += size
+			case Delete:
+				deletes += size
+			case Insert:
+				inserts += size
+			}
+			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(size))
 			g.Go(func() error {
 				err := Write(ctx, cmd, writer, batch)
-				writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-				log.Debugf("done %s batch sized %d with start id %v\n", batch.Type, len(batch.Rows), batch.Rows[0].ID)
+				writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(size))
 				return err
 			})
 		}
@@ -122,6 +130,14 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 		logger.WithError(err).Errorf("%v", err)
 		return err
 	}
+
+	elapsed := time.Since(start)
+	logger.
+		WithField("duration", elapsed).
+		WithField("inserts", inserts).
+		WithField("deletes", deletes).
+		WithField("updates", updates).
+		Infof("done")
 
 	return nil
 }

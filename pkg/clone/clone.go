@@ -6,6 +6,7 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -17,7 +18,7 @@ import (
 )
 
 type Clone struct {
-	HighFidelity bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
+	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
 	QueueSize       int      `help:"Queue size of the chunk queue" default:"10000"`
 	ChunkSize       int      `help:"Size of the chunks to diff" default:"1000"`
@@ -33,6 +34,8 @@ type Clone struct {
 // Run applies the necessary changes to target to make it look like source
 func (cmd *Clone) Run(globals Globals) error {
 	globals.startMetricsServer()
+
+	start := time.Now()
 
 	var err error
 
@@ -53,10 +56,12 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 	writer.SetMaxOpenConns(cmd.WriterCount)
+	// Refresh connections regularly so they don't go stale
+	writer.SetConnMaxLifetime(time.Minute)
 
 	// Create synced source and chunker conns
 	var sourceConns []*sql.Conn
-	if cmd.HighFidelity {
+	if cmd.Consistent {
 		sourceConns, err = OpenSyncedConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
 		if err != nil {
 			return err
@@ -133,7 +138,8 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		log.WithError(err).Errorf("failed cloning %d tables", len(tables))
 	} else {
-		log.Infof("done cloning %d tables", len(tables))
+		elapsed := time.Since(start)
+		log.WithField("duration", elapsed).Infof("done cloning %d tables", len(tables))
 	}
 	return err
 }

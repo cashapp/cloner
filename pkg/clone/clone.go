@@ -7,7 +7,6 @@ import (
 	_ "net/http/pprof"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -143,25 +142,11 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	err = g.Wait()
 	if err != nil {
-		log.Infof("done cloning %d tables", len(tables))
-	} else {
 		log.WithError(err).Errorf("failed cloning %d tables", len(tables))
+	} else {
+		log.Infof("done cloning %d tables", len(tables))
 	}
 	return err
-}
-
-func WaitUntilEmpty(ctx context.Context, writeRequests chan Batch) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		// TODO this is so horrendous
-		case <-time.After(1 * time.Second):
-			if len(writeRequests) == -0 {
-				return
-			}
-		}
-	}
 }
 
 // readers runs all the readers in parallel and returns when they are all done

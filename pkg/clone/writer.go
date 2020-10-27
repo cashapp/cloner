@@ -43,13 +43,14 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, writeRequests chan Batch
 						log.WithField("task", "writer").
 							WithField("table", batch.Table.Name).
 							WithError(err).
-							Warnf("since this is a best effort clone we just give up")
+							Warnf("failed write batch after %d times, "+
+								"since this is a best effort clone we just give up", cmd.WriteRetryCount)
 						continue
 					} else {
 						log.WithField("task", "writer").
 							WithField("table", batch.Table.Name).
 							WithError(err).
-							Errorf("")
+							Warnf("failed write batch after %d times", cmd.WriteRetryCount)
 						return errors.WithStack(err)
 					}
 				}
@@ -66,11 +67,6 @@ func maybeRetry(ctx context.Context, retryCount int, err error, batch Batch, ret
 	if batch.Retries >= retryCount {
 		return err
 	}
-
-	log.WithField("task", "writer").
-		WithField("table", batch.Table.Name).
-		WithError(err).
-		Warnf("failed to write batch, retrying %d times", retryCount-batch.Retries)
 
 	batch.Retries += 1
 	batch.LastError = err
@@ -145,9 +141,6 @@ func insertBatch(ctx context.Context, db *sql.DB, batch Batch) error {
 	valueStrings := make([]string, 0, len(rows))
 	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
 	for _, row := range rows {
-		if row.ID == 1016 {
-			log.Debugf("inserting 1016!")
-		}
 		valueStrings = append(valueStrings, values)
 		for i, _ := range columns {
 			valueArgs = append(valueArgs, row.Data[i])

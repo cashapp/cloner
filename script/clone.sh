@@ -4,6 +4,8 @@
 
 set -ex
 
+shard=$1
+
 kubectlrw() {
   sqm --admin-rw kubectl -- "$@"
 }
@@ -12,7 +14,8 @@ kubectl() {
 }
 
 namespace=${SQM_SERVICE}
-name=${USER}-clone
+job_id=$(date +%s)
+name=${USER}-clone-${job_id}
 
 cat <<EOF | kubectlrw -n $namespace apply -f -
 ---
@@ -22,12 +25,25 @@ metadata:
   name: ${name}
   labels:
     square-envoy-injection: enabled
+    istio-envoy-injection: enabled
+    square_task: cloner
+    component: cloner
 spec:
   containers:
-  - name: main
+  - name: cloner
     image: golang
     command: ["sleep"]
     args: ["86400"]
+    ports:
+    - name: metrics
+      containerPort: 9102
+      protocol: TCP
+    - name: envoy-admin
+      containerPort: 8081
+      protocol: TCP
+    - name: http-envoy-prom
+      containerPort: 15090
+      protocol: TCP
     volumeMounts:
     - mountPath: /root
       name: home-volume
@@ -72,7 +88,7 @@ spec:
 EOF
 
 # TODO wait properly
-sleep 10
+sleep 30
 
 GOOS=linux GOARCH=amd64 go build -o cloner ./cmd/cloner
 sqm --admin-rw kubectl -- -n ${SQM_SERVICE} cp ./cloner "${name}":/root
@@ -80,8 +96,8 @@ sqm --admin-rw kubectl -- -n ${SQM_SERVICE} cp ./cloner "${name}":/root
 sqm --admin-rw kubectl -- -n ${SQM_SERVICE} exec "${name}" -ti \
   /root/cloner -- \
   --source-type vitess --source-egress-socket @egress.sock \
-  --source-host staging.franklin-vtgate.gns.square \
-  --source-database 'franklin_customer/-80' \
-  --target-misk-datasource /etc/secrets/db/franklin-cloud-sandbox-tidb5_config.yaml \
+  --source-host ${SQM_ENV}.franklin-vtgate.gns.square \
+  --source-database ${shard} \
+  --target-misk-datasource /etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml \
   clone --copy-schema
 sqm --admin-rw kubectl -- -n ${SQM_SERVICE} delete pod "${name}"

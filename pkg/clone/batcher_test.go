@@ -22,7 +22,7 @@ func toTestBatch(batch Batch) testBatch {
 	return testBatch{batch.Type, batch.Table.Name, rows}
 }
 
-func Test(t *testing.T) {
+func TestBatcher(t *testing.T) {
 	tests := []struct {
 		name      string
 		batchSize int

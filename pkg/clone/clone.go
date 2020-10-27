@@ -6,7 +6,6 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"strings"
-	"sync"
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -48,6 +47,12 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+
+	writer, err := globals.Target.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	writer.SetMaxOpenConns(cmd.WriterCount)
 
 	// Create synced source and chunker conns
 	var sourceConns []*sql.Conn
@@ -99,16 +104,6 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 
-	// Start writers
-	// we might want to wrap up this channel and the WaitGroup in a single object
-	writesInFlight := &sync.WaitGroup{}
-	writeRequests := make(chan Batch, cmd.QueueSize)
-	for i := 0; i < cmd.WriterCount; i++ {
-		g.Go(func() error {
-			return Write(ctx, cmd, target, writeRequests, writesInFlight)
-		})
-	}
-
 	// Start differs
 	diffRequests := make(chan DiffRequest, cmd.QueueSize)
 	for i, _ := range targetConns {
@@ -128,15 +123,9 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Chunk, diff table and generate batches to write
 	g.Go(func() error {
-		err := readers(ctx, chunkerConns, tableCh, cmd, writeRequests, writesInFlight, diffRequests)
+		err := readers(ctx, chunkerConns, tableCh, cmd, writer, diffRequests)
 		// All tables are done, close the channels used to request work
 		close(diffRequests)
-
-		// closing this channel here means we can't use this channel for retries...
-		// instead we need to wait for the channel to become empty before we close it?
-		WaitGroupWait(ctx, writesInFlight)
-		close(writeRequests)
-
 		return err
 	})
 
@@ -150,12 +139,12 @@ func (cmd *Clone) Run(globals Globals) error {
 }
 
 // readers runs all the readers in parallel and returns when they are all done
-func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
+func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i, _ := range chunkerConns {
 		chunkerConn := chunkerConns[i]
 		g.Go(func() error {
-			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writeRequests, writesInFlight, diffRequests)
+			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writer, diffRequests)
 			return err
 		})
 	}

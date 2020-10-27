@@ -4,21 +4,45 @@ import (
 	"context"
 	"database/sql"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
 
+var (
+	writesEnqueued = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_enqueued",
+			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+	writesProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_processed",
+			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(writesEnqueued)
+	prometheus.MustRegister(writesProcessed)
+}
+
 // ReadTables generates batches for each table
-func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
+func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, table, cmd, writeRequests, writesInFlight, diffRequests)
+			err := readTable(ctx, chunkerConn, table, cmd, writer, diffRequests)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -29,13 +53,18 @@ func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table,
 }
 
 // readTables generates write batches for one table
-func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Clone, writeRequests chan Batch, writesInFlight *sync.WaitGroup, diffRequests chan DiffRequest) error {
+func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
-	logger.Infof("start")
-	defer logger.Infof("done")
+	start := time.Now()
+	logger.WithTime(start).Infof("start")
+	defer func() {
+		elapsed := time.Since(start)
+		logger.WithField("duration", elapsed).Infof("done")
+	}()
 
 	chunks := make(chan Chunk, cmd.QueueSize)
 	diffs := make(chan Diff, cmd.QueueSize)
+	batches := make(chan Batch, cmd.QueueSize)
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -69,7 +98,24 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 		return nil
 	})
 	g.Go(func() error {
-		return BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, writeRequests, writesInFlight)
+		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
+		close(batches)
+		return err
+	})
+	// Write every batch
+	g.Go(func() error {
+		g, ctx := errgroup.WithContext(ctx)
+		for b := range batches {
+			batch := b
+			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+			g.Go(func() error {
+				err := Write(ctx, cmd, writer, batch)
+				writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+				log.Debugf("done %s batch sized %d with start id %v\n", batch.Type, len(batch.Rows), batch.Rows[0].ID)
+				return err
+			})
+		}
+		return g.Wait()
 	})
 
 	if err := g.Wait(); err != nil {

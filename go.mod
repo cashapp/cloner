@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/alecthomas/kong v0.2.11
 	github.com/go-sql-driver/mysql v1.5.0
+	github.com/mightyguava/autotx v0.1.1
 	github.com/ory/dockertest/v3 v3.6.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.4.1

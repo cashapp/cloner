@@ -5,106 +5,54 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 
+	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
-var (
-	writesProcessed = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "writes_processed",
-			Help: "How many writes, partitioned by table and type (insert, update, delete).",
-		},
-		[]string{"table", "type"},
-	)
-)
-
-func init() {
-	prometheus.MustRegister(writesProcessed)
-}
-
-func Write(ctx context.Context, cmd *Clone, db *sql.DB, writeRequests chan Batch, writesInFlight *sync.WaitGroup) error {
-	for {
-		select {
-		case batch, more := <-writeRequests:
-			if !more {
-				return nil
-			}
-			// TODO backoff
-			err := writeBatch(ctx, db, batch)
-			if err != nil {
-				err := maybeRetry(ctx, cmd.WriteRetryCount, err, batch, writeRequests)
-				if err != nil {
-					if !cmd.HighFidelity {
-						// If we're doing a best effort clone we just give up on this batch
-						log.WithField("task", "writer").
-							WithField("table", batch.Table.Name).
-							WithError(err).
-							Warnf("failed write batch after %d times, "+
-								"since this is a best effort clone we just give up", cmd.WriteRetryCount)
-						continue
-					} else {
-						log.WithField("task", "writer").
-							WithField("table", batch.Table.Name).
-							WithError(err).
-							Warnf("failed write batch after %d times", cmd.WriteRetryCount)
-						return errors.WithStack(err)
-					}
-				}
-				continue
-			}
-			writesInFlight.Done()
-		case <-ctx.Done():
+// Write directly writes a batch with retries and backoff
+func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
+	err := autotx.TransactWithRetry(ctx, db, autotx.RetryOptions{
+		MaxRetries: cmd.WriteRetryCount,
+	}, func(tx *sql.Tx) error {
+		switch batch.Type {
+		case Insert:
+			return insertBatch(ctx, tx, batch)
+		case Delete:
+			return deleteBatch(ctx, tx, batch)
+		case Update:
+			return updateBatch(ctx, tx, batch)
+		default:
+			log.Panicf("Unknown batch type %s", batch.Type)
 			return nil
 		}
-	}
-}
+	})
 
-func maybeRetry(ctx context.Context, retryCount int, err error, batch Batch, retries chan Batch) error {
-	if batch.Retries >= retryCount {
-		return err
+	if err != nil {
+		if !cmd.HighFidelity {
+			// If we're doing a best effort clone we just give up on this batch
+			log.WithField("task", "writer").
+				WithField("table", batch.Table.Name).
+				WithError(err).
+				Warnf("failed write batch after %d times, "+
+					"since this is a best effort clone we just give up", cmd.WriteRetryCount)
+			return nil
+		}
+
+		log.WithField("task", "writer").
+			WithField("table", batch.Table.Name).
+			WithError(err).
+			Warnf("failed write batch after %d times", cmd.WriteRetryCount)
+		return errors.WithStack(err)
 	}
 
-	batch.Retries += 1
-	batch.LastError = err
-
-	// Check if the context has been cancelled before we retry
-	// otherwise we might post on a closed channel
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
-	}
-	retries <- batch
 	return nil
 }
 
-func writeBatch(ctx context.Context, db *sql.DB, batch Batch) error {
-	switch batch.Type {
-	case Insert:
-		return insertBatch(ctx, db, batch)
-	case Delete:
-		return deleteBatch(ctx, db, batch)
-	case Update:
-		return updateBatch(ctx, db, batch)
-	default:
-		log.Panicf("Unknown batch type %s", batch.Type)
-		return nil
-	}
-}
-
-func deleteBatch(ctx context.Context, db *sql.DB, batch Batch) error {
+func deleteBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	rows := batch.Rows
 	log.Debugf("deleting %d rows", len(rows))
-
-	//for _, row := range batch.Rows {
-	//	log.WithField("task", "writer").
-	//		WithField("table", batch.Table.Name).
-	//		Infof("NOT deleting %d", row.ID)
-	//}
 
 	table := batch.Table
 	questionMarks := make([]string, 0, len(rows))
@@ -118,15 +66,14 @@ func deleteBatch(ctx context.Context, db *sql.DB, batch Batch) error {
 	}
 	stmt := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
-	_, err := db.ExecContext(ctx, stmt, valueArgs...)
+	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
-	writesProcessed.WithLabelValues(batch.Table.Name, "delete").Add(float64(len(rows)))
 	return nil
 }
 
-func insertBatch(ctx context.Context, db *sql.DB, batch Batch) error {
+func insertBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	log.Debugf("inserting %d rows", len(batch.Rows))
 
 	table := batch.Table
@@ -148,39 +95,17 @@ func insertBatch(ctx context.Context, db *sql.DB, batch Batch) error {
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	_, err := db.ExecContext(ctx, stmt, valueArgs...)
+	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
-	writesProcessed.WithLabelValues(batch.Table.Name, "insert").Add(float64(len(rows)))
 	return nil
 }
 
-func updateBatch(ctx context.Context, db *sql.DB, batch Batch) error {
+func updateBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	rows := batch.Rows
 	log.Debugf("updating %d rows", len(rows))
 
-	// Use a transaction to do some limited level of batching
-	// Golang doesn't yet support "real" batching of multiple statements
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	err = updatedBatchInTx(ctx, tx, batch)
-
-	if err != nil {
-		_ = tx.Rollback()
-		return errors.WithStack(err)
-	} else {
-		err := tx.Commit()
-		writesProcessed.WithLabelValues(batch.Table.Name, "update").Add(float64(len(rows)))
-		return err
-	}
-}
-
-func updatedBatchInTx(ctx context.Context, tx *sql.Tx, batch Batch) error {
-	rows := batch.Rows
 	table := batch.Table
 	columns := table.Columns
 	columnValues := make([]string, 0, len(columns))

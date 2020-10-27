@@ -1,8 +1,8 @@
 # Cloner
 
-Cloner is a Golang app that is run as a task inside the application namespace so that it can access the apps mTLS certificates.
-
-There are some Cash specific assumptions right now but it could eventually become completely generic and work across Vitess, TiDB, Aurora and MySQL.
+Cloner is a Golang app that clones a database to another database by diffing both databases and writing the minimal amount inserts/updates/deletes to make them identical. It can also (eventually) be used to checksum two databases where one is replicated into the other without stopping replication.
+ 
+There are some Cash specific assumptions right now but it could eventually become completely generic and work across Vitess, TiDB, Aurora and MySQL or any database that has a Go sql driver.
 
 ## Goals
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -104,6 +105,8 @@ func TestCloneWithTargetData(t *testing.T) {
 		ChunkerCount:   1,
 		ReaderCount:    1,
 		WriterCount:    1,
+		ReadTimeout:    1 * time.Minute,
+		WriteTimeout:   1 * time.Minute,
 	}
 	source.Database = "customer/-80@replica"
 	err = clone.Run(Globals{
@@ -124,12 +127,11 @@ func TestCloneWithTargetData(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		QueueSize:      1000,
-		ChunkSize:      5,
-		WriteBatchSize: 5,
-		ChunkerCount:   1,
-		ReaderCount:    1,
-		WriterCount:    1,
+		QueueSize:    1000,
+		ChunkSize:    5,
+		ChunkerCount: 1,
+		ReaderCount:  1,
+		ReadTimeout:  1 * time.Minute,
 	}
 	diffs, err := checksum.run(Globals{
 		Source: source,
@@ -231,12 +233,11 @@ func TestCloneWithNullBoolColumn(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		QueueSize:      1000,
-		ChunkSize:      5,
-		WriteBatchSize: 5,
-		ChunkerCount:   1,
-		ReaderCount:    1,
-		WriterCount:    1,
+		QueueSize:    1000,
+		ChunkSize:    5,
+		ChunkerCount: 1,
+		ReaderCount:  1,
+		ReadTimeout:  1 * time.Minute,
 	}
 	diffs, err := checksum.run(Globals{
 		Source: source,

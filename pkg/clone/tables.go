@@ -62,7 +62,11 @@ func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
 		// Ignore pt-osc tables
+		// TODO implement table include/exclude regexps instead
 		if strings.HasPrefix(tableName, "ptosc_") {
+			continue
+		}
+		if strings.HasSuffix(tableName, "_seq") {
 			continue
 		}
 		if tableName == "schema_version" {

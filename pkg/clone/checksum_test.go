@@ -2,6 +2,7 @@ package clone
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -35,13 +36,11 @@ func TestChecksum(t *testing.T) {
 	shardRowCount, err := countRows(source, "customers")
 
 	checksum := &Checksum{
-		HighFidelity:   false,
-		QueueSize:      1000,
-		ChunkSize:      5,
-		WriteBatchSize: 5,
-		ChunkerCount:   1,
-		ReaderCount:    1,
-		WriterCount:    1,
+		QueueSize:    1000,
+		ChunkSize:    5,
+		ChunkerCount: 1,
+		ReaderCount:  1,
+		ReadTimeout:  1 * time.Minute,
 	}
 	diffs, err := checksum.run(Globals{
 		Source: source,

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "net/http/pprof"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
@@ -12,12 +13,11 @@ import (
 )
 
 type Checksum struct {
-	QueueSize      int `help:"Queue size of the chunk queue" default:"1000"`
-	ChunkSize      int `help:"Size of the chunks to diff" default:"1000"`
-	WriteBatchSize int `help:"Size of the write batches" default:"100"`
-	ChunkerCount   int `help:"Number of readers for chunks" default:"10"`
-	ReaderCount    int `help:"Number of readers for diffing" default:"10"`
-	WriterCount    int `help:"Number of writers" default:"10"`
+	QueueSize    int           `help:"Queue size of the chunk queue" default:"1000"`
+	ChunkSize    int           `help:"Size of the chunks to diff" default:"1000"`
+	ChunkerCount int           `help:"Number of readers for chunks" default:"10"`
+	ReaderCount  int           `help:"Number of readers for diffing" default:"10"`
+	ReadTimeout  time.Duration `help:"Timeout for each read" default:"5m"`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -94,7 +94,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 		source := sourceConns[i]
 		target := targetConns[i]
 		g.Go(func() error {
-			return DiffChunks(ctx, source, target, shardingSpec, diffRequests)
+			return DiffChunks(ctx, source, target, shardingSpec, cmd.ReadTimeout, diffRequests)
 		})
 	}
 
@@ -102,7 +102,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	g.Go(func() error {
 		err := GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
 		close(chunks)
-		return err
+		return errors.WithStack(err)
 	})
 
 	// Forward chunks to differs

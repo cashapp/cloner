@@ -2,10 +2,10 @@ package clone
 
 import (
 	"context"
-	"database/sql"
 	"reflect"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,7 +72,7 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 		if advanceSource {
 			sourceRow, err = source.Next(ctx)
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 			if sourceRow != nil {
 				readsProcessed.WithLabelValues(sourceRow.Table.Name, "source").Inc()
@@ -81,7 +81,7 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 		if advanceTarget {
 			targetRow, err = target.Next(ctx)
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 			if targetRow != nil {
 				readsProcessed.WithLabelValues(targetRow.Table.Name, "target").Inc()
@@ -203,16 +203,16 @@ func coerceUint64(value interface{}) (uint64, error) {
 	}
 }
 
-func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, chunks chan DiffRequest) error {
+func DiffChunks(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, timeout time.Duration, chunks chan DiffRequest) error {
 	for {
 		select {
 		case request, more := <-chunks:
 			if !more {
 				return nil
 			}
-			err := diffChunk(ctx, source, target, targetFilter, request)
+			err := diffChunk(ctx, source, target, targetFilter, request, timeout)
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 		case <-ctx.Done():
 			return nil
@@ -220,22 +220,24 @@ func DiffChunks(ctx context.Context, source *sql.Conn, target *sql.Conn, targetF
 	}
 }
 
-func diffChunk(ctx context.Context, source *sql.Conn, target *sql.Conn, targetFilter []*topodata.KeyRange, request DiffRequest) error {
+func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, request DiffRequest, timeout time.Duration) error {
 	// TODO start off by running a fast checksum query
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	chunk := request.Chunk
 	diffs := request.Diffs
 
 	sourceStream, err := StreamChunk(ctx, source, chunk)
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrapf(err, "failed to stream chunk from source")
 	}
 	targetStream, err := StreamChunk(ctx, target, chunk)
+	if err != nil {
+		return errors.Wrapf(err, "failed to stream chunk from target")
+	}
 	if len(targetFilter) > 0 {
 		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
-	}
-	if err != nil {
-		return errors.WithStack(err)
 	}
 	err = StreamDiff(ctx, sourceStream, targetStream, diffs)
 	if err != nil {

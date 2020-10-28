@@ -13,11 +13,6 @@ const (
 	DefaultBackOffFactor = 2
 )
 
-// BackOffFunc is a function called on each retry attempt. It should return a time.Duration to wait
-// before making the next attempt. If a negative time.Duration is returned, retries will be immediately
-// aborted.
-type BackOffFunc func() time.Duration
-
 type simpleBackOff struct {
 	attempt  int
 	factor   int

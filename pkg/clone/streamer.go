@@ -11,6 +11,12 @@ import (
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
+// DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can
+// easily change synchronization method
+type DBReader interface {
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}
+
 type Row struct {
 	Table      *Table
 	ID         int64
@@ -127,7 +133,7 @@ func InShard(id uint64, shard []*topodata.KeyRange) bool {
 	return false
 }
 
-func StreamChunk(ctx context.Context, conn *sql.Conn, chunk Chunk) (RowStream, error) {
+func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk) (RowStream, error) {
 	table := chunk.Table
 	columns := table.ColumnList
 

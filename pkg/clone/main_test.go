@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -35,12 +36,12 @@ func testMain(m *testing.M) int {
 	g.Go(func() error {
 		var err error
 		vitessContainer, err = startVitess()
-		return err
+		return errors.WithStack(err)
 	})
 	g.Go(func() error {
 		var err error
 		tidbContainer, err = startTidb()
-		return err
+		return errors.WithStack(err)
 	})
 
 	err := g.Wait()

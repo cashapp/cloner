@@ -20,15 +20,20 @@ import (
 type Clone struct {
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	QueueSize       int      `help:"Queue size of the chunk queue" default:"10000"`
-	ChunkSize       int      `help:"Size of the chunks to diff" default:"1000"`
-	WriteBatchSize  int      `help:"Size of the write batches" default:"100"`
-	ChunkerCount    int      `help:"Number of readers for chunks" default:"10"`
-	ReaderCount     int      `help:"Number of readers for diffing" default:"10"`
-	WriterCount     int      `help:"Number of writers" default:"10"`
-	WriteRetryCount int      `help:"Number of retries" default:"5"`
-	CopySchema      bool     `help:"Copy schema" default:"false"`
-	Tables          []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
+	QueueSize    int `help:"Queue size of the chunk queue" default:"10000"`
+	ChunkSize    int `help:"Size of the chunks to diff" default:"1000"`
+	ChunkerCount int `help:"Number of readers for chunks" default:"10"`
+
+	ReaderCount int           `help:"Number of readers for diffing" default:"10"`
+	ReadTimeout time.Duration `help:"Timeout for each read" default:"5m"`
+
+	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
+	WriterCount     int           `help:"Number of writers" default:"10"`
+	WriteRetryCount int           `help:"Number of retries" default:"5"`
+	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
+
+	CopySchema bool     `help:"Copy schema" default:"false"`
+	Tables     []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -64,12 +69,12 @@ func (cmd *Clone) Run(globals Globals) error {
 	if cmd.Consistent {
 		sourceConns, err = OpenSyncedConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	} else {
 		sourceConns, err = OpenConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 	defer CloseConnections(sourceConns)
@@ -79,11 +84,22 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Create target reader conns
 	// TODO how do we synchronize these, do we have to?
-	targetConns, err := OpenConnections(ctx, target, cmd.ReaderCount)
+	// On TiDB we should sync by setting the TiDB timestamp which means we can easily create multiple connections
+	// with an "initialize" statement if that is supported by sql.DB
+	// Like this:
+	//   1. Drain and stop Vitess->TiDB replication
+	//   2. Lock tables, create connections and read current GTID
+	//   3. Run replication until specified GTID
+	//   4. Read TiDB timestamp which now matches the GTID
+	//   5. Resume replication
+	//   6. We can now use said timestamp
+	targetReader, err := globals.Target.DB()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
-	defer CloseConnections(targetConns)
+	targetReader.SetMaxOpenConns(cmd.ReaderCount)
+	// Refresh connections regularly so they don't go stale
+	targetReader.SetConnMaxLifetime(time.Minute)
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)
@@ -111,11 +127,10 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Start differs
 	diffRequests := make(chan DiffRequest, cmd.QueueSize)
-	for i, _ := range targetConns {
+	for i, _ := range sourceConns {
 		source := sourceConns[i]
-		target := targetConns[i]
 		g.Go(func() error {
-			return DiffChunks(ctx, source, target, shardingSpec, diffRequests)
+			return DiffChunks(ctx, source, targetReader, shardingSpec, cmd.ReadTimeout, diffRequests)
 		})
 	}
 
@@ -131,17 +146,26 @@ func (cmd *Clone) Run(globals Globals) error {
 		err := readers(ctx, chunkerConns, tableCh, cmd, writer, diffRequests)
 		// All tables are done, close the channels used to request work
 		close(diffRequests)
-		return err
+		return errors.WithStack(err)
 	})
 
 	err = g.Wait()
+
+	elapsed := time.Since(start)
+	logger := log.WithField("duration", elapsed)
 	if err != nil {
-		log.WithError(err).Errorf("failed cloning %d tables", len(tables))
+		if stackErr, ok := err.(stackTracer); ok {
+			logger = logger.WithField("stacktrace", stackErr.StackTrace())
+		}
+		logger.WithError(err).Errorf("failed cloning %d tables: %+v", len(tables), err)
 	} else {
-		elapsed := time.Since(start)
-		log.WithField("duration", elapsed).Infof("done cloning %d tables", len(tables))
+		logger.Infof("done cloning %d tables", len(tables))
 	}
-	return err
+	return errors.WithStack(err)
+}
+
+type stackTracer interface {
+	StackTrace() errors.StackTrace
 }
 
 // readers runs all the readers in parallel and returns when they are all done
@@ -151,7 +175,7 @@ func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table,
 		chunkerConn := chunkerConns[i]
 		g.Go(func() error {
 			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writer, diffRequests)
-			return err
+			return errors.WithStack(err)
 		})
 	}
 	return g.Wait()

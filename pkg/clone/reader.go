@@ -58,6 +58,8 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
 
+	var chunkingDuration time.Duration
+
 	chunks := make(chan Chunk, cmd.QueueSize)
 	diffs := make(chan Diff, cmd.QueueSize)
 	batches := make(chan Batch, cmd.QueueSize)
@@ -65,34 +67,33 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 	updates := 0
 	deletes := 0
 	inserts := 0
+	chunkCount := 0
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
+		ctx, cancel := context.WithTimeout(ctx, cmd.ReadTimeout)
+		defer cancel()
+
 		err := generateTableChunks(ctx, chunkerConn, table, cmd.ChunkSize, chunks)
+		chunkingDuration = time.Since(start)
 		close(chunks)
-		return err
+		return errors.WithStack(err)
 	})
 	// Request diffing for every chunk
 	g.Go(func() error {
 		done := &sync.WaitGroup{}
 		for chunk := range chunks {
-			// This channel can fill up so we check if the context is cancelled before we enqueue so we don't block
+			done.Add(1)
 			select {
+			case diffRequests <- DiffRequest{chunk, diffs, done}:
 			case <-ctx.Done():
 				return nil
-			default:
 			}
-			done.Add(1)
-			diffRequests <- DiffRequest{chunk, diffs, done}
+			chunkCount++
 		}
 		// TODO this is a smell that we have to do a context friendly WaitGroup wait here...
 		WaitGroupWait(ctx, done)
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
 		// All diffing done, close the diffs channel
 		close(diffs)
 		return nil
@@ -100,13 +101,12 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 	g.Go(func() error {
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)
-		return err
+		return errors.WithStack(err)
 	})
 	// Write every batch
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
-		for b := range batches {
-			batch := b
+		for batch := range batches {
 			size := len(batch.Rows)
 			switch batch.Type {
 			case Update:
@@ -116,24 +116,22 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 			case Insert:
 				inserts += size
 			}
-			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(size))
-			g.Go(func() error {
-				err := Write(ctx, cmd, writer, batch)
-				writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(size))
-				return err
-			})
+			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+			scheduleWriteBatch(ctx, cmd, g, writer, batch)
 		}
 		return g.Wait()
 	})
 
 	if err := g.Wait(); err != nil {
 		logger.WithError(err).Errorf("%v", err)
-		return err
+		return errors.WithStack(err)
 	}
 
 	elapsed := time.Since(start)
 	logger.
 		WithField("duration", elapsed).
+		WithField("chunking", chunkingDuration).
+		WithField("chunks", chunkCount).
 		WithField("inserts", inserts).
 		WithField("deletes", deletes).
 		WithField("updates", updates).

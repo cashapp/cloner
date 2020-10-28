@@ -13,12 +13,12 @@ import (
 func createSchema(config DBConfig, database string) error {
 	db, err := config.DB()
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	if config.Type != Vitess {
 		_, err = db.Exec("CREATE DATABASE " + database)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 	}
 
@@ -142,20 +142,20 @@ func startVitess() (*DatabaseContainer, error) {
 		var err error
 		db, err := config.DB()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		err = db.Ping()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		ctx := context.Background()
 		conn, err := db.Conn(ctx)
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		rows, err := conn.QueryContext(ctx, "SELECT * FROM customers")
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		rows.Next()
 		return nil
@@ -205,7 +205,7 @@ func startMysql() (*DatabaseContainer, error) {
 		var err error
 		db, err := config.DB()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		return db.Ping()
 	}); err != nil {
@@ -262,7 +262,7 @@ func startTidb() (*DatabaseContainer, error) {
 		var err error
 		db, err := config.DB()
 		if err != nil {
-			return err
+			return errors.WithStack(err)
 		}
 		return db.Ping()
 	}); err != nil {

@@ -123,7 +123,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
-			End:   100020406,
+			End:   102,
 			Size:  1,
 			First: true,
 			Last:  true,

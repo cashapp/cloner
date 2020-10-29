@@ -1,0 +1,124 @@
+#!/bin/bash
+
+set -euxo pipefail
+
+# This script builds GAP docker images. It provides the following build args
+# to the docker build:
+#
+# - APP_NAME (eg. "sotw")
+# - GIT_COMMIT
+#
+# To build a docker image each app must:
+#
+# - Have an apps/<app>/Dockerfile.
+# - Have an apps/<app>/Makefile with a "docker" target that places all
+#   docker build artifacts into ${DOCKER_BUILD}.S
+#
+# Env vars can be overridden with an apps/<app>/.ci file that is sourced.
+
+# This file can be run standalone.
+
+# Fill in GIT_COMMIT using `git` if not already set
+export GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD)}"
+
+export STAGING_BUILD="${STAGING_BUILD:-}"
+
+# -s for staging, -g for platform-staging, -n for plat-ops-staging
+export STAGING_PUSH_TARGETS="${STAGING_PUSH_TARGETS:-"-s"}"
+
+export RUN_LIST="${RUN_LIST:-}"
+
+# Figure out what to build.
+if [[ $# != 0 ]]; then
+  export APPS=$*
+else
+  # Automatically figure out which docker images to build based on changes to the source tree.
+  #
+  # This uses the following heuristics:
+  # - Any change to apps/* will trigger a build for the affected apps.
+  # - Any change to anything else will result in all apps being built.
+  if git diff --name-only ${GIT_COMMIT}^ | grep -qv ^apps/; then
+    export APPS=$(echo apps/*)
+  else
+    export APPS=$(git diff --name-only ${GIT_COMMIT}^ | grep ^apps/ | cut -d/ -f1-2 | sort | uniq)
+  fi
+fi
+
+# If we're running in Kochiku, filter the APPS by RUN_LIST.
+if [[ -n "${RUN_LIST}" ]]; then
+  export RUN_LIST=${RUN_LIST//\/Dockerfile/}  # ./apps/sotw/Dockerfile -> ./apps/sotw
+  export RUN_LIST=${RUN_LIST//.\//} # ./apps/sotw -> apps/sotw
+  export APPS=$(echo ${APPS} | tr ' ' '\n' | egrep -E "\<${RUN_LIST//,/\>|\<}\>| ")
+fi
+
+if [[ -z ${APPS} ]]; then
+  echo "No source changes found. Nothing to do."
+  exit 0
+fi
+
+# Update and reset cash-ci repo to avoid the slow process of cloning on each run
+export CASH_CI_ROOT=/tmp/cash-ci-gap
+if [ ! -d ${CASH_CI_ROOT} ]; then
+  mkdir -p ${CASH_CI_ROOT}
+  git clone --depth=1 ssh://git@git.sqcorp.co/cash/cash-ci.git ${CASH_CI_ROOT}
+else
+  pushd ${CASH_CI_ROOT}
+  git fetch origin
+  git reset --hard origin/master
+  git clean -fdx .
+  popd
+fi
+
+for dir in ${APPS}; do
+  # Sub-shell to isolate state.
+  (
+    set -euxo pipefail
+    export APP_NAME="$(basename $dir)"
+    if [[ -f "$dir/.ci" ]]
+    then
+      source "$dir/.ci"
+    fi
+
+    SPINNAKER_ENABLED="${SPINNAKER_ENABLED:-false}"
+    export DOCKER_BUILD=/tmp/cash-gap-docker-build-${APP_NAME}-$$
+    mkdir -p ${DOCKER_BUILD}
+    trap "rm -rf ${DOCKER_BUILD}" EXIT
+
+    export DOCKER_FILE=${DOCKER_BUILD}/Dockerfile
+    cp ${dir}/Dockerfile ${DOCKER_FILE}
+    cp -R ${dir}/files ${DOCKER_BUILD}
+    make -C "${dir}" docker
+
+    # Push to ECR?
+    export PUSH=""
+    export VERSION="${GIT_COMMIT}"
+
+    if [[ -n "$STAGING_BUILD" ]]; then
+      VERSION=$USER-localbuild-$GIT_COMMIT
+      DOCKER_TAG="${APP_NAME}:${VERSION}"
+      PUSH="-l ${STAGING_PUSH_TARGETS}"
+    elif [[ "$(uname)" == "Darwin" ]]; then
+      DOCKER_TAG=$(echo ${APP_NAME} | tr -cd [:alnum:])
+    else
+      DOCKER_TAG="$APP_NAME:$GIT_COMMIT"
+      PUSH="-s -p"
+    fi
+
+    cd ${DOCKER_BUILD}
+    docker build -t "${DOCKER_TAG}" --build-arg SERVICE="${APP_NAME}" --build-arg GIT_COMMIT="${GIT_COMMIT}" .
+    if [[ -n "$PUSH" ]]; then
+      if [[ -z "$STAGING_BUILD" && "$GIT_BRANCH" != "master" && -z "${KOCHIKU_CANARY_BUILD:-}" ]]; then
+        echo "Skipping docker upload for $GIT_BRANCH."
+      else
+        ${CASH_CI_ROOT}/cash-docker-push -r ${APP_NAME} -t ${VERSION} $PUSH
+
+	# gap is not using the traditional polyrepo-cash-ci script which triggers Spinnaker pipelines after pushing the docker image
+        #    As a result, we are manually triggering the Spinnaker pipeline for apps which enable Spinnaker
+        #    We are only triggering Spinnaker for NON-staging AND NON-kochiku-canary-builds (runs on master branch only)
+        if [[ -z "$STAGING_BUILD" && -z "${KOCHIKU_CANARY_BUILD:-}" && "$GIT_BRANCH" == "master" && $SPINNAKER_ENABLED == "true" ]]; then
+          ${CASH_CI_ROOT}/cash-spinnaker --app-name $APP_NAME --image "dkr.ecr.us-west-2.amazonaws.com/$APP_NAME:$GIT_COMMIT" --sha "$GIT_COMMIT" --apply
+        fi
+      fi
+    fi
+  )
+done

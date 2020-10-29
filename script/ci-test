@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Run tests.
+#
+# If an app contains a "pre-test" target it will be run to provide any prerequisites for testing.
+#
+# This script can be run standalone.
+
+set -euxo pipefail
+
+export RUN_LIST="${RUN_LIST:-}"
+
+# Generate RUN_LIST when not running under Kochiku.
+if [ -z ${RUN_LIST} ]; then
+  RUN_LIST=$(find $PWD -name '*_test.go' | tr '\n' , | sed -e 's/,$//g')
+fi
+
+DIRS=$(for f in $(echo "${RUN_LIST//,/ }"); do echo ${f%/*}; done | sort | uniq)
+TESTS=$(echo ${RUN_LIST//,/ } | xargs grep '^func Test' | sed -e 's/.*\(Test[^(]*\).*/\1/g' | tr '\n' '|' | sed -e 's/|$//g')
+
+# Run "pre-test" target for any apps we're testing.
+APPS=$(echo "${DIRS}" | (grep /apps || true) | sed -e 's,^.*/apps/\([^/]*\)/.*,\1,g' | sort | uniq)
+for APP in ${APPS}; do
+  make -n -C ./apps/${APP} pre-test &> /dev/null && make -C ./apps/${APP} pre-test
+done
+go test -mod=vendor -race -run "${TESTS}" -timeout 5m -v ./_examples/gap-exemplar/cmd/gap-exemplard ${DIRS}

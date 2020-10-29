@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -euxo pipefail
+
+# Basic sanity checks.
+
+if sed 's,//.*,,' <go.mod | grep -Eq '=> (\.\./|/)'; then
+  echo "error: go.mod should not contain local replacements:"
+  sed 's,//.*,,' <go.mod | grep -E '=> (\.\./|/)' | sed 's/^/  /'
+  exit 1
+fi
+
+# If we have vendored sources, check they're in sync with go.mod
+if test -d vendor; then
+  go mod vendor
+  if test $(git status --porcelain vendor | wc -l) -ne 0; then
+    echo "error: vendored sources are not in sync with go.mod"
+    git diff -- go.mod go.sum vendor
+    exit 1
+  fi
+fi

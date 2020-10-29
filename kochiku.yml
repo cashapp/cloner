@@ -1,7 +1,11 @@
 test_command: 'script/ci'
-retry_count: 1
+retry_count: 3
 targets:
-- type: sanity
-- type: test
-- type: lint
-- type: docker
+  - type: lint
+  - type: canary
+  - type: test
+    glob: "./**/*_test.go"
+  - type: sanity
+  - type: docker
+    requires:
+      - test

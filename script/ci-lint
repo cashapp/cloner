@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -euxo pipefail
+
+(
+  cd ${TOOL_CACHE}
+  curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | BINARY=golangci-lint bash -s ${GOLANGCILINT_VERSION}
+)
+go run -mod=vendor ./cmd/redactedcheck ./...
+golangci-lint run --deadline=5m

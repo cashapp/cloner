@@ -1,12 +1,36 @@
-#!/bin/bash -ex
+#!/bin/bash
 
-rm -fr /tmp/cash-ci
+set -euxo pipefail
 
-if [[ -z "" ]]; then
-    git clone ssh://git@git.sqcorp.co/cash/cash-ci.git /tmp/cash-ci
-else
-    mkdir -p /tmp/cash-ci
-    cp -r /* /tmp/cash-ci
-fi
+# Tool versions
+export GO_DESIRED_VERSION="go1.14.7"
+export GOLANGCILINT_VERSION="v1.26.0"
 
-/tmp/cash-ci/gap-service-ci/ci ""
+export CASH_CI_ROOT=$(dirname $0)/..
+export TOOL_CACHE=/tmp/ci-gap-tool-cache
+export GOROOT=${TOOL_CACHE}/go
+export PATH=${GOROOT}/bin:${TOOL_CACHE}/bin:$PATH
+export ARCH="$(uname -s | tr A-Z a-z)"
+export GO111MODULE=on
+export GOBIN=${TOOL_CACHE}/bin
+
+mkdir -p ${TOOL_CACHE}
+
+install() (
+  cd ${TOOL_CACHE}
+
+  if ! [ -e go/VERSION ] || ! grep -q "$GO_DESIRED_VERSION" go/VERSION; then
+    rm -rf go
+    curl -s https://storage.googleapis.com/golang/${GO_DESIRED_VERSION}.${ARCH}-amd64.tar.gz | tar zx
+  fi
+
+  # Clean the Go module cache, just in case the go installation was cached
+  go clean -modcache
+)
+
+install
+
+go install -mod=vendor ./cmd/gap
+
+exec "$(dirname $0)/ci-${TEST_RUNNER}"
+

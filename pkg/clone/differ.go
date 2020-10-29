@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"vitess.io/vitess/go/vt/proto/topodata"
@@ -157,7 +158,9 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 		// We only support the combinations we've encountered in the wild here
 		switch sourceValue.(type) {
 		case nil:
-			if targetValue == nil {
+			if targetValue != nil {
+				return false, nil
+			} else {
 				continue
 			}
 		case int64:
@@ -174,6 +177,14 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 				return false, errors.WithStack(err)
 			}
 			if sourceValue.(uint64) != coerced {
+				return false, nil
+			}
+		case float64:
+			coerced, err := coerceFloat64(targetValue)
+			if err != nil {
+				return false, errors.WithStack(err)
+			}
+			if sourceValue.(float64) != coerced {
 				return false, nil
 			}
 		default:
@@ -203,6 +214,15 @@ func coerceUint64(value interface{}) (uint64, error) {
 	}
 }
 
+func coerceFloat64(value interface{}) (float64, error) {
+	switch value.(type) {
+	case float32:
+		return float64(value.(float32)), nil
+	default:
+		return 0, nil
+	}
+}
+
 func DiffChunks(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, timeout time.Duration, chunks chan DiffRequest) error {
 	for {
 		select {
@@ -210,7 +230,14 @@ func DiffChunks(ctx context.Context, source DBReader, target DBReader, targetFil
 			if !more {
 				return nil
 			}
-			err := diffChunk(ctx, source, target, targetFilter, request, timeout)
+			b := backoff.WithContext(
+				backoff.WithMaxRetries(
+					backoff.NewExponentialBackOff(),
+					5),
+				ctx)
+			err := backoff.Retry(func() error {
+				return diffChunk(ctx, source, target, targetFilter, request, timeout)
+			}, b)
 			if err != nil {
 				return errors.WithStack(err)
 			}

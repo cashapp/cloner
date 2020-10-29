@@ -9,8 +9,14 @@ import (
 
 // OpenSyncedConnections opens count connections that have a synchronized view of the database
 func OpenSyncedConnections(ctx context.Context, source *sql.DB, count int) ([]*sql.Conn, error) {
+	// Lock all the tables
+	// Create connections
+	// Check the current GTID (using one of those connections)
+	// Unlock the tables
+	// Return the connections and the GTID they are synced to
+
 	// TODO
-	return nil, errors.Errorf("High fidelity clone not implemented yet")
+	return nil, errors.Errorf("consistent clone not implemented yet")
 }
 
 // OpenConnections opens count connections

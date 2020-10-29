@@ -79,7 +79,9 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 	}
 	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
 	row[r.table.IDColumnIndex] = id
-	row[r.table.ShardingColumnIndex] = shardingID
+	if r.table.ShardingColumnIndex != -1 {
+		row[r.table.ShardingColumnIndex] = shardingID
+	}
 	return &Row{
 		Table:      r.table,
 		ID:         id,

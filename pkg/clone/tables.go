@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"vitess.io/vitess/go/vt/proto/query"
 )
 
 type Table struct {
@@ -27,14 +28,16 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn, schema string, includeTables []string) ([]*Table, error) {
+func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, sourceShardSpec *query.Target, includeTables []string) ([]*Table, error) {
+	schema := sourceShardSpec.Keyspace
+	sharded := isSharded(sourceShardSpec)
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {
-		rows, err = conn.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			"select table_name from information_schema.tables where table_schema = ?", schema)
 	} else if databaseType == Vitess {
-		rows, err = conn.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			"select table_name from information_schema.tables where table_schema like ?",
 			fmt.Sprintf("vt_%s%%", schema))
 	} else {
@@ -75,13 +78,17 @@ func LoadTables(ctx context.Context, databaseType DataSourceType, conn *sql.Conn
 		if len(includeTables) > 0 && !contains(includeTables, tableName) {
 			continue
 		}
-		table, err := loadTable(ctx, databaseType, conn, schema, tableName)
+		table, err := loadTable(ctx, databaseType, db, schema, tableName, sharded)
 		if err != nil {
 			return nil, err
 		}
 		tables = append(tables, table)
 	}
 	return tables, nil
+}
+
+func isSharded(spec *query.Target) bool {
+	return spec.Shard != "0" && spec.Shard != "-"
 }
 
 func contains(strings []string, str string) bool {
@@ -93,7 +100,7 @@ func contains(strings []string, str string) bool {
 	return false
 }
 
-func loadTable(ctx context.Context, databaseType DataSourceType, conn *sql.Conn, schema, tableName string) (*Table, error) {
+func loadTable(ctx context.Context, databaseType DataSourceType, conn DBReader, schema, tableName string, sharded bool) (*Table, error) {
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {
@@ -172,7 +179,7 @@ func loadTable(ctx context.Context, databaseType DataSourceType, conn *sql.Conn,
 			shardingColumnIndex = i
 		}
 	}
-	if shardingColumnIndex == -1 {
+	if sharded && shardingColumnIndex == -1 {
 		return nil, errors.Errorf("sharding column not found for %v", tableName)
 	}
 	return &Table{

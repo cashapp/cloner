@@ -56,6 +56,16 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 
+	// Load tables
+	sourceVitessTarget, err := parseTarget(globals.Source.Database)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget, cmd.Tables)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	writer, err := globals.Target.DB()
 	if err != nil {
 		return errors.WithStack(err)
@@ -82,17 +92,9 @@ func (cmd *Clone) Run(globals Globals) error {
 	chunkerConns := sourceConns[:cmd.ChunkerCount]
 	sourceConns = sourceConns[cmd.ChunkerCount:]
 
-	// Create target reader conns
-	// TODO how do we synchronize these, do we have to?
-	// On TiDB we should sync by setting the TiDB timestamp which means we can easily create multiple connections
-	// with an "initialize" statement if that is supported by sql.DB
-	// Like this:
-	//   1. Drain and stop Vitess->TiDB replication
-	//   2. Lock tables, create connections and read current GTID
-	//   3. Run replication until specified GTID
-	//   4. Read TiDB timestamp which now matches the GTID
-	//   5. Resume replication
-	//   6. We can now use said timestamp
+	// Target reader
+	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
+	// other writers to the target during the clone
 	targetReader, err := globals.Target.DB()
 	if err != nil {
 		return errors.WithStack(err)
@@ -100,16 +102,6 @@ func (cmd *Clone) Run(globals Globals) error {
 	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
-
-	// Load tables
-	sourceVitessTarget, err := parseTarget(globals.Source.Database)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace, cmd.Tables)
-	if err != nil {
-		return errors.WithStack(err)
-	}
 
 	// Copy schema
 	if cmd.CopySchema {
@@ -120,9 +112,12 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 
 	// Parse the keyrange on the source so that we can filter the target
-	shardingSpec, err := key.ParseShardingSpec(sourceVitessTarget.Shard)
-	if err != nil {
-		return errors.WithStack(err)
+	var shardingSpec []*topodata.KeyRange
+	if isSharded(sourceVitessTarget) {
+		shardingSpec, err = key.ParseShardingSpec(sourceVitessTarget.Shard)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 
 	// Start differs

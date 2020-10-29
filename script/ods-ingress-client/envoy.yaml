@@ -1,0 +1,113 @@
+admin:
+  address:
+    pipe:
+      path: '/data/pods/permit/envoy_sockets/envoy-admin.sock'
+  access_log_path: '/data/pods/permit/log/envoy.admin_access.log'
+
+enable_dispatcher_stats: true
+
+static_resources:
+  listeners:
+    - name: franklin_002_listener
+      address:
+        pipe:
+          path: /var/run/envoy_sockets/ods/franklin-002.sock
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.tcp_proxy
+              config:
+                stat_prefix: franklin_002_tcp_ingress
+                idle_timeout: 60s
+                cluster: franklin_ods_ingress_server
+                access_log:
+                  - name: envoy.file_access_log
+                    config:
+                      path: /var/log/franklin-002.access.log
+
+  clusters:
+    - name: franklin_ods_ingress_server
+      connect_timeout: 5s
+      type: STATIC
+      lb_policy: RANDOM
+      # We don't have access to the onprem DNS so we hardcode IP addresses here
+      # TODO we probably need a dedicated port for this?
+      hosts:
+        - { socket_address: { address: 10.1.1.51, port_value: 30531 } } # 10.1.1.51 is apa698.sjc1.square
+    - name: permit-vtgate_staging
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: RANDOM
+      hosts: [{ socket_address: { address: awa154.sjc1.square, port_value: 30531 } }]
+    - name: envoy-control-xds--staging-serving
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: RANDOM
+      load_assignment:
+        cluster_name: envoy-control-xds--staging-serving
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: envoy-control-staging-serving.west.us.square, port_value: 32336 }
+      http2_protocol_options: {}
+      upstream_connection_options:
+        tcp_keepalive:
+          keepalive_probes: 2
+          keepalive_time: 30
+          keepalive_interval: 30
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.api.v2.auth.UpstreamTlsContext
+          common_tls_context:
+            tls_certificates:
+              - certificate_chain:
+                  filename: "/data/pods/permit/secrets_aliases/service2service.crt"
+                private_key:
+                  filename: "/data/pods/permit/secrets_aliases/service2service.key"
+            validation_context:
+              trusted_ca:
+                filename: "/data/pods/permit/secrets_aliases/service2service.ca.pem"
+              verify_subject_alt_name: envoy-control.global.square
+            alpn_protocols: "h2"
+    - name: spire-agent
+      connect_timeout: 5s
+      type: STATIC
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: spire-agent
+        endpoints:
+          lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /data/pods/spire-agent/tmp/sockets/agent.sock
+    - name: datadog-agent
+      connect_timeout: 5s
+      type: STATIC
+      http_protocol_options: {}
+      lb_policy: RANDOM
+      load_assignment:
+        cluster_name: datadog-agent
+        endpoints:
+          lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: "/var/run/envoy_sockets/datadog.sock"
+
+
+
+
+node:
+  id: permit_awa694.sjc1.square
+  cluster: permit--staging
+  metadata: {"client_app":"permit","datacenter":"SJC1","multienv":false,"multienv_server":false,"container_type":"HOIST","capabilities":["any_subset_matcher","ext_authz_filter","grpc_shim","grpc_timeout_offset","host_rewrite_filter","original_dst_port_filter","per_try_timeout_hedging","proper_per_try_timeout","proto_over_http_shim","remaining_cb_resources","request_deadline_filter","response_info_headers","spiffe_sds_cluster","tap_filter"],"app_platform":"SQUARE_DC","square_envoy_revision":"50a44be9d84d1b38ba2f8110cbf1c95e2817194e\n","envoy_revision":"ef5b13394a75052b43aee4bf522edd83737ce770\n","supports_h2_app_ingress":false,"manifest":{}}
+tracing:
+  http:
+    name: envoy.tracers.datadog
+    config:
+    typed_config:
+      "@type": type.googleapis.com/envoy.config.trace.v2.DatadogConfig
+      collector_cluster: datadog-agent
+      service_name: permit-envoy

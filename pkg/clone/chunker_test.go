@@ -51,6 +51,7 @@ func TestChunker(t *testing.T) {
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
 	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", true, nil)
+	assert.NoError(t, err)
 	err = generateTableChunks(ctx, conns[0], tables[0], 10, chunks)
 	assert.NoError(t, err)
 	close(chunks)
@@ -120,7 +121,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	db, err = source.DB()
+	db, err := source.DB()
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)

@@ -117,6 +117,7 @@ func TestCloneWithTargetData(t *testing.T) {
 
 	// Sanity check the number of rows
 	sourceRowCount, err := countRows(source, "customers")
+	assert.NoError(t, err)
 	targetRowCount, err := countRowsShardFilter(target, "-80")
 	assert.NoError(t, err)
 	assert.Equal(t, sourceRowCount, targetRowCount)

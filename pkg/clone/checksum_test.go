@@ -34,6 +34,7 @@ func TestChecksum(t *testing.T) {
 
 	// Check how many rows end up in the -80 shard
 	shardRowCount, err := countRows(source, "customers")
+	assert.NoError(t, err)
 
 	checksum := &Checksum{
 		QueueSize:    1000,

@@ -30,7 +30,7 @@ func testMain(m *testing.M) int {
 		}
 	}()
 
-	g, ctx := errgroup.WithContext(context.Background())
+	g, _ := errgroup.WithContext(context.Background())
 
 	g.Go(func() error {
 		var err error

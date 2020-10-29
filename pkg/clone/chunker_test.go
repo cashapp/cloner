@@ -18,10 +18,18 @@ type testChunk struct {
 }
 
 func TestChunker(t *testing.T) {
+	// Restart vitess for this test so other tests don't mess with our auto increment IDs
+	vitessContainer.Close()
+	vitessContainer, err := startVitess()
+	assert.NoError(t, err)
+
 	source := vitessContainer.Config()
 
+	err = deleteAllData(source)
+	assert.NoError(t, err)
+
 	rowCount := 100
-	err := insertBunchaData(source, "Name", rowCount)
+	err = insertBunchaData(source, "Name", rowCount)
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
@@ -85,6 +93,11 @@ func TestChunker(t *testing.T) {
 }
 
 func TestChunkerSingleRow(t *testing.T) {
+	// Restart vitess for this test so other tests don't mess with our auto increment IDs
+	vitessContainer.Close()
+	vitessContainer, err := startVitess()
+	assert.NoError(t, err)
+
 	source := vitessContainer.Config()
 
 	db, err := source.DB()
@@ -123,7 +136,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
-			End:   102,
+			End:   2,
 			Size:  1,
 			First: true,
 			Last:  true,

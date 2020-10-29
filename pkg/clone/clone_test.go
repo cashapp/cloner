@@ -124,6 +124,7 @@ func TestCloneWithTargetData(t *testing.T) {
 
 	// Check we didn't delete the rows in the right shard in the target
 	rightRowCountAfter, err := countRowsShardFilter(target, "80-")
+	assert.NoError(t, err)
 	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
 
 	// Do a full checksum

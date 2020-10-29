@@ -61,6 +61,7 @@ func TestCopySchema(t *testing.T) {
 	assert.NoError(t, err)
 
 	tables, err := LoadTables(ctx, Vitess, sourceConn, "customer", true, nil)
+	assert.NoError(t, err)
 	err = CopySchema(ctx, tables, sourceConn, targetDB)
 	assert.NoError(t, err)
 }

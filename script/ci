@@ -1,0 +1,12 @@
+#!/bin/bash -ex
+
+rm -fr /tmp/cash-ci
+
+if [[ -z "" ]]; then
+    git clone ssh://git@git.sqcorp.co/cash/cash-ci.git /tmp/cash-ci
+else
+    mkdir -p /tmp/cash-ci
+    cp -r /* /tmp/cash-ci
+fi
+
+/tmp/cash-ci/gap-service-ci/ci ""

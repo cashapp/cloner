@@ -1,0 +1,6 @@
+# Overrides are optional. If any of these are unset then default values are used.
+
+# export APP_NAME=foo-app-name              # Set the k8s service name to "foo-app-name"
+# export APP_CMD_NAME=foo-cmd-name          # Use cmd/foo-cmd-name as the directory for the main Go package
+# export REPO_ROOT_NAME=cloner
+# export GIT_ORG_PATH="git.sqcorp.co/cash"

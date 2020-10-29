@@ -1,0 +1,7 @@
+test_command: 'script/ci'
+retry_count: 1
+targets:
+- type: sanity
+- type: test
+- type: lint
+- type: docker

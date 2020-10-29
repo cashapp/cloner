@@ -3,4 +3,4 @@
 # export APP_NAME=foo-app-name              # Set the k8s service name to "foo-app-name"
 # export APP_CMD_NAME=foo-cmd-name          # Use cmd/foo-cmd-name as the directory for the main Go package
 # export REPO_ROOT_NAME=cloner
-# export GIT_ORG_PATH="git.sqcorp.co/cash"
+export GIT_ORG_PATH="github.com/squareup"

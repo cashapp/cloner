@@ -30,7 +30,7 @@ install() (
 
 install
 
-go install -mod=vendor ./cmd/gap
+go install -mod=vendor ./cmd/cloner
 
 exec "$(dirname $0)/ci-${TEST_RUNNER}"
 

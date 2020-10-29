@@ -15,7 +15,9 @@ func TestLoadTables(t *testing.T) {
 	assert.NoError(t, err)
 	conn, err := db.Conn(ctx)
 	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, Vitess, conn, "customer", nil)
+	shard, err := parseTarget("customer/-80")
+	assert.NoError(t, err)
+	tables, err := LoadTables(ctx, Vitess, conn, shard, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{
@@ -58,7 +60,9 @@ func TestCopySchema(t *testing.T) {
 	targetDB, err := target.DB()
 	assert.NoError(t, err)
 
-	tables, err := LoadTables(ctx, Vitess, sourceConn, "customer", nil)
+	shard, err := parseTarget("customer/-80")
+	assert.NoError(t, err)
+	tables, err := LoadTables(ctx, Vitess, sourceConn, shard, nil)
 	err = CopySchema(ctx, tables, sourceConn, targetDB)
 	assert.NoError(t, err)
 }

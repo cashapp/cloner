@@ -23,4 +23,4 @@ APPS=$(echo "${DIRS}" | (grep /apps || true) | sed -e 's,^.*/apps/\([^/]*\)/.*,\
 for APP in ${APPS}; do
   make -n -C ./apps/${APP} pre-test &> /dev/null && make -C ./apps/${APP} pre-test
 done
-go test -mod=vendor -race -run "${TESTS}" -timeout 5m -v ./_examples/gap-exemplar/cmd/gap-exemplard ${DIRS}
+go test -mod=vendor -race -run "${TESTS}" -timeout 5m -v ${DIRS}

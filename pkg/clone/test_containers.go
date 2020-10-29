@@ -152,6 +152,7 @@ func startVitess() (*DatabaseContainer, error) {
 	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
 }
 
+//nolint:deadcode,unused
 func startMysql() (*DatabaseContainer, error) {
 	log.Debugf("starting MySQL")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)

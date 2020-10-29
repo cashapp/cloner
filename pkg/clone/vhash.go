@@ -25,6 +25,7 @@ func vhash(shardKey uint64) []byte {
 	return []byte(hashed[:])
 }
 
+//nolint:deadcode,unused
 func vunhash(k []byte) (uint64, error) {
 	if len(k) != 8 {
 		return 0, fmt.Errorf("invalid keyspace id: %v", hex.EncodeToString(k))

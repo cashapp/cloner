@@ -156,7 +156,7 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 
 		// If they do NOT have same type, we coerce the target type to the source type and then compare
 		// We only support the combinations we've encountered in the wild here
-		switch sourceValue.(type) {
+		switch sourceValue := sourceValue.(type) {
 		case nil:
 			if targetValue != nil {
 				return false, nil
@@ -168,7 +168,7 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 			if err != nil {
 				return false, errors.WithStack(err)
 			}
-			if sourceValue.(int64) != coerced {
+			if sourceValue != coerced {
 				return false, nil
 			}
 		case uint64:
@@ -176,7 +176,7 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 			if err != nil {
 				return false, errors.WithStack(err)
 			}
-			if sourceValue.(uint64) != coerced {
+			if sourceValue != coerced {
 				return false, nil
 			}
 		case float64:
@@ -184,7 +184,7 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 			if err != nil {
 				return false, errors.WithStack(err)
 			}
-			if sourceValue.(float64) != coerced {
+			if sourceValue != coerced {
 				return false, nil
 			}
 		default:
@@ -196,28 +196,28 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 }
 
 func coerceInt64(value interface{}) (int64, error) {
-	switch value.(type) {
+	switch value := value.(type) {
 	case []byte:
 		// This means it was sent as a unicode encoded string
-		return strconv.ParseInt(string(value.([]byte)), 10, 64)
+		return strconv.ParseInt(string(value), 10, 64)
 	default:
 		return 0, nil
 	}
 }
 
 func coerceUint64(value interface{}) (uint64, error) {
-	switch value.(type) {
+	switch value := value.(type) {
 	case int64:
-		return uint64(value.(int64)), nil
+		return uint64(value), nil
 	default:
 		return 0, nil
 	}
 }
 
 func coerceFloat64(value interface{}) (float64, error) {
-	switch value.(type) {
+	switch value := value.(type) {
 	case float32:
-		return float64(value.(float32)), nil
+		return float64(value), nil
 	default:
 		return 0, nil
 	}

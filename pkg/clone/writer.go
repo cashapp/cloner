@@ -143,7 +143,7 @@ func insertBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
 	for _, row := range rows {
 		valueStrings = append(valueStrings, values)
-		for i, _ := range columns {
+		for i := range columns {
 			valueArgs = append(valueArgs, row.Data[i])
 		}
 	}

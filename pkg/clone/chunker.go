@@ -30,7 +30,7 @@ func GenerateChunks(ctx context.Context, conns []*sql.Conn, tables []*Table, chu
 	close(tableChan)
 
 	g, ctx := errgroup.WithContext(ctx)
-	for i, _ := range conns {
+	for i := range conns {
 		conn := conns[i]
 		g.Go(func() error {
 			return GenerateTableChunks(ctx, conn, tableChan, chunkSize, chunks)
@@ -167,7 +167,6 @@ func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chun
 			Last:  true,
 			Size:  currentChunkSize,
 		}
-		first = false
 	}
 	return nil
 }

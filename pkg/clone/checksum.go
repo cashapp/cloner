@@ -91,7 +91,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 
 	// Start differs
 	diffRequests := make(chan DiffRequest, cmd.QueueSize)
-	for i, _ := range targetConns {
+	for i := range targetConns {
 		source := sourceConns[i]
 		target := targetConns[i]
 		g.Go(func() error {

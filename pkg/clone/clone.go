@@ -122,7 +122,7 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Start differs
 	diffRequests := make(chan DiffRequest, cmd.QueueSize)
-	for i, _ := range sourceConns {
+	for i := range sourceConns {
 		source := sourceConns[i]
 		g.Go(func() error {
 			return DiffChunks(ctx, source, targetReader, shardingSpec, cmd.ReadTimeout, diffRequests)
@@ -166,7 +166,7 @@ type stackTracer interface {
 // readers runs all the readers in parallel and returns when they are all done
 func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
 	g, ctx := errgroup.WithContext(ctx)
-	for i, _ := range chunkerConns {
+	for i := range chunkerConns {
 		chunkerConn := chunkerConns[i]
 		g.Go(func() error {
 			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writer, diffRequests)

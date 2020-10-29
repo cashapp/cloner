@@ -18,6 +18,7 @@ type Checksum struct {
 	ChunkerCount int           `help:"Number of readers for chunks" default:"10"`
 	ReaderCount  int           `help:"Number of readers for diffing" default:"10"`
 	ReadTimeout  time.Duration `help:"Timeout for each read" default:"5m"`
+	Tables       []string      `help:"Tables to checksum (if unset will clone all of them)" optional:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -73,7 +74,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget, nil)
+	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

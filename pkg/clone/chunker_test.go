@@ -42,9 +42,7 @@ func TestChunker(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	shard, err := parseTarget("customer/-80")
-	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, source.Type, conns[0], shard, nil)
+	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", true, nil)
 	err = generateTableChunks(ctx, conns[0], tables[0], 10, chunks)
 	assert.NoError(t, err)
 	close(chunks)
@@ -92,33 +90,10 @@ func TestChunkerSingleRow(t *testing.T) {
 	db, err := source.DB()
 	assert.NoError(t, err)
 
-	_, err = db.Exec(`
-		INSERT INTO customer_passcodes (
-			id,
-			customer_id,
-			original_customer_id,
-			token,
-			fidelius_token,
-			active,
-			unlinked_at,
-			version,
-			created_at,
-			updated_at,
-			last_verified_at 
-		) VALUES (
-			100020406,
-			30027935561,
-			30027935561,
-			'P_5hpl5pcdquw95xr34ixy4b7ep',
-			'fid-1-0dbd273bb139f524b524e95b8711550ccc78e3558d52c3c3e26c093842543771',
-			NULL,
-			'2020-10-22 14:33:16',
-			18,
-			'2020-08-24 13:29:44',
-			'2020-10-22 14:33:16',
-			'2020-10-22 14:33:16'
-		)
-	`)
+	err = deleteAllData(source)
+	assert.NoError(t, err)
+
+	err = insertBunchaData(source, "Jon", 1)
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
@@ -139,9 +114,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	shard, err := parseTarget("customer/-80")
-	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, source.Type, conns[0], shard, []string{"customer_passcodes"})
+	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", true, []string{"customers"})
 	err = generateTableChunks(ctx, conns[0], tables[0], 10, chunks)
 	assert.NoError(t, err)
 	close(chunks)

@@ -33,7 +33,7 @@ type Clone struct {
 	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
 
 	CopySchema bool     `help:"Copy schema" default:"false"`
-	Tables     []string `help:"Tables to clone (if unset will clone all of them)" optionals:""`
+	Tables     []string `help:"Tables to clone (if unset will clone all of them)" optional:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -61,7 +61,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget, cmd.Tables)
+	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables)
 	if err != nil {
 		return errors.WithStack(err)
 	}

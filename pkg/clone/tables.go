@@ -28,9 +28,7 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, sourceShardSpec *query.Target, includeTables []string) ([]*Table, error) {
-	schema := sourceShardSpec.Keyspace
-	sharded := isSharded(sourceShardSpec)
+func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, includeTables []string) ([]*Table, error) {
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {

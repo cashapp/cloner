@@ -18,9 +18,7 @@ type testChunk struct {
 }
 
 func TestChunker(t *testing.T) {
-	// Restart vitess for this test so other tests don't mess with our auto increment IDs
-	vitessContainer.Close()
-	vitessContainer, err := startVitess()
+	err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -94,9 +92,7 @@ func TestChunker(t *testing.T) {
 }
 
 func TestChunkerSingleRow(t *testing.T) {
-	// Restart vitess for this test so other tests don't mess with our auto increment IDs
-	vitessContainer.Close()
-	vitessContainer, err := startVitess()
+	err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()

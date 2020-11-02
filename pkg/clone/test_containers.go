@@ -8,7 +8,12 @@ import (
 	"github.com/ory/dockertest/v3"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
+
+// yep, globals, we should only have one container per test run
+var vitessContainer *DatabaseContainer
+var tidbContainer *DatabaseContainer
 
 func createSchema(config DBConfig, database string) error {
 	db, err := config.DB()
@@ -68,18 +73,22 @@ func (c *DatabaseContainer) Config() DBConfig {
 	return c.config
 }
 
-func startVitess() (*DatabaseContainer, error) {
+func startVitess() error {
+	if vitessContainer != nil {
+		vitessContainer.Close()
+	}
+
 	log.Debugf("starting Vitess")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	// pulls an image, creates a container based on it and runs it
 	path, err := os.Getwd()
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "vitess/base",
@@ -99,12 +108,12 @@ func startVitess() (*DatabaseContainer, error) {
 		},
 	})
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 	err = resource.Expire(15 * 60)
 	if err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	config := DBConfig{
@@ -140,77 +149,25 @@ func startVitess() (*DatabaseContainer, error) {
 		return nil
 	}); err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	err = insertBaseData(config)
 	if err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
-	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
+	vitessContainer = &DatabaseContainer{pool: pool, resource: resource, config: config}
+
+	return nil
 }
 
-//nolint:deadcode,unused
-func startMysql() (*DatabaseContainer, error) {
-	log.Debugf("starting MySQL")
-	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+func startTidb() error {
+	if tidbContainer != nil {
+		tidbContainer.Close()
 	}
 
-	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.Run("mysql", "5.7", []string{"MYSQL_ROOT_PASSWORD=secret"})
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	err = resource.Expire(15 * 60)
-	if err != nil {
-		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
-	}
-
-	config := DBConfig{
-		Type:     MySQL,
-		Host:     "localhost:" + resource.GetPort("3306/tcp"),
-		Username: "root",
-		Password: "secret",
-		Database: "mysql",
-	}
-
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
-	if err := pool.Retry(func() error {
-		var err error
-		db, err := config.DB()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return db.Ping()
-	}); err != nil {
-		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
-	}
-
-	err = createSchema(config, "mydatabase")
-	if err != nil {
-		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
-	}
-
-	config.Database = "mydatabase"
-
-	err = insertBaseData(config)
-	if err != nil {
-		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
-	}
-
-	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
-}
-
-func startTidb() (*DatabaseContainer, error) {
 	log.Debugf("starting TiDB")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
 	pool, err := dockertest.NewPool("")
@@ -221,12 +178,12 @@ func startTidb() (*DatabaseContainer, error) {
 	// pulls an image, creates a container based on it and runs it
 	resource, err := pool.Run("pingcap/tidb", "latest", []string{})
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 	err = resource.Expire(15 * 60)
 	if err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	config := DBConfig{
@@ -247,13 +204,13 @@ func startTidb() (*DatabaseContainer, error) {
 		return db.Ping()
 	}); err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	err = createSchema(config, "mydatabase")
 	if err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
 	config.Database = "mydatabase"
@@ -261,8 +218,18 @@ func startTidb() (*DatabaseContainer, error) {
 	err = insertBaseData(config)
 	if err != nil {
 		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 
-	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
+	tidbContainer = &DatabaseContainer{pool: pool, resource: resource, config: config}
+
+	return nil
+}
+
+// startAll (re)starts both Vitess and TiDB in parallel
+func startAll() error {
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(startVitess)
+	g.Go(startTidb)
+	return g.Wait()
 }

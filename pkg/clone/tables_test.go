@@ -9,6 +9,9 @@ import (
 )
 
 func TestLoadTables(t *testing.T) {
+	err := startVitess()
+	assert.NoError(t, err)
+
 	ctx := context.Background()
 
 	db, err := vitessContainer.Config().DB()
@@ -44,11 +47,14 @@ func dropTables(config DBConfig) error {
 }
 
 func TestCopySchema(t *testing.T) {
+	err := startAll()
+	assert.NoError(t, err)
+
 	source := vitessContainer.Config()
 	source.Database = "customer/-80"
 	target := tidbContainer.Config()
 
-	err := dropTables(target)
+	err = dropTables(target)
 	assert.NoError(t, err)
 
 	ctx := context.Background()

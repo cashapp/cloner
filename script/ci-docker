@@ -27,12 +27,6 @@ dir='.'
 set -euxo pipefail
 export APP_NAME=cloner
 
-SPINNAKER_ENABLED="${SPINNAKER_ENABLED:-false}"
-mkdir -p ${DOCKER_BUILD}
-trap "rm -rf ${DOCKER_BUILD}" EXIT
-
-export DOCKER_FILE=${DOCKER_BUILD}/Dockerfile
-cp Dockerfile ${DOCKER_FILE}
 go build -o cloner ./cmd/cloner
 
 # Push to ECR?
@@ -50,7 +44,6 @@ else
   PUSH="-s -p"
 fi
 
-cd ${DOCKER_BUILD}
 docker build -t "${DOCKER_TAG}" --build-arg SERVICE="${APP_NAME}" --build-arg GIT_COMMIT="${GIT_COMMIT}" .
 if [[ -n "$PUSH" ]]; then
   if [[ -z "$STAGING_BUILD" && "$GIT_BRANCH" != "master" && -z "${KOCHIKU_CANARY_BUILD:-}" ]]; then

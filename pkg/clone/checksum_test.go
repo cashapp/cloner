@@ -21,8 +21,16 @@ func deleteAllData(config DBConfig) error {
 }
 
 func TestChecksum(t *testing.T) {
+	// Restart vitess for this test so other tests don't mess with our auto increment IDs
+	vitessContainer.Close()
+	vitessContainer, err := startVitess()
+	assert.NoError(t, err)
+	tidbContainer.Close()
+	tidbContainer, err := startTidb()
+	assert.NoError(t, err)
+
 	rowCount := 1000
-	err := insertBunchaData(vitessContainer.Config(), "Name", rowCount)
+	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
 	assert.NoError(t, err)
 
 	err = deleteAllData(tidbContainer.Config())

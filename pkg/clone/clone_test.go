@@ -80,11 +80,19 @@ func countRowsShardFilter(target DBConfig, shard string) (int, error) {
 }
 
 func TestCloneWithTargetData(t *testing.T) {
+	// Restart vitess for this test so other tests don't mess with our auto increment IDs
+	vitessContainer.Close()
+	vitessContainer, err := startVitess()
+	assert.NoError(t, err)
+	tidbContainer.Close()
+	tidbContainer, err := startTidb()
+	assert.NoError(t, err)
+
 	source := vitessContainer.Config()
 	target := tidbContainer.Config()
 
 	rowCount := 1000
-	err := insertBunchaData(source, "Name", rowCount)
+	err = insertBunchaData(source, "Name", rowCount)
 	assert.NoError(t, err)
 
 	// Insert some stuff that matches

@@ -12,3 +12,4 @@ USER 1000
 EXPOSE 8080 8443
 ENV ENVIRONMENT="development"
 CMD [ "./cloner" ]
+

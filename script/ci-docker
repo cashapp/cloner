@@ -26,7 +26,7 @@ fi
 set -euxo pipefail
 export APP_NAME=cloner
 
-go build -mod=vendor -o ${APP_NAME} ./cmd/${APP_NAME}
+CGO_ENABLED=0 go build -mod=vendor -a -tags netgo -ldflags '-extldflags "-static"' -o ${APP_NAME} ./cmd/${APP_NAME}
 
 # Push to ECR?
 export PUSH=""

@@ -40,8 +40,8 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, g *errgroup.Group, writ
 
 			if !cmd.Consistent {
 				// If we're doing a best effort clone we just give up on this batch
-				logger.Warnf("failed write batch after retries and backoff, " +
-					"since this is a best effort clone we just give up")
+				logger.Warnf("failed write batch after retries and backoff, "+
+					"since this is a best effort clone we just give up: %+v", err)
 				return nil
 			}
 

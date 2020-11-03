@@ -55,7 +55,7 @@ type Chunk struct {
 	Size int
 }
 
-func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table, chunkSize int, chunks chan Chunk) error {
+func GenerateTableChunks(ctx context.Context, conn DBReader, tables chan *Table, chunkSize int, chunks chan Chunk) error {
 	for {
 		select {
 		case table, more := <-tables:
@@ -112,7 +112,7 @@ func GenerateTableChunks(ctx context.Context, conn *sql.Conn, tables chan *Table
 //	return nil
 //}
 
-func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
+func generateTableChunks(ctx context.Context, conn DBReader, table *Table, chunkSize int, chunks chan Chunk) error {
 	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",
 		table.IDColumn, table.Name, table.IDColumn))
 	if err != nil {

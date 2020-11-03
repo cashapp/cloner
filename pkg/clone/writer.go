@@ -11,10 +11,16 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, g *errgroup.Group, writer *sql.DB, batch Batch) {
+func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, g *errgroup.Group, writer *sql.DB, batch Batch) error {
+	err := writerLimiter.Acquire(ctx, 1)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	g.Go(func() error {
+		defer writerLimiter.Release(1)
 		err := Write(ctx, cmd, writer, batch)
 
 		if err != nil {
@@ -28,8 +34,8 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, g *errgroup.Group, writ
 			if strings.HasPrefix(err.Error(), "Error 1062:") {
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
-					scheduleWriteBatch(ctx, cmd, g, writer, batch1)
-					scheduleWriteBatch(ctx, cmd, g, writer, batch2)
+					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
+					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
 					return nil
 				}
 			}
@@ -52,6 +58,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, g *errgroup.Group, writ
 		writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 		return nil
 	})
+	return nil
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {

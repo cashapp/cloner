@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -35,14 +36,14 @@ func init() {
 }
 
 // ReadTables generates batches for each table
-func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
+func ReadTables(ctx context.Context, chunkerConn DBReader, tableCh chan *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, diffRequests chan DiffRequest) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, table, cmd, writer, diffRequests)
+			err := readTable(ctx, chunkerConn, table, cmd, writer, writerLimiter, diffRequests)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -53,7 +54,7 @@ func ReadTables(ctx context.Context, chunkerConn *sql.Conn, tableCh chan *Table,
 }
 
 // readTables generates write batches for one table
-func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
+func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, diffRequests chan DiffRequest) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
@@ -117,7 +118,7 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 				inserts += size
 			}
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-			scheduleWriteBatch(ctx, cmd, g, writer, batch)
+			scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
 		}
 		return g.Wait()
 	})

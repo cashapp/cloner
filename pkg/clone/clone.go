@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	"vitess.io/vitess/go/vt/key"
 	"vitess.io/vitess/go/vt/proto/query"
 	"vitess.io/vitess/go/vt/proto/topodata"
@@ -20,7 +21,8 @@ import (
 type Clone struct {
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	QueueSize    int `help:"Queue size of the chunk queue" default:"10000"`
+	QueueSize int `help:"Size of internal queues, increase this number might increase throughput but does increases memory footprint" default:"10000"`
+
 	ChunkSize    int `help:"Size of the chunks to diff" default:"1000"`
 	ChunkerCount int `help:"Number of readers for chunks" default:"10"`
 
@@ -51,6 +53,13 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+
+	if !cmd.Consistent {
+		sourceReader.SetMaxOpenConns(cmd.WriterCount)
+		// Refresh connections regularly so they don't go stale
+		sourceReader.SetConnMaxLifetime(time.Minute)
+	}
+
 	target, err := globals.Target.DB()
 	if err != nil {
 		return errors.WithStack(err)
@@ -76,21 +85,17 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Create synced source and chunker conns
 	var sourceConns []*sql.Conn
+	var chunkerConns []*sql.Conn
 	if cmd.Consistent {
-		sourceConns, err = OpenSyncedConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
+		syncedConns, err := OpenSyncedConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-	} else {
-		sourceConns, err = OpenConnections(ctx, sourceReader, cmd.ChunkerCount+cmd.ReaderCount)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
-	defer CloseConnections(sourceConns)
+		defer CloseConnections(syncedConns)
 
-	chunkerConns := sourceConns[:cmd.ChunkerCount]
-	sourceConns = sourceConns[cmd.ChunkerCount:]
+		chunkerConns = syncedConns[:cmd.ChunkerCount]
+		sourceConns = syncedConns[cmd.ChunkerCount:]
+	}
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -122,11 +127,19 @@ func (cmd *Clone) Run(globals Globals) error {
 
 	// Start differs
 	diffRequests := make(chan DiffRequest, cmd.QueueSize)
-	for i := range sourceConns {
-		source := sourceConns[i]
-		g.Go(func() error {
-			return DiffChunks(ctx, source, targetReader, shardingSpec, cmd.ReadTimeout, diffRequests)
-		})
+	if cmd.Consistent {
+		for i := range sourceConns {
+			source := sourceConns[i]
+			g.Go(func() error {
+				return DiffChunks(ctx, source, targetReader, shardingSpec, cmd.ReadTimeout, diffRequests)
+			})
+		}
+	} else {
+		for i := 0; i < cmd.ReaderCount; i++ {
+			g.Go(func() error {
+				return DiffChunks(ctx, sourceReader, targetReader, shardingSpec, cmd.ReadTimeout, diffRequests)
+			})
+		}
 	}
 
 	// Queue up tables to read
@@ -136,9 +149,29 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 	close(tableCh)
 
+	writerLimiter := semaphore.NewWeighted(int64(cmd.QueueSize))
+
 	// Chunk, diff table and generate batches to write
 	g.Go(func() error {
-		err := readers(ctx, chunkerConns, tableCh, cmd, writer, diffRequests)
+		g, ctx := errgroup.WithContext(ctx)
+		if cmd.Consistent {
+			for i := range chunkerConns {
+				chunkerConn := chunkerConns[i]
+				g.Go(func() error {
+					err := ReadTables(ctx, chunkerConn, tableCh, cmd, writer, writerLimiter, diffRequests)
+					return errors.WithStack(err)
+				})
+			}
+		} else {
+			for i := 0; i < cmd.ChunkerCount; i++ {
+				g.Go(func() error {
+					err := ReadTables(ctx, sourceReader, tableCh, cmd, writer, writerLimiter, diffRequests)
+					return errors.WithStack(err)
+				})
+			}
+		}
+		err := g.Wait()
+
 		// All tables are done, close the channels used to request work
 		close(diffRequests)
 		return errors.WithStack(err)
@@ -161,19 +194,6 @@ func (cmd *Clone) Run(globals Globals) error {
 
 type stackTracer interface {
 	StackTrace() errors.StackTrace
-}
-
-// readers runs all the readers in parallel and returns when they are all done
-func readers(ctx context.Context, chunkerConns []*sql.Conn, tableCh chan *Table, cmd *Clone, writer *sql.DB, diffRequests chan DiffRequest) error {
-	g, ctx := errgroup.WithContext(ctx)
-	for i := range chunkerConns {
-		chunkerConn := chunkerConns[i]
-		g.Go(func() error {
-			err := ReadTables(ctx, chunkerConn, tableCh, cmd, writer, diffRequests)
-			return errors.WithStack(err)
-		})
-	}
-	return g.Wait()
 }
 
 func parseTarget(targetString string) (*query.Target, error) {

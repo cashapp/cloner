@@ -118,7 +118,10 @@ func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clo
 				inserts += size
 			}
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-			scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
+			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
+			if err != nil {
+				return err
+			}
 		}
 		return g.Wait()
 	})

@@ -34,8 +34,14 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphor
 			if strings.HasPrefix(err.Error(), "Error 1062:") {
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
-					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
-					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
+					err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
+					if err != nil {
+						return errors.WithStack(err)
+					}
 					return nil
 				}
 			}

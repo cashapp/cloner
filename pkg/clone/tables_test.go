@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,16 +31,4 @@ func TestLoadTables(t *testing.T) {
 			ColumnList:          "`id`,`name`",
 		},
 	}, tables)
-}
-
-func dropTables(config DBConfig) error {
-	db, err := config.DB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = db.Exec("DROP TABLE customers")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
 }

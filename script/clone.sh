@@ -35,7 +35,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: cloner
-        image: 833102219637.dkr.ecr.us-east-1.amazonaws.com/cloner:c42412b4b7a7e0a229a200670a5456f052cd683a
+        image: 833102219637.dkr.ecr.us-east-1.amazonaws.com/cloner:b019779497b35a732c08fb15d2d713b3cab89a0e
         command: ["/cloner"]
         args:
         - "--source-type"
@@ -49,7 +49,6 @@ spec:
         - "--target-misk-datasource"
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
         - "clone"
-        - "--copy-schema"
         ports:
         - name: metrics
           containerPort: 9102
@@ -108,6 +107,7 @@ echo   kubectl port-forward -n ${SQM_SERVICE}-tidb5 jobs/${job} 9102:9102
 echo   open https://localhost:8289/metrics
 echo   open https://localhost:8289/debug/pprof
 
+sleep 2
 kubectl -n ${namespace} describe jobs/${job}
 sleep 3
 kubectl -n ${namespace} logs -f jobs/${job} cloner

@@ -191,25 +191,3 @@ func loadTable(ctx context.Context, databaseType DataSourceType, conn DBReader, 
 		ColumnList:          strings.Join(columnNamesQuoted, ","),
 	}, nil
 }
-
-func CopySchema(ctx context.Context, tables []*Table, source *sql.Conn, target *sql.DB) error {
-	for _, table := range tables {
-		row := source.QueryRowContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %s", table.Name))
-		var name string
-		var createTable string
-		err := row.Scan(&name, &createTable)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		createTable = strings.Replace(createTable, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
-		// TODO figure out if this is really right...
-		createTable = strings.ReplaceAll(createTable,
-			"timestamp NOT NULL DEFAULT '0000-00-00 00:00:00'",
-			"timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP")
-		_, err = target.ExecContext(ctx, createTable)
-		if err != nil {
-			return errors.Wrapf(err, "could not create table:\n%s", createTable)
-		}
-	}
-	return nil
-}

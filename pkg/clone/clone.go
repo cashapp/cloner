@@ -34,8 +34,7 @@ type Clone struct {
 	WriteRetryCount int           `help:"Number of retries" default:"5"`
 	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
 
-	CopySchema bool     `help:"Copy schema" default:"false"`
-	Tables     []string `help:"Tables to clone (if unset will clone all of them)" optional:""`
+	Tables []string `help:"Tables to clone (if unset will clone all of them)" optional:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -58,11 +57,6 @@ func (cmd *Clone) Run(globals Globals) error {
 		sourceReader.SetMaxOpenConns(cmd.WriterCount)
 		// Refresh connections regularly so they don't go stale
 		sourceReader.SetConnMaxLifetime(time.Minute)
-	}
-
-	target, err := globals.Target.DB()
-	if err != nil {
-		return errors.WithStack(err)
 	}
 
 	// Load tables
@@ -107,14 +101,6 @@ func (cmd *Clone) Run(globals Globals) error {
 	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
-
-	// Copy schema
-	if cmd.CopySchema {
-		err := CopySchema(ctx, tables, chunkerConns[0], target)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
 
 	// Parse the keyrange on the source so that we can filter the target
 	var shardingSpec []*topodata.KeyRange

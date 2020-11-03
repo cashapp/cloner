@@ -45,29 +45,3 @@ func dropTables(config DBConfig) error {
 	}
 	return nil
 }
-
-func TestCopySchema(t *testing.T) {
-	err := startAll()
-	assert.NoError(t, err)
-
-	source := vitessContainer.Config()
-	source.Database = "customer/-80"
-	target := tidbContainer.Config()
-
-	err = dropTables(target)
-	assert.NoError(t, err)
-
-	ctx := context.Background()
-
-	sourceDB, err := source.DB()
-	assert.NoError(t, err)
-	sourceConn, err := sourceDB.Conn(ctx)
-	assert.NoError(t, err)
-	targetDB, err := target.DB()
-	assert.NoError(t, err)
-
-	tables, err := LoadTables(ctx, Vitess, sourceConn, "customer", true, nil)
-	assert.NoError(t, err)
-	err = CopySchema(ctx, tables, sourceConn, targetDB)
-	assert.NoError(t, err)
-}

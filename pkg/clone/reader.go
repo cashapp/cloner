@@ -122,20 +122,26 @@ func readTable(ctx context.Context, chunkerConn *sql.Conn, table *Table, cmd *Cl
 		return g.Wait()
 	})
 
-	if err := g.Wait(); err != nil {
-		logger.WithError(err).Errorf("%v", err)
-		return errors.WithStack(err)
-	}
+	err := g.Wait()
 
 	elapsed := time.Since(start)
-	logger.
+
+	logger = logger.
 		WithField("duration", elapsed).
 		WithField("chunking", chunkingDuration).
 		WithField("chunks", chunkCount).
 		WithField("inserts", inserts).
 		WithField("deletes", deletes).
-		WithField("updates", updates).
-		Infof("done")
+		WithField("updates", updates)
+
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			logger.WithError(err).Errorf("%+v", err)
+		}
+		return errors.WithStack(err)
+	}
+
+	logger.Infof("success")
 
 	return nil
 }

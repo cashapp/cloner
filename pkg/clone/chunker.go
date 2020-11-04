@@ -2,13 +2,11 @@ package clone
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -20,24 +18,6 @@ var (
 		[]string{"table"},
 	)
 )
-
-// GenerateChunks generates chunks from all tables and then closes the channel, blocks until done
-func GenerateChunks(ctx context.Context, conns []*sql.Conn, tables []*Table, chunkSize int, chunks chan Chunk) error {
-	tableChan := make(chan *Table, len(tables))
-	for _, table := range tables {
-		tableChan <- table
-	}
-	close(tableChan)
-
-	g, ctx := errgroup.WithContext(ctx)
-	for i := range conns {
-		conn := conns[i]
-		g.Go(func() error {
-			return GenerateTableChunks(ctx, conn, tableChan, chunkSize, chunks)
-		})
-	}
-	return g.Wait()
-}
 
 // Chunk is an chunk of rows closed to the left [start,end)
 type Chunk struct {

@@ -101,15 +101,15 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.NoError(t, err)
 
 	clone := &Clone{
-		Consistent:     false,
-		QueueSize:      1000,
-		ChunkSize:      5,
-		WriteBatchSize: 5,
-		ChunkerCount:   1,
-		ReaderCount:    1,
-		WriterCount:    1,
-		ReadTimeout:    1 * time.Minute,
-		WriteTimeout:   1 * time.Minute,
+		Consistent:       false,
+		QueueSize:        1000,
+		ChunkSize:        5,
+		WriteBatchSize:   5,
+		TableParallelism: 1,
+		ReaderCount:      1,
+		WriterCount:      1,
+		ReadTimeout:      1 * time.Minute,
+		WriteTimeout:     1 * time.Minute,
 	}
 	source.Database = "customer/-80@replica"
 	err = clone.Run(Globals{

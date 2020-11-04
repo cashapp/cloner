@@ -13,6 +13,7 @@ kubectl() {
   sqm --admin kubectl -- "$@"
 }
 
+sha=a80c28b900319e6e7b0e89f2a2d659f9df6ef857
 namespace=${SQM_SERVICE}
 job_id=$(date +%s)
 job=${USER}-clone-${job_id}
@@ -35,7 +36,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: cloner
-        image: 833102219637.dkr.ecr.us-east-1.amazonaws.com/cloner:b019779497b35a732c08fb15d2d713b3cab89a0e
+        image: 833102219637.dkr.ecr.us-east-1.amazonaws.com/cloner:${sha}
         command: ["/cloner"]
         args:
         - "--source-type"
@@ -49,6 +50,10 @@ spec:
         - "--target-misk-datasource"
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
         - "clone"
+        - "--reader-count"
+        - "5"
+        - "--chunker-count"
+        - "5"
         ports:
         - name: metrics
           containerPort: 9102

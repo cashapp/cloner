@@ -3,7 +3,6 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -11,6 +10,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
+	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 var (
@@ -35,15 +35,15 @@ func init() {
 	prometheus.MustRegister(writesProcessed)
 }
 
-// ReadTables generates batches for each table
-func ReadTables(ctx context.Context, chunkerConn DBReader, tableCh chan *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, diffRequests chan DiffRequest) error {
+// ProcessTables generates batches for each table
+func ProcessTables(ctx context.Context, source DBReader, target DBReader, tableCh chan *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
 	for {
 		select {
 		case table, more := <-tableCh:
 			if !more {
 				return nil
 			}
-			err := readTable(ctx, chunkerConn, table, cmd, writer, writerLimiter, diffRequests)
+			err := processTable(ctx, source, target, table, cmd, writer, writerLimiter, targetFilter)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -53,17 +53,13 @@ func ReadTables(ctx context.Context, chunkerConn DBReader, tableCh chan *Table, 
 	}
 }
 
-// readTables generates write batches for one table
-func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, diffRequests chan DiffRequest) error {
+// processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
 
 	var chunkingDuration time.Duration
-
-	chunks := make(chan Chunk, cmd.QueueSize)
-	diffs := make(chan Diff, cmd.QueueSize)
-	batches := make(chan Batch, cmd.QueueSize)
 
 	updates := 0
 	deletes := 0
@@ -72,38 +68,47 @@ func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clo
 
 	g, ctx := errgroup.WithContext(ctx)
 
+	// Chunk up the table
+	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
 		ctx, cancel := context.WithTimeout(ctx, cmd.ReadTimeout)
 		defer cancel()
 
-		err := generateTableChunks(ctx, chunkerConn, table, cmd.ChunkSize, chunks)
+		err := generateTableChunks(ctx, source, table, cmd.ChunkSize, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		return errors.WithStack(err)
 	})
-	// Request diffing for every chunk
+
+	// Diff each chunk as they are produced
+	diffs := make(chan Diff, cmd.QueueSize)
 	g.Go(func() error {
-		done := &sync.WaitGroup{}
-		for chunk := range chunks {
-			done.Add(1)
-			select {
-			case diffRequests <- DiffRequest{chunk, diffs, done}:
-			case <-ctx.Done():
-				return nil
-			}
+		g, ctx := errgroup.WithContext(ctx)
+		for c := range chunks {
+			chunk := c
+			g.Go(func() error {
+				return diffChunk(ctx, source, target, targetFilter, chunk, diffs, cmd.ReadTimeout)
+			})
 			chunkCount++
 		}
-		// TODO this is a smell that we have to do a context friendly WaitGroup wait here...
-		WaitGroupWait(ctx, done)
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
 		// All diffing done, close the diffs channel
 		close(diffs)
 		return nil
 	})
+
+	// Batch up the diffs
+	batches := make(chan Batch, cmd.QueueSize)
 	g.Go(func() error {
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)
 		return errors.WithStack(err)
 	})
+
 	// Write every batch
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
@@ -120,7 +125,7 @@ func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clo
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
 			if err != nil {
-				return err
+				return errors.WithStack(err)
 			}
 		}
 		return g.Wait()
@@ -148,17 +153,4 @@ func readTable(ctx context.Context, chunkerConn DBReader, table *Table, cmd *Clo
 	logger.Infof("success")
 
 	return nil
-}
-
-// WaitGroupWait is a context friendly wait on a WaitGroup
-func WaitGroupWait(ctx context.Context, wg *sync.WaitGroup) {
-	ch := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-	select {
-	case <-ctx.Done():
-	case <-ch:
-	}
 }

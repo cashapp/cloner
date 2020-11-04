@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -50,15 +49,6 @@ type Diff struct {
 
 	// Target is in case of the Update DiffType also set so that it can be compared
 	Target *Row
-}
-
-type DiffRequest struct {
-	// Chunk to diff
-	Chunk Chunk
-	// Channel to send the diffs to
-	Diffs chan Diff
-	// Use this to signal we're done
-	Done *sync.WaitGroup
 }
 
 // StreamDiff sends the changes need to make target become exactly like source
@@ -223,55 +213,35 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
-func DiffChunks(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, timeout time.Duration, chunks chan DiffRequest) error {
-	for {
-		select {
-		case request, more := <-chunks:
-			if !more {
-				return nil
-			}
-			b := backoff.WithContext(
-				backoff.WithMaxRetries(
-					backoff.NewExponentialBackOff(),
-					5),
-				ctx)
-			err := backoff.Retry(func() error {
-				return diffChunk(ctx, source, target, targetFilter, request, timeout)
-			}, b)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-		case <-ctx.Done():
-			return nil
+func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff, timeout time.Duration) error {
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5), ctx)
+	err := backoff.Retry(func() error {
+
+		// TODO start off by running a fast checksum query
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		sourceStream, err := StreamChunk(ctx, source, chunk)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from source")
 		}
-	}
-}
+		targetStream, err := StreamChunk(ctx, target, chunk)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from target")
+		}
+		if len(targetFilter) > 0 {
+			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
+		}
+		err = StreamDiff(ctx, sourceStream, targetStream, diffs)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 
-func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, request DiffRequest, timeout time.Duration) error {
-	// TODO start off by running a fast checksum query
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	chunk := request.Chunk
-	diffs := request.Diffs
-
-	sourceStream, err := StreamChunk(ctx, source, chunk)
-	if err != nil {
-		return errors.Wrapf(err, "failed to stream chunk from source")
-	}
-	targetStream, err := StreamChunk(ctx, target, chunk)
-	if err != nil {
-		return errors.Wrapf(err, "failed to stream chunk from target")
-	}
-	if len(targetFilter) > 0 {
-		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
-	}
-	err = StreamDiff(ctx, sourceStream, targetStream, diffs)
+		return nil
+	}, b)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
-	// Signal we're done to the requester
-	request.Done.Done()
 	return nil
 }

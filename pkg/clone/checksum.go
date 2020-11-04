@@ -2,9 +2,7 @@ package clone
 
 import (
 	"context"
-	"database/sql"
 	_ "net/http/pprof"
-	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -42,39 +40,31 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	source, err := globals.Source.DB()
+	sourceReader, err := globals.Source.ReaderDB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	target, err := globals.Target.DB()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
+	// Refresh connections regularly so they don't go stale
+	sourceReader.SetConnMaxLifetime(time.Minute)
 
-	// Create synced source and chunker conns
-	var sourceConns []*sql.Conn
-	sourceConns, err = OpenConnections(ctx, source, cmd.ChunkerCount+cmd.ReaderCount)
+	// Target reader
+	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
+	// other writers to the target during the clone
+	targetReader, err := globals.Target.DB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	defer CloseConnections(sourceConns)
-
-	chunkerConns := sourceConns[:cmd.ChunkerCount]
-	sourceConns = sourceConns[cmd.ChunkerCount:]
-
-	// Create synced target reader conns
-	targetConns, err := OpenConnections(ctx, target, cmd.ReaderCount)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	defer CloseConnections(targetConns)
+	targetReader.SetMaxOpenConns(cmd.ReaderCount)
+	// Refresh connections regularly so they don't go stale
+	targetReader.SetConnMaxLifetime(time.Minute)
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, chunkerConns[0], sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables)
+	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -89,32 +79,40 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	diffs := make(chan Diff, cmd.QueueSize)
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Start differs
-	diffRequests := make(chan DiffRequest, cmd.QueueSize)
-	for i := range targetConns {
-		source := sourceConns[i]
-		target := targetConns[i]
-		g.Go(func() error {
-			return DiffChunks(ctx, source, target, shardingSpec, cmd.ReadTimeout, diffRequests)
-		})
-	}
+	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time
 
 	// Generate chunks of all source tables
 	g.Go(func() error {
-		err := GenerateChunks(ctx, chunkerConns, tables, cmd.ChunkSize, chunks)
+		g, ctx := errgroup.WithContext(ctx)
+		for _, t := range tables {
+			table := t
+			g.Go(func() error {
+				return generateTableChunks(ctx, sourceReader, table, cmd.ChunkSize, chunks)
+			})
+		}
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
 		close(chunks)
-		return errors.WithStack(err)
+		return nil
 	})
 
 	// Forward chunks to differs
 	g.Go(func() error {
-		done := &sync.WaitGroup{}
-		for chunk := range chunks {
-			done.Add(1)
-			diffRequests <- DiffRequest{chunk, diffs, done}
+		g, ctx := errgroup.WithContext(ctx)
+		for c := range chunks {
+			chunk := c
+			g.Go(func() error {
+				return diffChunk(ctx, sourceReader, targetReader, shardingSpec, chunk, diffs, cmd.ReadTimeout)
+			})
 		}
-		WaitGroupWait(ctx, done)
-		close(diffRequests)
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		// All diffing done, close the diffs channel
 		close(diffs)
 		return nil
 	})

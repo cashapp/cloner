@@ -43,7 +43,7 @@ func ProcessTables(ctx context.Context, source DBReader, target DBReader, tableC
 			if !more {
 				return nil
 			}
-			err := processTable(ctx, source, target, table, cmd, writer, writerLimiter, targetFilter)
+			err := processTable(ctx, source, target, table, cmd, writer, writerLimiter, nil, targetFilter)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -54,7 +54,7 @@ func ProcessTables(ctx context.Context, source DBReader, target DBReader, tableC
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("task", "reader").WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
@@ -71,7 +71,13 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
-		err := GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
+		err := readerLimiter.Acquire(ctx, 1)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer readerLimiter.Release(1)
+
+		err = GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		return errors.WithStack(err)
@@ -83,7 +89,13 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
+			err := readerLimiter.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 			g.Go(func() error {
+				defer readerLimiter.Release(1)
+
 				return diffChunk(ctx, source, target, targetFilter, chunk, diffs, cmd.ReadTimeout)
 			})
 			chunkCount++

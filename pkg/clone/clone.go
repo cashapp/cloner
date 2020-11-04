@@ -58,7 +58,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
+	defer sourceReader.Close()
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
 
@@ -66,7 +66,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	writer.SetMaxOpenConns(cmd.WriterCount)
+	defer writer.Close()
 	// Refresh connections regularly so they don't go stale
 	writer.SetConnMaxLifetime(time.Minute)
 
@@ -77,7 +77,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	targetReader.SetMaxOpenConns(cmd.ReaderCount)
+	defer targetReader.Close()
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
 
@@ -107,7 +107,8 @@ func (cmd *Clone) Run(globals Globals) error {
 	}
 	close(tableCh)
 
-	writerLimiter := semaphore.NewWeighted(int64(cmd.QueueSize))
+	writerLimiter := semaphore.NewWeighted(int64(cmd.WriterCount))
+	readerLimiter := semaphore.NewWeighted(int64(cmd.ReaderCount))
 
 	if cmd.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")
@@ -123,7 +124,7 @@ func (cmd *Clone) Run(globals Globals) error {
 				return errors.WithStack(err)
 			}
 			defer tableLimiter.Release(1)
-			err = processTable(ctx, sourceReader, targetReader, table, cmd, writer, writerLimiter, shardingSpec)
+			err = processTable(ctx, sourceReader, targetReader, table, cmd, writer, writerLimiter, readerLimiter, shardingSpec)
 			return errors.WithStack(err)
 		})
 	}

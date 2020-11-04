@@ -11,12 +11,13 @@ import (
 )
 
 type Checksum struct {
-	QueueSize    int           `help:"Queue size of the chunk queue" default:"1000"`
-	ChunkSize    int           `help:"Size of the chunks to diff" default:"1000"`
-	ChunkerCount int           `help:"Number of readers for chunks" default:"10"`
-	ReaderCount  int           `help:"Number of readers for diffing" default:"10"`
-	ReadTimeout  time.Duration `help:"Timeout for each read" default:"5m"`
-	Tables       []string      `help:"Tables to checksum (if unset will clone all of them)" optional:""`
+	QueueSize       int           `help:"Queue size of the chunk queue" default:"1000"`
+	ChunkSize       int           `help:"Size of the chunks to diff" default:"1000"`
+	ChunkerCount    int           `help:"Number of readers for chunks" default:"10"`
+	ReaderCount     int           `help:"Number of readers for diffing" default:"10"`
+	ReadTimeout     time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
+	ChunkingTimeout time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"15m"`
+	Tables          []string      `help:"Tables to checksum (if unset will clone all of them)" optional:""`
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -87,7 +88,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 		for _, t := range tables {
 			table := t
 			g.Go(func() error {
-				return generateTableChunks(ctx, sourceReader, table, cmd.ChunkSize, chunks)
+				return GenerateTableChunks(ctx, sourceReader, table, cmd.ChunkSize, cmd.ReadTimeout, chunks)
 			})
 		}
 		err := g.Wait()

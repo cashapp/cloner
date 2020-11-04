@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"vitess.io/vitess/go/vt/key"
@@ -101,16 +101,11 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.NoError(t, err)
 
 	clone := &Clone{
-		Consistent:       false,
-		QueueSize:        1000,
-		ChunkSize:        5,
-		WriteBatchSize:   5,
-		TableParallelism: 1,
-		ReaderCount:      1,
-		WriterCount:      1,
-		ReadTimeout:      1 * time.Minute,
-		WriteTimeout:     1 * time.Minute,
+		ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
+		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 	}
+	err = kong.ApplyDefaults(clone)
+	assert.NoError(t, err)
 	source.Database = "customer/-80@replica"
 	err = clone.Run(Globals{
 		Source: source,
@@ -131,13 +126,9 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
 
 	// Do a full checksum
-	checksum := &Checksum{
-		QueueSize:    1000,
-		ChunkSize:    5,
-		ChunkerCount: 1,
-		ReaderCount:  1,
-		ReadTimeout:  1 * time.Minute,
-	}
+	checksum := &Checksum{}
+	err = kong.ApplyDefaults(checksum)
+	assert.NoError(t, err)
 	diffs, err := checksum.run(Globals{
 		Source: source,
 		Target: target,

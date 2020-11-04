@@ -25,7 +25,8 @@ type Clone struct {
 	ChunkSize        int           `help:"Size of the chunks to diff" default:"1000"`
 	TableParallelism int           `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount      int           `help:"Number of reader connections" default:"20"`
-	ReadTimeout      time.Duration `help:"Timeout for each read" default:"5m"`
+	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
+	ChunkingTimeout  time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"15m"`
 
 	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
 	WriterCount     int           `help:"Number of writer connections" default:"10"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -50,7 +51,7 @@ func TestChunker(t *testing.T) {
 	assert.NoError(t, err)
 	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", true, nil)
 	assert.NoError(t, err)
-	err = generateTableChunks(ctx, conns[0], tables[0], 10, chunks)
+	err = GenerateTableChunks(ctx, conns[0], tables[0], 10, 1*time.Second, chunks)
 	assert.NoError(t, err)
 	close(chunks)
 	wg.Wait()
@@ -123,7 +124,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.NoError(t, err)
 	tables, err := LoadTables(ctx, source.Type, conns[0], "customer", true, []string{"customers"})
 	assert.NoError(t, err)
-	err = generateTableChunks(ctx, conns[0], tables[0], 10, chunks)
+	err = GenerateTableChunks(ctx, conns[0], tables[0], 10, 1*time.Second, chunks)
 	assert.NoError(t, err)
 	close(chunks)
 	wg.Wait()

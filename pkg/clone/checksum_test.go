@@ -2,8 +2,8 @@ package clone
 
 import (
 	"testing"
-	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
@@ -40,12 +40,10 @@ func TestChecksum(t *testing.T) {
 	assert.NoError(t, err)
 
 	checksum := &Checksum{
-		QueueSize:    1000,
-		ChunkSize:    5,
-		ChunkerCount: 1,
-		ReaderCount:  1,
-		ReadTimeout:  1 * time.Minute,
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 	}
+	err = kong.ApplyDefaults(checksum)
+	assert.NoError(t, err)
 	diffs, err := checksum.run(Globals{
 		Source: source,
 		Target: target,

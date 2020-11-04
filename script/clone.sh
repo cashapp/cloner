@@ -13,7 +13,7 @@ kubectl() {
   sqm --admin kubectl -- "$@"
 }
 
-sha=a80c28b900319e6e7b0e89f2a2d659f9df6ef857
+sha=dd73555c5dfe386c01e37efad6ac1f1449bc50c7
 namespace=${SQM_SERVICE}
 job_id=$(date +%s)
 job=${USER}-clone-${job_id}
@@ -51,9 +51,9 @@ spec:
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
         - "clone"
         - "--reader-count"
-        - "5"
-        - "--chunker-count"
-        - "5"
+        - "30"
+        - "--table-parallelism"
+        - "15"
         ports:
         - name: metrics
           containerPort: 9102

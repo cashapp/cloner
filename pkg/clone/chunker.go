@@ -3,10 +3,10 @@ package clone
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -35,26 +35,7 @@ type Chunk struct {
 	Size int
 }
 
-func GenerateTableChunks(ctx context.Context, conn DBReader, tables chan *Table, chunkSize int, chunks chan Chunk) error {
-	for {
-		select {
-		case table, more := <-tables:
-			if more {
-				err := generateTableChunks(ctx, conn, table, chunkSize, chunks)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-			} else {
-				log.Debugf("Chunker done!")
-				return nil
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
-}
-
-//func generateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
+//func GenerateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
 //	log.Infof("Generating chunks for %v", table.Name)
 //	sql := fmt.Sprintf(`
 //		select
@@ -92,7 +73,10 @@ func GenerateTableChunks(ctx context.Context, conn DBReader, tables chan *Table,
 //	return nil
 //}
 
-func generateTableChunks(ctx context.Context, conn DBReader, table *Table, chunkSize int, chunks chan Chunk) error {
+func GenerateTableChunks(ctx context.Context, conn DBReader, table *Table, chunkSize int, chunkingTimeout time.Duration, chunks chan Chunk) error {
+	ctx, cancel := context.WithTimeout(ctx, chunkingTimeout)
+	defer cancel()
+
 	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",
 		table.IDColumn, table.Name, table.IDColumn))
 	if err != nil {

@@ -13,10 +13,11 @@ kubectl() {
   sqm --admin kubectl -- "$@"
 }
 
-sha=dd73555c5dfe386c01e37efad6ac1f1449bc50c7
+sha=61108431df270e9184dfaed9cb826f6f45dd2918
 namespace=${SQM_SERVICE}
 job_id=$(date +%s)
-job=${USER}-clone-${job_id}
+k8s_shard=$(echo ${shard} | sed 's_-$_-hi_g' | sed 's_/-_/lo-_g' | sed 's_/_-_g' | sed 's/_/-/g')
+job=clone-${k8s_shard}-${job_id}
 
 cat <<EOF | kubectlrw -n $namespace apply -f -
 ---
@@ -51,9 +52,9 @@ spec:
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
         - "clone"
         - "--reader-count"
-        - "30"
+        - "40"
         - "--table-parallelism"
-        - "15"
+        - "10"
         ports:
         - name: metrics
           containerPort: 9102

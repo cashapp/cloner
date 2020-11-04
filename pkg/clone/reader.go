@@ -55,7 +55,7 @@ func ProcessTables(ctx context.Context, source DBReader, target DBReader, tableC
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
 func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
-	logger := log.WithField("task", "reader").WithField("table", table.Name)
+	logger := log.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
 

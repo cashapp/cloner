@@ -46,8 +46,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphor
 				}
 			}
 
-			logger := log.WithField("task", "writer").
-				WithField("table", batch.Table.Name).
+			logger := log.WithField("table", batch.Table.Name).
 				WithError(err)
 
 			if !cmd.Consistent {
@@ -57,7 +56,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphor
 				return nil
 			}
 
-			logger.Errorf("failed write batch after %d times", cmd.WriteRetryCount)
+			logger.Errorf("failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
 			return errors.WithStack(err)
 		}
 

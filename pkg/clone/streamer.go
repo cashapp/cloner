@@ -139,7 +139,7 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk) (RowStream, er
 	table := chunk.Table
 	columns := table.ColumnList
 
-	logger := log.WithField("table", chunk.Table.Name).WithField("task", "reader")
+	logger := log.WithField("table", chunk.Table.Name)
 	if chunk.First && chunk.Last {
 		logger.Debugf("reading chunk -")
 		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",

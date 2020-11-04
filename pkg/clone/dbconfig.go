@@ -99,6 +99,14 @@ func (c DBConfig) openMisk() (*sql.DB, error) {
 	return nil, errors.Errorf("No database found in %s: %v", c.MiskDatasource, config)
 }
 
+func (c DBConfig) String() string {
+	if c.MiskDatasource != "" {
+		return c.MiskDatasource
+	} else {
+		return fmt.Sprintf("%s/%s", c.Host, c.Database)
+	}
+}
+
 type miskDataSourceConfig struct {
 	Database                          string
 	Type                              string

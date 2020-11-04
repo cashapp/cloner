@@ -114,6 +114,8 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.Errorf("need more parallelism")
 	}
 
+	log.Infof("starting clone %s -> %s", globals.Source.String(), globals.Target.String())
+
 	// Chunk, diff table and generate batches to write
 	tableLimiter := semaphore.NewWeighted(int64(cmd.TableParallelism))
 	for _, t := range tables {

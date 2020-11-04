@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
@@ -28,7 +29,10 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, includeTables []string) ([]*Table, error) {
+func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, includeTables []string, timeout time.Duration) ([]*Table, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {

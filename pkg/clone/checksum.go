@@ -65,7 +65,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables)
+	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables, cmd.ReadTimeout)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

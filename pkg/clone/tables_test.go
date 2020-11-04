@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -17,7 +18,7 @@ func TestLoadTables(t *testing.T) {
 	assert.NoError(t, err)
 	conn, err := db.Conn(ctx)
 	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, Vitess, conn, "customer", true, nil)
+	tables, err := LoadTables(ctx, Vitess, conn, "customer", true, nil, 1*time.Second)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{

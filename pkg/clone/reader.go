@@ -71,7 +71,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
-		err := GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ReadTimeout, chunks)
+		err := GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		return errors.WithStack(err)

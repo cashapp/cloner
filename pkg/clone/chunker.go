@@ -73,7 +73,14 @@ type Chunk struct {
 //	return nil
 //}
 
-func GenerateTableChunks(ctx context.Context, conn DBReader, table *Table, chunkSize int, chunkingTimeout time.Duration, chunks chan Chunk) error {
+func GenerateTableChunks(
+	ctx context.Context,
+	conn DBReader,
+	table *Table,
+	chunkSize int,
+	chunkingTimeout time.Duration,
+	chunks chan Chunk,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, chunkingTimeout)
 	defer cancel()
 

@@ -141,7 +141,7 @@ func (cmd *Clone) Run(globals Globals) error {
 		}
 		logger.WithError(err).Errorf("error: %+v", err)
 	} else {
-		logger.Infof("success")
+		logger.Infof("full clone success")
 	}
 	return errors.WithStack(err)
 }

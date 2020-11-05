@@ -153,9 +153,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		WithField("updates", updates)
 
 	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			logger.WithError(err).Errorf("%+v", err)
-		}
+		logger.WithError(err).Errorf("%+v", err)
 		return errors.WithStack(err)
 	}
 

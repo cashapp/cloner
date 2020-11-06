@@ -35,24 +35,6 @@ func init() {
 	prometheus.MustRegister(writesProcessed)
 }
 
-// ProcessTables generates batches for each table
-func ProcessTables(ctx context.Context, source DBReader, target DBReader, tableCh chan *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
-	for {
-		select {
-		case table, more := <-tableCh:
-			if !more {
-				return nil
-			}
-			err := processTable(ctx, source, target, table, cmd, writer, writerLimiter, nil, targetFilter)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
-}
-
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
 func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("table", table.Name)
@@ -80,7 +62,11 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		err = GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
-		return errors.WithStack(err)
+		if err != nil {
+			logger.WithField("task", "chunker").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
+			return errors.WithStack(err)
+		}
+		return nil
 	})
 
 	// Diff each chunk as they are produced
@@ -102,6 +88,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		}
 		err := g.Wait()
 		if err != nil {
+			logger.WithField("task", "differ").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 
@@ -115,7 +102,11 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	g.Go(func() error {
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)
-		return errors.WithStack(err)
+		if err != nil {
+			logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
+			return errors.WithStack(err)
+		}
+		return nil
 	})
 
 	// Write every batch
@@ -134,10 +125,16 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
 			if err != nil {
+				logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 				return errors.WithStack(err)
 			}
 		}
-		return g.Wait()
+		err := g.Wait()
+		if err != nil {
+			logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
+			return errors.WithStack(err)
+		}
+		return nil
 	})
 
 	err := g.Wait()
@@ -153,7 +150,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		WithField("updates", updates)
 
 	if err != nil {
-		logger.WithError(err).Errorf("%+v", err)
+		logger.WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 		return errors.WithStack(err)
 	}
 

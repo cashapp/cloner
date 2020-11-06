@@ -91,6 +91,8 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.WithStack(err)
 	}
 
+	logger := log.WithField("tables", len(tables))
+
 	// Parse the keyrange on the source so that we can filter the target
 	var shardingSpec []*topodata.KeyRange
 	if isSharded(sourceVitessTarget) {
@@ -114,7 +116,7 @@ func (cmd *Clone) Run(globals Globals) error {
 		return errors.Errorf("need more parallelism")
 	}
 
-	log.Infof("starting clone %s -> %s", globals.Source.String(), globals.Target.String())
+	logger.Infof("starting clone %s -> %s", globals.Source.String(), globals.Target.String())
 
 	// Chunk, diff table and generate batches to write
 	tableLimiter := semaphore.NewWeighted(int64(cmd.TableParallelism))
@@ -134,7 +136,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	err = g.Wait()
 
 	elapsed := time.Since(start)
-	logger := log.WithField("duration", elapsed).WithField("tables", len(tables))
+	logger = log.WithField("duration", elapsed).WithField("tables", len(tables))
 	if err != nil {
 		if stackErr, ok := err.(stackTracer); ok {
 			logger = logger.WithField("stacktrace", stackErr.StackTrace())

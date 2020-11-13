@@ -59,11 +59,12 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		}
 		defer readerLimiter.Release(1)
 
+		logger := logger.WithField("task", "chunker")
 		err = GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		if err != nil {
-			logger.WithField("task", "chunker").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
+			logger.WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 		return nil
@@ -82,7 +83,8 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			g.Go(func() error {
 				defer readerLimiter.Release(1)
 
-				return diffChunk(ctx, source, target, targetFilter, chunk, diffs, cmd.ReadTimeout)
+				err := diffChunk(ctx, source, target, targetFilter, chunk, diffs, cmd.ReadTimeout)
+				return errors.WithStack(err)
 			})
 			chunkCount++
 		}

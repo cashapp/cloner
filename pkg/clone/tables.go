@@ -29,40 +29,41 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, includeTables []string, timeout time.Duration) ([]*Table, error) {
+func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, tableNames []string, timeout time.Duration) ([]*Table, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var err error
-	var rows *sql.Rows
-	if databaseType == MySQL {
-		rows, err = db.QueryContext(ctx,
-			"select table_name from information_schema.tables where table_schema = ?", schema)
-	} else if databaseType == Vitess {
-		rows, err = db.QueryContext(ctx,
-			"select table_name from information_schema.tables where table_schema like ?",
-			fmt.Sprintf("vt_%s%%", schema))
-	} else {
-		return nil, errors.Errorf("Not supported: %v", databaseType)
-	}
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	var tableNames []string
-	for rows.Next() {
-		var tableName string
-		err := rows.Scan(&tableName)
+	if len(tableNames) == 0 {
+		var err error
+		var rows *sql.Rows
+		if databaseType == MySQL {
+			rows, err = db.QueryContext(ctx,
+				"select table_name from information_schema.tables where table_schema = ?", schema)
+		} else if databaseType == Vitess {
+			rows, err = db.QueryContext(ctx,
+				"select table_name from information_schema.tables where table_schema like ?",
+				fmt.Sprintf("vt_%s%%", schema))
+		} else {
+			return nil, errors.Errorf("Not supported: %v", databaseType)
+		}
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		// There are duplicates with vttestserver because multiples shards run in the same mysqld
-		if !contains(tableNames, tableName) {
-			tableNames = append(tableNames, tableName)
+		for rows.Next() {
+			var tableName string
+			err := rows.Scan(&tableName)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			// There are duplicates with vttestserver because multiples shards run in the same mysqld
+			if !contains(tableNames, tableName) {
+				tableNames = append(tableNames, tableName)
+			}
 		}
-	}
-	err = rows.Close()
-	if err != nil {
-		return nil, err
+		err = rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
@@ -77,7 +78,7 @@ func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, s
 		if tableName == "schema_version" {
 			continue
 		}
-		if len(includeTables) > 0 && !contains(includeTables, tableName) {
+		if len(tableNames) > 0 && !contains(tableNames, tableName) {
 			continue
 		}
 		table, err := loadTable(ctx, databaseType, db, schema, tableName, sharded)

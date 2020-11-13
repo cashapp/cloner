@@ -89,6 +89,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 
 // Write directly writes a batch with retries and backoff
 func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
+	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 	err := autotx.TransactWithRetry(ctx, db, autotx.RetryOptions{
 		MaxRetries: cmd.WriteRetryCount,
 		BackOff:    newSimpleExponentialBackOff(5 * time.Minute).NextBackOff,
@@ -110,6 +111,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	})
 
 	if err != nil {
+		logger.Error(err)
 		return errors.WithStack(err)
 	}
 

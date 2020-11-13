@@ -9,6 +9,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
@@ -214,10 +215,12 @@ func coerceFloat64(value interface{}) (float64, error) {
 }
 
 func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff, timeout time.Duration) error {
+	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5), ctx)
 	err := backoff.Retry(func() error {
 
 		// TODO start off by running a fast checksum query
+
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
@@ -241,6 +244,7 @@ func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilt
 		return nil
 	}, b)
 	if err != nil {
+		logger.Error(err)
 		return errors.WithStack(err)
 	}
 	return nil

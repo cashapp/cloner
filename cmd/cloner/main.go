@@ -4,6 +4,7 @@ import (
 	"github.com/alecthomas/kong"
 
 	"cloner/pkg/clone"
+	log "github.com/sirupsen/logrus"
 )
 
 var cli struct {
@@ -17,5 +18,8 @@ func main() {
 	ctx := kong.Parse(&cli)
 	// Call the Run() method of the selected parsed command.
 	err := ctx.Run(cli.Globals)
+	if err != nil {
+		log.Errorf("%+v", err)
+	}
 	ctx.FatalIfErrorf(err)
 }

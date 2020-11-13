@@ -13,19 +13,21 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v2"
 	"software.sslmate.com/src/go-pkcs12"
 	"vitess.io/vitess/go/vt/vitessdriver"
 )
 
 type DBConfig struct {
-	Type           DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
-	Host           string         `help:"Hostname" optional:""`
-	EgressSocket   string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
-	Username       string         `help:"User" optional:""`
-	Password       string         `help:"Password" optional:""`
-	Database       string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
-	MiskDatasource string         `help:"Misk formatted config yaml file" optional:"" path:""`
+	Type             DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
+	Host             string         `help:"Hostname" optional:""`
+	EgressSocket     string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
+	Username         string         `help:"User" optional:""`
+	Password         string         `help:"Password" optional:""`
+	Database         string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
+	MiskDatasource   string         `help:"Misk formatted config yaml file" optional:"" path:""`
+	GrpcCustomHeader []string       `help:"Custom GRPC headers separated by ="`
 }
 
 type DataSourceType string
@@ -61,6 +63,22 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 	//logger.SetLevel(log.DebugLevel)
 	//grpclog.ReplaceGrpcLogger(log.NewEntry(logger))
 	var options []grpc.DialOption
+	for _, customHeader := range c.GrpcCustomHeader {
+		split := strings.Split(customHeader, "=")
+		if len(split) != 2 {
+			return nil, errors.Errorf("needs to be = separated key value pair: %s", customHeader)
+		}
+		key := split[0]
+		value := split[1]
+		options = append(options, grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			ctx = metadata.AppendToOutgoingContext(ctx, key, value)
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}))
+		options = append(options, grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			ctx = metadata.AppendToOutgoingContext(ctx, key, value)
+			return streamer(ctx, desc, cc, method, opts...)
+		}))
+	}
 	if c.EgressSocket != "" {
 		options = append(options,
 			grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {

@@ -18,6 +18,12 @@ namespace=${SQM_SERVICE}
 job_id=$(date +%s)
 k8s_shard=$(echo ${shard} | sed 's_-$_-hi_g' | sed 's_/-_/lo-_g' | sed 's_/_-_g' | sed 's/_/-/g')
 job=clone-${k8s_shard}-${job_id}
+dc=sjc1
+account_id=833102219637
+if [ "$SQM_ENV" == "production" ]; then
+  account_id=912375853625
+  dc=sjc2b
+fi
 
 cat <<EOF | kubectlrw -n $namespace apply -f -
 ---
@@ -37,7 +43,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: cloner
-        image: 833102219637.dkr.ecr.us-east-1.amazonaws.com/cloner:${sha}
+        image: ${account_id}.dkr.ecr.us-east-1.amazonaws.com/cloner:${sha}
         command: ["/cloner"]
         args:
         - "--source-type"
@@ -46,6 +52,8 @@ spec:
         - "@egress.sock"
         - "--source-host"
         - "${SQM_ENV}.franklin-vtgate.gns.square"
+        - "--source-grpc-custom-header"
+        - "X-SQ-ENVOY-GNS-LABEL=${dc}"
         - "--source-database"
         - "${shard}"
         - "--target-misk-datasource"

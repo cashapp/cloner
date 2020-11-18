@@ -13,7 +13,7 @@ kubectl() {
   sqm --admin kubectl -- "$@"
 }
 
-sha=61108431df270e9184dfaed9cb826f6f45dd2918
+sha=baef0c82979355089c22b271224f407c24489e18
 namespace=${SQM_SERVICE}
 job_id=$(date +%s)
 k8s_shard=$(echo ${shard} | sed 's_-$_-hi_g' | sed 's_/-_/lo-_g' | sed 's_/_-_g' | sed 's/_/-/g')
@@ -46,6 +46,7 @@ spec:
         image: ${account_id}.dkr.ecr.us-east-1.amazonaws.com/cloner:${sha}
         command: ["/cloner"]
         args:
+        - "clone"
         - "--source-type"
         - "vitess"
         - "--source-egress-socket"
@@ -55,10 +56,9 @@ spec:
         - "--source-grpc-custom-header"
         - "X-SQ-ENVOY-GNS-LABEL=${dc}"
         - "--source-database"
-        - "${shard}"
+        - "${shard}@replica"
         - "--target-misk-datasource"
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
-        - "clone"
         - "--reader-count"
         - "40"
         - "--table-parallelism"

@@ -27,7 +27,8 @@ type ReaderConfig struct {
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries      uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
 
-	Tables []string `help:"Tables to checksum (if unset will clone all of them)" optional:""`
+	Tables        []string `help:"Tables to checksum (if unset will clone all of them)" optional:"" name:"table"`
+	IgnoreColumns []string `help:"Columns to ignore, format: \"table_name.column_name\"" optional:"" name:"ignore-column"`
 }
 
 func inKubernetes() bool {

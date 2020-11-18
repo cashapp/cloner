@@ -18,7 +18,8 @@ func TestLoadTables(t *testing.T) {
 	assert.NoError(t, err)
 	conn, err := db.Conn(ctx)
 	assert.NoError(t, err)
-	tables, err := LoadTables(ctx, Vitess, conn, "customer", true, nil, 1*time.Second)
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}}
+	tables, err := LoadTables(ctx, config, Vitess, conn, "customer", true)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{

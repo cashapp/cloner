@@ -83,7 +83,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget), cmd.Tables, cmd.ReadTimeout)
+	tables, err := LoadTables(ctx, cmd.ReaderConfig, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget))
 	if err != nil {
 		return errors.WithStack(err)
 	}

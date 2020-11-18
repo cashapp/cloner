@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
@@ -29,11 +28,13 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, schema string, sharded bool, tableNames []string, timeout time.Duration) ([]*Table, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
+	ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 	defer cancel()
 
-	if len(tableNames) == 0 {
+	tableNames := config.Tables
+
+	if len(config.Tables) == 0 {
 		var err error
 		var rows *sql.Rows
 		if databaseType == MySQL {
@@ -81,7 +82,7 @@ func LoadTables(ctx context.Context, databaseType DataSourceType, db DBReader, s
 		if len(tableNames) > 0 && !contains(tableNames, tableName) {
 			continue
 		}
-		table, err := loadTable(ctx, databaseType, db, schema, tableName, sharded)
+		table, err := loadTable(ctx, config, databaseType, db, schema, tableName, sharded)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +104,7 @@ func contains(strings []string, str string) bool {
 	return false
 }
 
-func loadTable(ctx context.Context, databaseType DataSourceType, conn DBReader, schema, tableName string, sharded bool) (*Table, error) {
+func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn DBReader, schema, tableName string, sharded bool) (*Table, error) {
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {
@@ -130,10 +131,14 @@ func loadTable(ctx context.Context, databaseType DataSourceType, conn DBReader, 
 			return nil, errors.WithStack(err)
 		}
 		// There are duplicates with vttestserver because multiples shards run in the same mysqld
-		if !contains(columnNames, columnName) {
-			columnNames = append(columnNames, columnName)
-			columnNamesQuoted = append(columnNamesQuoted, fmt.Sprintf("`%s`", columnName))
+		if contains(columnNames, columnName) {
+			continue
 		}
+		if contains(config.IgnoreColumns, fmt.Sprintf("%s.%s", tableName, columnName)) {
+			continue
+		}
+		columnNames = append(columnNames, columnName)
+		columnNamesQuoted = append(columnNamesQuoted, fmt.Sprintf("`%s`", columnName))
 	}
 	// Close explicitly to check for close errors
 	err = rows.Close()

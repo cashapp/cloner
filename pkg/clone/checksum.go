@@ -5,7 +5,9 @@ import (
 	_ "net/http/pprof"
 	"time"
 
+	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/key"
 )
@@ -39,9 +41,9 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
+	prometheus.MustRegister(sqlstats.NewStatsCollector("source_reader", sourceReader))
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -50,9 +52,9 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
+	prometheus.MustRegister(sqlstats.NewStatsCollector("target_reader", targetReader))
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)

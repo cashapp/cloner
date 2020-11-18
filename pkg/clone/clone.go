@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -53,6 +55,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	defer sourceReader.Close()
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
+	prometheus.MustRegister(sqlstats.NewStatsCollector("source_reader", sourceReader))
 
 	writer, err := globals.Target.DB()
 	if err != nil {
@@ -61,6 +64,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	defer writer.Close()
 	// Refresh connections regularly so they don't go stale
 	writer.SetConnMaxLifetime(time.Minute)
+	prometheus.MustRegister(sqlstats.NewStatsCollector("target_writer", writer))
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -72,6 +76,7 @@ func (cmd *Clone) Run(globals Globals) error {
 	defer targetReader.Close()
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
+	prometheus.MustRegister(sqlstats.NewStatsCollector("target_reader", targetReader))
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)

@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/alecthomas/kong v0.2.11
 	github.com/cenkalti/backoff/v4 v4.1.0
+	github.com/dlmiddlecote/sqlstats v1.0.1
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/ory/dockertest/v3 v3.6.1

@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"strconv"
-	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
@@ -214,22 +213,24 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
-func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff, timeout time.Duration) error {
+func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
 	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 5), ctx)
-	err := backoff.Retry(func() error {
 
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	err := backoff.Retry(func() error {
 		// TODO start off by running a fast checksum query
 
-		ctx, cancel := context.WithTimeout(ctx, timeout)
+		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 
 		sourceStream, err := StreamChunk(ctx, source, chunk)
 		if err != nil {
+			logger.WithError(err).Warnf("failed to stream chunk from source")
 			return errors.Wrapf(err, "failed to stream chunk from source")
 		}
 		targetStream, err := StreamChunk(ctx, target, chunk)
 		if err != nil {
+			logger.WithError(err).Warnf("failed to stream chunk from target")
 			return errors.Wrapf(err, "failed to stream chunk from target")
 		}
 		if len(targetFilter) > 0 {
@@ -237,15 +238,18 @@ func diffChunk(ctx context.Context, source DBReader, target DBReader, targetFilt
 		}
 		err = StreamDiff(ctx, sourceStream, targetStream, diffs)
 		if err != nil {
+			logger.WithError(err).Warnf("failed to diff chunk")
 			return errors.WithStack(err)
 		}
-		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 
 		return nil
 	}, b)
+
 	if err != nil {
 		logger.Error(err)
 		return errors.WithStack(err)
 	}
+
+	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 	return nil
 }

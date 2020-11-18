@@ -101,7 +101,9 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.NoError(t, err)
 
 	clone := &Clone{
-		ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
+		ReaderConfig: ReaderConfig{
+			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		},
 		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)

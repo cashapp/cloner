@@ -99,13 +99,13 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 
 		switch batch.Type {
 		case Insert:
-			return insertBatch(ctx, tx, batch)
+			return insertBatch(ctx, logger, tx, batch)
 		case Delete:
-			return deleteBatch(ctx, tx, batch)
+			return deleteBatch(ctx, logger, tx, batch)
 		case Update:
-			return updateBatch(ctx, tx, batch)
+			return updateBatch(ctx, logger, tx, batch)
 		default:
-			log.Panicf("Unknown batch type %s", batch.Type)
+			logger.Panicf("Unknown batch type %s", batch.Type)
 			return nil
 		}
 	})
@@ -118,9 +118,9 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	return nil
 }
 
-func deleteBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
+func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	rows := batch.Rows
-	log.Debugf("deleting %d rows", len(rows))
+	logger.Debugf("deleting %d rows", len(rows))
 
 	table := batch.Table
 	questionMarks := make([]string, 0, len(rows))
@@ -136,13 +136,14 @@ func deleteBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
 	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
+		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
 	return nil
 }
 
-func insertBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
-	log.Debugf("inserting %d rows", len(batch.Rows))
+func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	logger.Debugf("inserting %d rows", len(batch.Rows))
 
 	table := batch.Table
 	columns := table.Columns
@@ -165,14 +166,15 @@ func insertBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
+		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
 	return nil
 }
 
-func updateBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
+func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	rows := batch.Rows
-	log.Debugf("updating %d rows", len(rows))
+	logger.Debugf("updating %d rows", len(rows))
 
 	table := batch.Table
 	columns := table.Columns
@@ -189,6 +191,7 @@ func updateBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {
+		logger.WithError(err).Warnf("could not prepare: %s", stmt)
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
 
@@ -203,6 +206,7 @@ func updateBatch(ctx context.Context, tx *sql.Tx, batch Batch) error {
 
 		_, err = prepared.ExecContext(ctx, args...)
 		if err != nil {
+			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 	}

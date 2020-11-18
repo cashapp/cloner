@@ -40,7 +40,9 @@ func TestChecksum(t *testing.T) {
 	assert.NoError(t, err)
 
 	checksum := &Checksum{
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		ReaderConfig: ReaderConfig{
+			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		},
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)

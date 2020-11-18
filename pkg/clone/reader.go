@@ -71,7 +71,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	})
 
 	// Diff each chunk as they are produced
-	diffs := make(chan Diff, cmd.QueueSize)
+	diffs := make(chan Diff)
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
@@ -83,7 +83,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			g.Go(func() error {
 				defer readerLimiter.Release(1)
 
-				err := diffChunk(ctx, source, target, targetFilter, chunk, diffs, cmd.ReadTimeout)
+				err := diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
 				return errors.WithStack(err)
 			})
 			chunkCount++

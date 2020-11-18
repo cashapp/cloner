@@ -11,13 +11,7 @@ import (
 )
 
 type Checksum struct {
-	QueueSize       int           `help:"Queue size of the chunk queue" default:"1000"`
-	ChunkSize       int           `help:"Size of the chunks to diff" default:"1000"`
-	ChunkerCount    int           `help:"Number of readers for chunks" default:"10"`
-	ReaderCount     int           `help:"Number of readers for diffing" default:"10"`
-	ReadTimeout     time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
-	ChunkingTimeout time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"15m"`
-	Tables          []string      `help:"Tables to checksum (if unset will clone all of them)" optional:""`
+	ReaderConfig
 }
 
 // Run applies the necessary changes to target to make it look like source
@@ -76,8 +70,8 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	chunks := make(chan Chunk, cmd.QueueSize)
-	diffs := make(chan Diff, cmd.QueueSize)
+	chunks := make(chan Chunk, cmd.ChunkSize)
+	diffs := make(chan Diff, cmd.ChunkSize)
 	g, ctx := errgroup.WithContext(ctx)
 
 	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time
@@ -105,7 +99,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 		for c := range chunks {
 			chunk := c
 			g.Go(func() error {
-				return diffChunk(ctx, sourceReader, targetReader, shardingSpec, chunk, diffs, cmd.ReadTimeout)
+				return diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, chunk, diffs)
 			})
 		}
 		err := g.Wait()

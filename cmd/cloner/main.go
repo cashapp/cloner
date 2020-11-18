@@ -3,15 +3,17 @@ package main
 import (
 	"github.com/alecthomas/kong"
 
-	"cloner/pkg/clone"
 	log "github.com/sirupsen/logrus"
+
+	"cloner/pkg/clone"
 )
 
 var cli struct {
 	clone.Globals
 
-	Clone clone.Clone `cmd:"" help:"Clone database."`
-	Ping  clone.Ping  `cmd:"" help:"Ping the databases"`
+	Clone    clone.Clone    `cmd:"" help:"Clone database."`
+	Checksum clone.Checksum `cmd:"" help:"Work In Progress! Checksum database."`
+	Ping     clone.Ping     `cmd:"" help:"Ping the databases"`
 }
 
 func main() {

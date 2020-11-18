@@ -18,22 +18,14 @@ import (
 )
 
 type Clone struct {
+	ReaderConfig
+
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
-
-	QueueSize int `help:"Size of internal queues, increase this number might increase throughput but does increases memory footprint" default:"10000"`
-
-	ChunkSize        int           `help:"Size of the chunks to diff" default:"1000"`
-	TableParallelism int           `help:"Number of tables to process concurrently" default:"10"`
-	ReaderCount      int           `help:"Number of reader connections" default:"20"`
-	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
-	ChunkingTimeout  time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"1h"`
 
 	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
 	WriterCount     int           `help:"Number of writer connections" default:"10"`
 	WriteRetryCount int           `help:"Number of retries" default:"5"`
 	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
-
-	Tables []string `help:"Tables to clone (if unset will clone all of them)" optional:""`
 }
 
 // Run applies the necessary changes to target to make it look like source

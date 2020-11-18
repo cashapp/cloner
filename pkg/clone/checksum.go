@@ -43,7 +43,9 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	}
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
-	prometheus.MustRegister(sqlstats.NewStatsCollector("source_reader", sourceReader))
+	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
+	prometheus.MustRegister(sourceReaderCollector)
+	defer prometheus.Unregister(sourceReaderCollector)
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -54,7 +56,9 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	}
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
-	prometheus.MustRegister(sqlstats.NewStatsCollector("target_reader", targetReader))
+	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
+	prometheus.MustRegister(targetReaderCollector)
+	defer prometheus.Unregister(targetReaderCollector)
 
 	// Load tables
 	sourceVitessTarget, err := parseTarget(globals.Source.Database)

@@ -228,11 +228,13 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 			logger.WithError(err).Warnf("failed to stream chunk from source")
 			return errors.Wrapf(err, "failed to stream chunk from source")
 		}
+		defer sourceStream.Close()
 		targetStream, err := StreamChunk(ctx, target, chunk)
 		if err != nil {
 			logger.WithError(err).Warnf("failed to stream chunk from target")
 			return errors.Wrapf(err, "failed to stream chunk from target")
 		}
+		defer targetStream.Close()
 		if len(targetFilter) > 0 {
 			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
 		}

@@ -13,7 +13,7 @@ kubectl() {
   sqm --admin kubectl -- "$@"
 }
 
-sha=baef0c82979355089c22b271224f407c24489e18
+sha=b78fedca90ba7aefee183d431e8fa168d6bc1013
 namespace=${SQM_SERVICE}
 job_id=$(date +%s)
 k8s_shard=$(echo ${shard} | sed 's_-$_-hi_g' | sed 's_/-_/lo-_g' | sed 's_/_-_g' | sed 's/_/-/g')
@@ -60,9 +60,11 @@ spec:
         - "--target-misk-datasource"
         - "/etc/secrets/db/${SQM_SERVICE}-tidb5_config.yaml"
         - "--reader-count"
-        - "40"
-        - "--table-parallelism"
+        - "20"
+        - "--writer-count"
         - "10"
+        - "--table-parallelism"
+        - "5"
         ports:
         - name: metrics
           containerPort: 9102

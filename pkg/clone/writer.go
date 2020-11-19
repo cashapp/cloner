@@ -194,6 +194,7 @@ func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 		logger.WithError(err).Warnf("could not prepare: %s", stmt)
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
+	defer prepared.Close()
 
 	for _, row := range rows {
 		args := make([]interface{}, 0, len(columns))

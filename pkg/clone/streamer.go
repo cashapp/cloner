@@ -27,6 +27,7 @@ type Row struct {
 type RowStream interface {
 	// Next returns the next row or nil if we're done
 	Next(context.Context) (*Row, error)
+	Close() error
 }
 
 type rowStream struct {
@@ -43,11 +44,11 @@ func newRowStream(table *Table, rows *sql.Rows) (*rowStream, error) {
 	return &rowStream{table, rows, columns}, nil
 }
 
-func (r *rowStream) Next(ctx context.Context) (*Row, error) {
-	if !r.rows.Next() {
+func (s *rowStream) Next(ctx context.Context) (*Row, error) {
+	if !s.rows.Next() {
 		return nil, nil
 	}
-	cols, err := r.rows.Columns()
+	cols, err := s.rows.Columns()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -59,35 +60,39 @@ func (r *rowStream) Next(ctx context.Context) (*Row, error) {
 
 	scanArgs := make([]interface{}, len(row))
 	for i := range row {
-		if i == r.table.IDColumnIndex {
+		if i == s.table.IDColumnIndex {
 			scanArgs[i] = &id
-		} else if i == r.table.ShardingColumnIndex {
+		} else if i == s.table.ShardingColumnIndex {
 			scanArgs[i] = &shardingID
 		} else {
 			scanArgs[i] = &row[i]
 		}
 	}
-	err = r.rows.Scan(scanArgs...)
+	err = s.rows.Scan(scanArgs...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	// If the id column is used as a sharding column we never put in the pointer to the shardingID local var
 	// in that case use the id as the shardingID
-	if r.table.IDColumnIndex == r.table.ShardingColumnIndex {
+	if s.table.IDColumnIndex == s.table.ShardingColumnIndex {
 		shardingID = id
 	}
 	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
-	row[r.table.IDColumnIndex] = id
-	if r.table.ShardingColumnIndex != -1 {
-		row[r.table.ShardingColumnIndex] = shardingID
+	row[s.table.IDColumnIndex] = id
+	if s.table.ShardingColumnIndex != -1 {
+		row[s.table.ShardingColumnIndex] = shardingID
 	}
 	return &Row{
-		Table:      r.table,
+		Table:      s.table,
 		ID:         id,
 		ShardingID: shardingID,
 		Data:       row,
 	}, nil
+}
+
+func (s *rowStream) Close() error {
+	return s.rows.Close()
 }
 
 type rejectStream struct {
@@ -95,16 +100,16 @@ type rejectStream struct {
 	reject func(row *Row) (bool, error)
 }
 
-func (f *rejectStream) Next(ctx context.Context) (*Row, error) {
+func (s *rejectStream) Next(ctx context.Context) (*Row, error) {
 	for {
-		next, err := f.source.Next(ctx)
+		next, err := s.source.Next(ctx)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
 		if next == nil {
 			return next, nil
 		}
-		reject, err := f.reject(next)
+		reject, err := s.reject(next)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -112,6 +117,10 @@ func (f *rejectStream) Next(ctx context.Context) (*Row, error) {
 			return next, nil
 		}
 	}
+}
+
+func (s *rejectStream) Close() error {
+	return s.source.Close()
 }
 
 func newRejectStream(stream RowStream, filter func(row *Row) (bool, error)) RowStream {

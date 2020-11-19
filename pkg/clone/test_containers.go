@@ -145,6 +145,7 @@ func startVitess() error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		defer rows.Close()
 		rows.Next()
 		return nil
 	}); err != nil {

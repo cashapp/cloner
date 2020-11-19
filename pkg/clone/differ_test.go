@@ -195,6 +195,10 @@ type testRowStreamer struct {
 	rows []testRow
 }
 
+func (t *testRowStreamer) Close() error {
+	return nil
+}
+
 func (t *testRowStreamer) Next(context.Context) (*Row, error) {
 	if len(t.rows) == 0 {
 		return nil, nil

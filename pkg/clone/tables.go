@@ -40,15 +40,20 @@ func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 		if databaseType == MySQL {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema = ?", schema)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			defer rows.Close()
 		} else if databaseType == Vitess {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema like ?",
 				fmt.Sprintf("vt_%s%%", schema))
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			defer rows.Close()
 		} else {
 			return nil, errors.Errorf("Not supported: %v", databaseType)
-		}
-		if err != nil {
-			return nil, errors.WithStack(err)
 		}
 		for rows.Next() {
 			var tableName string
@@ -111,16 +116,20 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		rows, err = conn.QueryContext(ctx,
 			"select column_name from information_schema.columns where table_schema = ? and table_name = ?",
 			schema, tableName)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		defer rows.Close()
 	} else if databaseType == Vitess {
 		rows, err = conn.QueryContext(ctx,
 			"select column_name from information_schema.columns where table_name = ? and table_schema like ?",
 			tableName, fmt.Sprintf("vt_%s%%", schema))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		defer rows.Close()
 	} else {
 		return nil, errors.Errorf("Not supported: %v", databaseType)
-	}
-	defer rows.Close()
-	if err != nil {
-		return nil, errors.WithStack(err)
 	}
 	var columnNames []string
 	var columnNamesQuoted []string

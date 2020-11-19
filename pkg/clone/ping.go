@@ -57,5 +57,10 @@ func (cmd *Ping) pingDatabase(ctx context.Context, config DBConfig) error {
 			return errors.WithStack(err)
 		}
 	}
+
+	err = tx.Rollback()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	return nil
 }

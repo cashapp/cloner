@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
 )
@@ -29,9 +30,23 @@ type Table struct {
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
-	ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
-	defer cancel()
+	var err error
+	var tables []*Table
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	err = backoff.Retry(func() error {
+		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
+		defer cancel()
 
+		tables, err = loadTables(ctx, config, databaseType, db, schema, sharded)
+		if len(tables) == 0 {
+			return errors.Errorf("no tables found")
+		}
+		return err
+	}, b)
+	return tables, err
+}
+
+func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
 	tableNames := config.Tables
 
 	if len(config.Tables) == 0 {

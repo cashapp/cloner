@@ -100,19 +100,20 @@ func TestCloneWithTargetData(t *testing.T) {
 	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
 	assert.NoError(t, err)
 
+	source.Database = "customer/-80@replica"
 	clone := &Clone{
 		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source,
+				Target: target,
+			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
 		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
-	source.Database = "customer/-80@replica"
-	err = clone.Run(Globals{
-		Source: source,
-		Target: target,
-	})
+	err = clone.Run()
 	assert.NoError(t, err)
 
 	// Sanity check the number of rows
@@ -128,13 +129,17 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
 
 	// Do a full checksum
-	checksum := &Checksum{}
+	checksum := &Checksum{
+		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source,
+				Target: target,
+			},
+		},
+	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
-	diffs, err := checksum.run(Globals{
-		Source: source,
-		Target: target,
-	})
+	diffs, err := checksum.run()
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }

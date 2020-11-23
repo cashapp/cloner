@@ -1,21 +1,18 @@
 package clone
 
 import (
-	"net/http"
-	"os"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
 )
 
-type Globals struct {
+type SourceTargetConfig struct {
 	Source DBConfig `help:"Database config of source to be copied from" prefix:"source-" embed:""`
 	Target DBConfig `help:"Database config of source to be copied from" prefix:"target-" embed:""`
 }
 
 // ReaderConfig are used to control the read side, shared between Clone and Checksum
 type ReaderConfig struct {
+	SourceTargetConfig
+
 	ChunkSize       int           `help:"Size of the chunks to diff" default:"10000"`
 	ChunkingTimeout time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"1h"`
 	ChunkerCount    int           `help:"Number of readers for chunks" default:"10"`
@@ -29,21 +26,4 @@ type ReaderConfig struct {
 
 	Tables        []string `help:"Tables to checksum (if unset will clone all of them)" optional:"" name:"table"`
 	IgnoreColumns []string `help:"Columns to ignore, format: \"table_name.column_name\"" optional:"" name:"ignore-column"`
-}
-
-func inKubernetes() bool {
-	return os.Getenv("KUBERNETES_PORT") != ""
-}
-
-func (globals Globals) startMetricsServer() {
-	go func() {
-		bindAddr := "localhost:9102"
-		if inKubernetes() {
-			bindAddr = ":9102"
-		}
-		log.Infof("Serving diagnostics on http://%s/metrics and http://%s/debug/pprof", bindAddr, bindAddr)
-		http.Handle("/metrics", promhttp.Handler())
-		err := http.ListenAndServe(bindAddr, nil)
-		log.Fatalf("%v", err)
-	}()
 }

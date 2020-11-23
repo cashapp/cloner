@@ -9,22 +9,24 @@ import (
 )
 
 type Ping struct {
+	SourceTargetConfig
+
 	Table string `help:"If set select a row from this table" optional:""`
 }
 
-func (cmd *Ping) Run(globals Globals) error {
+func (cmd *Ping) Run() error {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancelFunc()
 
 	log.Infof("pinging source")
-	err := cmd.pingDatabase(ctx, globals.Source)
+	err := cmd.pingDatabase(ctx, cmd.Source)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	log.Infof("success")
 
 	log.Infof("pinging target")
-	err = cmd.pingDatabase(ctx, globals.Target)
+	err = cmd.pingDatabase(ctx, cmd.Target)
 	if err != nil {
 		return errors.WithStack(err)
 	}

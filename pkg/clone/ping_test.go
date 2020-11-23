@@ -12,10 +12,11 @@ func TestPing(t *testing.T) {
 
 	ping := &Ping{
 		Table: "customers",
+		SourceTargetConfig: SourceTargetConfig{
+			Source: vitessContainer.Config(),
+			Target: tidbContainer.Config(),
+		},
 	}
-	err = ping.Run(Globals{
-		Source: vitessContainer.Config(),
-		Target: tidbContainer.Config(),
-	})
+	err = ping.Run()
 	assert.NoError(t, err)
 }

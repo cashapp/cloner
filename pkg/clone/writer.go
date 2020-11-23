@@ -119,6 +119,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 }
 
 func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
 	logger.Debugf("deleting %d rows", len(rows))
 
@@ -143,6 +144,7 @@ func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 }
 
 func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
 	table := batch.Table
@@ -173,6 +175,7 @@ func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 }
 
 func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	logger = logger.WithField("op", "update")
 	rows := batch.Rows
 	logger.Debugf("updating %d rows", len(rows))
 

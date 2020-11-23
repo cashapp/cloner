@@ -17,10 +17,8 @@ type Checksum struct {
 }
 
 // Run applies the necessary changes to target to make it look like source
-func (cmd *Checksum) Run(globals Globals) error {
-	globals.startMetricsServer()
-
-	diffs, err := cmd.run(globals)
+func (cmd *Checksum) Run() error {
+	diffs, err := cmd.run()
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -30,14 +28,14 @@ func (cmd *Checksum) Run(globals Globals) error {
 	return nil
 }
 
-func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
+func (cmd *Checksum) run() ([]Diff, error) {
 	var err error
 
 	// TODO timeout?
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sourceReader, err := globals.Source.ReaderDB()
+	sourceReader, err := cmd.Source.ReaderDB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -50,7 +48,7 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
 	// other writers to the target during the clone
-	targetReader, err := globals.Target.DB()
+	targetReader, err := cmd.Target.DB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -61,11 +59,11 @@ func (cmd *Checksum) run(globals Globals) ([]Diff, error) {
 	defer prometheus.Unregister(targetReaderCollector)
 
 	// Load tables
-	sourceVitessTarget, err := parseTarget(globals.Source.Database)
+	sourceVitessTarget, err := parseTarget(cmd.Source.Database)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	tables, err := LoadTables(ctx, cmd.ReaderConfig, globals.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget))
+	tables, err := LoadTables(ctx, cmd.ReaderConfig, cmd.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

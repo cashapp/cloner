@@ -41,15 +41,16 @@ func TestChecksum(t *testing.T) {
 
 	checksum := &Checksum{
 		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source,
+				Target: target,
+			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
-	diffs, err := checksum.run(Globals{
-		Source: source,
-		Target: target,
-	})
+	diffs, err := checksum.run()
 	assert.NoError(t, err)
 	assert.Equal(t, shardRowCount, len(diffs))
 }

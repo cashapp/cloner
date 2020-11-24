@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"strings"
 
 	"github.com/cenkalti/backoff/v4"
@@ -43,6 +44,8 @@ func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 		}
 		return err
 	}, b)
+	// Shuffle the tables so they are processed in random order (which spreads out load)
+	rand.Shuffle(len(tables), func(i, j int) { tables[i], tables[j] = tables[j], tables[i] })
 	return tables, err
 }
 

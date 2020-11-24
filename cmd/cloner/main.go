@@ -12,6 +12,9 @@ import (
 	"cloner/pkg/clone"
 )
 
+// TimestampFormat for Cash Platform.
+const TimestampFormat = `2006-01-02T15:04:05.000`
+
 var cli struct {
 	Clone    clone.Clone    `cmd:"" help:"Clone database."`
 	Checksum clone.Checksum `cmd:"" help:"Work In Progress! Checksum database."`
@@ -35,10 +38,33 @@ func startMetricsServer() {
 	}()
 }
 
+type utcFormatter struct {
+	log.Formatter
+}
+
+func (u utcFormatter) Format(e *log.Entry) ([]byte, error) {
+	e.Time = e.Time.UTC()
+	return u.Formatter.Format(e)
+}
+
+func setupLogFormat() {
+	// NOTE: We might want to consider setting "DataKey":true to prevent collisions.
+	jsonFormatter := &log.JSONFormatter{
+		FieldMap: log.FieldMap{
+			log.FieldKeyMsg:  "message",
+			log.FieldKeyTime: "timestamp",
+		},
+	}
+	jsonFormatter.TimestampFormat = TimestampFormat
+	formatter := &utcFormatter{jsonFormatter}
+	log.SetFormatter(formatter)
+}
+
 func main() {
 	ctx := kong.Parse(&cli)
 
 	startMetricsServer()
+	setupLogFormat()
 
 	// Call the Run() method of the selected parsed command.
 	err := ctx.Run()

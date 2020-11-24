@@ -61,7 +61,9 @@ After that we stream the results in parallel and execute a simple stream diffing
 
 ## Checksumming
 
-This tool can also be used to checksum across a replication boundary without any freezing in time.
+This tool can eventually also be used to checksum across a replication boundary without any freezing in time.
+
+This is not implemented yet!
 
 ```puml
 database A
@@ -69,6 +71,8 @@ database B
 
 A -r-> B : replication
 ```
+
+(plantuml doesn't render in github sadly)
 
 We divide each table into chunks as above. Then for each chunk we calculate the checksum and compare. If there is a difference it can mean two things:
  1. There is data corruption in that chunk or,

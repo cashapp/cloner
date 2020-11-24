@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
@@ -216,8 +217,9 @@ func coerceFloat64(value interface{}) (float64, error) {
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
 	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
 
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
-	err := backoff.Retry(func() error {
+	retriesLeft := config.ReadRetries
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
+	err := backoff.RetryNotify(func() error {
 		// TODO start off by running a fast checksum query
 
 		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
@@ -225,7 +227,6 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 
 		sourceStream, err := StreamChunk(ctx, source, chunk)
 		if err != nil {
-			logger.WithError(err).Warnf("failed to stream chunk from source")
 			return errors.Wrapf(err, "failed to stream chunk from source")
 		}
 		defer sourceStream.Close()
@@ -245,7 +246,11 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 		}
 
 		return nil
-	}, b)
+	}, b, func(err error, duration time.Duration) {
+		retriesLeft--
+		logger.WithError(err).Warnf("failed diffing, retrying in %s (retries left %d): %s",
+			duration, retriesLeft, err)
+	})
 
 	if err != nil {
 		logger.Error(err)

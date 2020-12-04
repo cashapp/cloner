@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -14,14 +14,9 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, g *errgroup.Group, writer *sql.DB, batch Batch) error {
-	err := writerLimiter.Acquire(ctx, 1)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, g *errgroup.Group, writer *sql.DB, batch Batch) {
 	g.Go(func() error {
-		defer writerLimiter.Release(1)
-		err := Write(ctx, cmd, writer, batch)
+		err := Write(ctx, cmd, writerLimiter, writer, batch)
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -34,14 +29,8 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphor
 			if strings.HasPrefix(err.Error(), "Error 1062:") {
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
-					err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
-					if err != nil {
-						return errors.WithStack(err)
-					}
+					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
+					scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
 					return nil
 				}
 			}
@@ -59,11 +48,8 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphor
 			logger.Errorf("failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
 			return errors.WithStack(err)
 		}
-
-		writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 		return nil
 	})
-	return nil
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {
@@ -88,27 +74,36 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
+func Write(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, db *sql.DB, batch Batch) error {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
-	err := autotx.TransactWithRetry(ctx, db, autotx.RetryOptions{
-		MaxRetries: cmd.WriteRetryCount,
-		BackOff:    newSimpleExponentialBackOff(5 * time.Minute).NextBackOff,
-	}, func(tx *sql.Tx) error {
+
+	defer writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
+	err := backoff.Retry(func() error {
+		err := writerLimiter.Acquire(ctx, 1)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer writerLimiter.Release(1)
+
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
+		return autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+			switch batch.Type {
+			case Insert:
+				return insertBatch(ctx, logger, tx, batch)
+			case Delete:
+				return deleteBatch(ctx, logger, tx, batch)
+			case Update:
+				return updateBatch(ctx, logger, tx, batch)
+			default:
+				logger.Panicf("Unknown batch type %s", batch.Type)
+				return nil
+			}
+		})
 
-		switch batch.Type {
-		case Insert:
-			return insertBatch(ctx, logger, tx, batch)
-		case Delete:
-			return deleteBatch(ctx, logger, tx, batch)
-		case Update:
-			return updateBatch(ctx, logger, tx, batch)
-		default:
-			logger.Panicf("Unknown batch type %s", batch.Type)
-			return nil
-		}
-	})
+	}, b)
 
 	if err != nil {
 		logger.Error(err)

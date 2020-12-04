@@ -26,7 +26,7 @@ type Clone struct {
 
 	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
 	WriterCount     int           `help:"Number of writer connections" default:"10"`
-	WriteRetryCount int           `help:"Number of retries" default:"5"`
+	WriteRetryCount uint64        `help:"Number of retries" default:"5"`
 	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
 }
 

@@ -125,11 +125,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 				inserts += size
 			}
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
-			if err != nil {
-				logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
-				return errors.WithStack(err)
-			}
+			scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
 		}
 		err := g.Wait()
 		if err != nil {

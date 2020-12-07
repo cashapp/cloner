@@ -9,12 +9,12 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, g *errgroup.Group, writer *sql.DB, batch Batch) {
+func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) {
 	g.Go(func() error {
 		err := Write(ctx, cmd, writerLimiter, writer, batch)
 
@@ -74,22 +74,24 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, db *sql.DB, batch Batch) error {
+func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) error {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
 	defer writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
 	err := backoff.Retry(func() error {
-		err := writerLimiter.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
+		token, ok := writerLimiter.Acquire(ctx)
+		if !ok {
+			if token != nil {
+				token.OnDropped()
+			}
+			return errors.Errorf("write limiter short circuited")
 		}
-		defer writerLimiter.Release(1)
 
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
-		return autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		err := autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 			switch batch.Type {
 			case Insert:
 				return insertBatch(ctx, logger, tx, batch)
@@ -102,6 +104,14 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter *semaphore.Weighted, d
 				return nil
 			}
 		})
+
+		if err != nil {
+			token.OnDropped()
+			return errors.WithStack(err)
+		}
+
+		token.OnSuccess()
+		return nil
 
 	}, b)
 

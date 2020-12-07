@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -36,7 +37,7 @@ func init() {
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")

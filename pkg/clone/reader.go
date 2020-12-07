@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
@@ -37,7 +36,7 @@ func init() {
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter core.Limiter, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
@@ -54,14 +53,8 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
-		err := readerLimiter.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer readerLimiter.Release(1)
-
 		logger := logger.WithField("task", "chunker")
-		err = GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
+		err := GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		if err != nil {
@@ -77,14 +70,8 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			err := readerLimiter.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
 			g.Go(func() error {
-				defer readerLimiter.Release(1)
-
-				err := diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
+				err := diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, readerLimiter, chunk, diffs)
 				return errors.WithStack(err)
 			})
 			chunkCount++

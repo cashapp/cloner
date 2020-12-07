@@ -9,9 +9,6 @@ import (
 
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
-	"github.com/platinummonkey/go-concurrency-limits/core"
-	"github.com/platinummonkey/go-concurrency-limits/limiter"
-	"github.com/platinummonkey/go-concurrency-limits/strategy"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -113,8 +110,8 @@ func (cmd *Clone) Run() error {
 	}
 	close(tableCh)
 
-	writerLimiter := cmd.makeWriteLimiter()
-	readerLimiter := semaphore.NewWeighted(int64(cmd.ReaderCount))
+	writerLimiter := makeLimiter("write_limiter")
+	readerLimiter := makeLimiter("read_limiter")
 
 	if cmd.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")
@@ -150,32 +147,6 @@ func (cmd *Clone) Run() error {
 		logger.Infof("full clone success")
 	}
 	return errors.WithStack(err)
-}
-
-type limitLogger struct {
-}
-
-func (l limitLogger) Debugf(msg string, params ...interface{}) {
-	log.Debugf(msg, params...)
-}
-
-func (l limitLogger) IsDebugEnabled() bool {
-	return log.IsLevelEnabled(log.DebugLevel)
-}
-
-func (cmd *Clone) makeWriteLimiter() core.Limiter {
-	limitStrategy := strategy.NewSimpleStrategy(10)
-	logger := limitLogger{}
-	defaultLimiter, err := limiter.NewDefaultLimiterWithDefaults(
-		"write_limiter",
-		limitStrategy,
-		logger,
-		core.EmptyMetricRegistryInstance,
-	)
-	if err != nil {
-		log.Panicf("failed to create limiter: %s", err)
-	}
-	return limiter.NewBlockingLimiter(defaultLimiter, 0, logger)
 }
 
 type stackTracer interface {

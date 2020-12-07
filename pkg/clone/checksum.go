@@ -97,13 +97,15 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		return nil
 	})
 
+	readerLimiter := makeLimiter("read_limiter")
+
 	// Forward chunks to differs
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
 			g.Go(func() error {
-				return diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, chunk, diffs)
+				return diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, readerLimiter, chunk, diffs)
 			})
 		}
 		err := g.Wait()

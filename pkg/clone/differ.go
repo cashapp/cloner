@@ -57,17 +57,6 @@ type Diff struct {
 func StreamDiff(source RowStream, target RowStream, diffs chan Diff) error {
 	var err error
 
-	// buffer all of the rows into memory so that we can't time out while reading even if we have to pause
-	// due to back pressure from the writer
-	source, err = buffer(source)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	target, err = buffer(target)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
 	advanceSource := true
 	advanceTarget := true
 
@@ -250,26 +239,19 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 			}
 		}()
 
-		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
-		defer cancel()
-
-		sourceStream, err := StreamChunk(timeoutCtx, source, chunk)
+		sourceStream, err := bufferChunk(ctx, config.ReadTimeout, source, "source", chunk)
 		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk from source")
+			return errors.WithStack(err)
 		}
-		defer sourceStream.Close()
-		targetStream, err := StreamChunk(timeoutCtx, target, chunk)
+		targetStream, err := bufferChunk(ctx, config.ReadTimeout, target, "target", chunk)
 		if err != nil {
-			logger.WithError(err).Warnf("failed to stream chunk from target")
-			return errors.Wrapf(err, "failed to stream chunk from target")
+			return errors.WithStack(err)
 		}
-		defer targetStream.Close()
 		if len(targetFilter) > 0 {
 			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
 		}
 		err = StreamDiff(sourceStream, targetStream, diffs)
 		if err != nil {
-			logger.WithError(err).Warnf("failed to diff chunk")
 			return errors.WithStack(err)
 		}
 
@@ -281,10 +263,26 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	})
 
 	if err != nil {
-		logger.Error(err)
 		return errors.WithStack(err)
 	}
 
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 	return nil
+}
+
+// bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
+// to pause due to back pressure from the writer
+func bufferChunk(ctx context.Context, timeout time.Duration, source DBReader, name string, chunk Chunk) (RowStream, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stream, err := StreamChunk(timeoutCtx, source, chunk)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
+	}
+	defer stream.Close()
+	buffered, err := buffer(stream)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
+	}
+	return buffered, nil
 }

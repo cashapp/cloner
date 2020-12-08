@@ -80,7 +80,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	})
 
 	// Batch up the diffs
-	batches := make(chan Batch, cmd.QueueSize)
+	batches := make(chan Batch)
 	g.Go(func() error {
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)

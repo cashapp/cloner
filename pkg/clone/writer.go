@@ -10,9 +10,32 @@ import (
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
+
+var (
+	writesProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_processed",
+			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+	writesTimer = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "writes_timer",
+			Help: "Total duration of writes (including retries and backoff).",
+		},
+		[]string{"table", "type"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(writesProcessed)
+	prometheus.MustRegister(writesTimer)
+}
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
 	token, ok := writerLimiter.Acquire(ctx)
@@ -98,6 +121,8 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
+	timer := prometheus.NewTimer(writesTimer.WithLabelValues(batch.Table.Name, string(batch.Type)))
+	defer timer.ObserveDuration()
 	defer writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)

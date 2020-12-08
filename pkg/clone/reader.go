@@ -21,18 +21,10 @@ var (
 		},
 		[]string{"table", "type"},
 	)
-	writesProcessed = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "writes_processed",
-			Help: "How many writes, partitioned by table and type (insert, update, delete).",
-		},
-		[]string{"table", "type"},
-	)
 )
 
 func init() {
 	prometheus.MustRegister(writesEnqueued)
-	prometheus.MustRegister(writesProcessed)
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)

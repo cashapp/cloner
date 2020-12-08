@@ -80,7 +80,7 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 	defer writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
-	err := backoff.Retry(func() error {
+	err := backoff.Retry(func() (err error) {
 		token, ok := writerLimiter.Acquire(ctx)
 		if !ok {
 			if token != nil {
@@ -88,10 +88,17 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 			}
 			return errors.Errorf("write limiter short circuited")
 		}
+		defer func() {
+			if err == nil {
+				token.OnSuccess()
+			} else {
+				token.OnDropped()
+			}
+		}()
 
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
-		err := autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 			switch batch.Type {
 			case Insert:
 				return insertBatch(ctx, logger, tx, batch)
@@ -106,11 +113,9 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 		})
 
 		if err != nil {
-			token.OnDropped()
 			return errors.WithStack(err)
 		}
 
-		token.OnSuccess()
 		return nil
 
 	}, b)

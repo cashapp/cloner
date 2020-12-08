@@ -220,10 +220,9 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 
 	retriesLeft := config.ReadRetries
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
-	err := backoff.RetryNotify(func() error {
+	err := backoff.RetryNotify(func() (err error) {
 		// TODO start off by running a fast checksum query
 
-		success := false
 		token, ok := readerLimiter.Acquire(ctx)
 		if !ok {
 			if token != nil {
@@ -232,7 +231,7 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 			return errors.Errorf("reader limiter short circuited")
 		}
 		defer func() {
-			if success {
+			if err == nil {
 				token.OnSuccess()
 			} else {
 				token.OnDropped()
@@ -261,8 +260,6 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 			logger.WithError(err).Warnf("failed to diff chunk")
 			return errors.WithStack(err)
 		}
-
-		success = true
 
 		return nil
 	}, b, func(err error, duration time.Duration) {

@@ -152,7 +152,6 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 	}, b)
 
 	if err != nil {
-		logger.Error(err)
 		return errors.WithStack(err)
 	}
 

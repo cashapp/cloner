@@ -1,7 +1,6 @@
 package clone
 
 import (
-	"context"
 	"sync"
 	"testing"
 
@@ -182,7 +181,7 @@ func TestStreamDiff(t *testing.T) {
 					result = append(result, toTestDiff(diff))
 				}
 			}()
-			err := StreamDiff(context.Background(), streamTestRows(test.source), streamTestRows(test.target), diffsChan)
+			err := StreamDiff(streamTestRows(test.source), streamTestRows(test.target), diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()
@@ -199,7 +198,7 @@ func (t *testRowStreamer) Close() error {
 	return nil
 }
 
-func (t *testRowStreamer) Next(context.Context) (*Row, error) {
+func (t *testRowStreamer) Next() (*Row, error) {
 	if len(t.rows) == 0 {
 		return nil, nil
 	}

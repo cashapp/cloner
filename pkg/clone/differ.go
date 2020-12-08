@@ -54,16 +54,28 @@ type Diff struct {
 }
 
 // StreamDiff sends the changes need to make target become exactly like source
-func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs chan Diff) error {
+func StreamDiff(source RowStream, target RowStream, diffs chan Diff) error {
+	var err error
+
+	// buffer all of the rows into memory so that we can't time out while reading even if we have to pause
+	// due to back pressure from the writer
+	source, err = buffer(source)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	target, err = buffer(target)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	advanceSource := true
 	advanceTarget := true
 
-	var err error
 	var sourceRow *Row
 	var targetRow *Row
 	for {
 		if advanceSource {
-			sourceRow, err = source.Next(ctx)
+			sourceRow, err = source.Next()
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -72,7 +84,7 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 			}
 		}
 		if advanceTarget {
-			targetRow, err = target.Next(ctx)
+			targetRow, err = target.Next()
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -238,15 +250,15 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 			}
 		}()
 
-		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
+		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 
-		sourceStream, err := StreamChunk(ctx, source, chunk)
+		sourceStream, err := StreamChunk(timeoutCtx, source, chunk)
 		if err != nil {
 			return errors.Wrapf(err, "failed to stream chunk from source")
 		}
 		defer sourceStream.Close()
-		targetStream, err := StreamChunk(ctx, target, chunk)
+		targetStream, err := StreamChunk(timeoutCtx, target, chunk)
 		if err != nil {
 			logger.WithError(err).Warnf("failed to stream chunk from target")
 			return errors.Wrapf(err, "failed to stream chunk from target")
@@ -255,7 +267,7 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 		if len(targetFilter) > 0 {
 			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
 		}
-		err = StreamDiff(ctx, sourceStream, targetStream, diffs)
+		err = StreamDiff(sourceStream, targetStream, diffs)
 		if err != nil {
 			logger.WithError(err).Warnf("failed to diff chunk")
 			return errors.WithStack(err)

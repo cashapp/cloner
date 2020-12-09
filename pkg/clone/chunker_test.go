@@ -140,6 +140,45 @@ func TestPeekingIdStreamer(t *testing.T) {
 	assert.Equal(t, queriedIds, pagedIds)
 }
 
+func TestChunkerEmptyTable(t *testing.T) {
+	err := startVitess()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+
+	err = deleteAllData(source)
+	assert.NoError(t, err)
+
+	source.Database = "customer/-80@replica"
+
+	chunks := make(chan Chunk)
+	var result []testChunk
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for chunk := range chunks {
+			result = append(result, toTestChunk(chunk))
+		}
+	}()
+
+	ctx := context.Background()
+	db, err := source.DB()
+	assert.NoError(t, err)
+	conns, err := OpenConnections(ctx, db, 1)
+	assert.NoError(t, err)
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10}
+	tables, err := LoadTables(ctx, config, source.Type, conns[0], "customer", true)
+	assert.NoError(t, err)
+
+	err = GenerateTableChunks(ctx, config, conns[0], tables[0], chunks)
+	assert.NoError(t, err)
+	close(chunks)
+	wg.Wait()
+
+	assert.Equal(t, 0, len(result))
+}
+
 func TestChunkerSingleRow(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)

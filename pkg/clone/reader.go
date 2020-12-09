@@ -45,12 +45,10 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
-		logger := logger.WithField("task", "chunker")
 		err := GenerateTableChunks(ctx, cmd.ReaderConfig, source, table, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		if err != nil {
-			logger.WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 		return nil

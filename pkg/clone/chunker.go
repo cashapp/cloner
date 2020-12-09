@@ -221,6 +221,9 @@ func GenerateTableChunks(
 	hasNext := true
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			return errors.WithStack(err)
 		}

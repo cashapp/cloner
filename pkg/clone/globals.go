@@ -13,9 +13,7 @@ type SourceTargetConfig struct {
 type ReaderConfig struct {
 	SourceTargetConfig
 
-	ChunkSize       int           `help:"Size of the chunks to diff" default:"10000"`
-	ChunkingTimeout time.Duration `help:"Timeout for the chunking (which can take a really long time)" default:"1h"`
-	ChunkerCount    int           `help:"Number of readers for chunks" default:"10"`
+	ChunkSize int `help:"Size of the chunks to diff" default:"5000"`
 
 	QueueSize int `help:"Queue size of the chunk queue" default:"10000"`
 

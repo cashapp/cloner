@@ -86,7 +86,7 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		for _, t := range tables {
 			table := t
 			g.Go(func() error {
-				return GenerateTableChunks(ctx, sourceReader, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
+				return GenerateTableChunks(ctx, cmd.ReaderConfig, sourceReader, table, chunks)
 			})
 		}
 		err := g.Wait()

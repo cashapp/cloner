@@ -8,7 +8,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
-	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"vitess.io/vitess/go/vt/proto/topodata"
@@ -216,28 +215,13 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
-func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, readerLimiter core.Limiter, chunk Chunk, diffs chan Diff) error {
+func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
 	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
 
 	retriesLeft := config.ReadRetries
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
-	err := backoff.RetryNotify(func() (err error) {
+	err := backoff.RetryNotify(func() error {
 		// TODO start off by running a fast checksum query
-
-		token, ok := readerLimiter.Acquire(ctx)
-		if !ok {
-			if token != nil {
-				token.OnDropped()
-			}
-			return errors.Errorf("reader limiter short circuited")
-		}
-		defer func() {
-			if err == nil {
-				token.OnSuccess()
-			} else {
-				token.OnDropped()
-			}
-		}()
 
 		sourceStream, err := bufferChunk(ctx, config.ReadTimeout, source, "source", chunk)
 		if err != nil {

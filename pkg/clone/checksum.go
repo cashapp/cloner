@@ -104,8 +104,23 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			g.Go(func() error {
-				return diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, readerLimiter, chunk, diffs)
+			token, ok := readerLimiter.Acquire(ctx)
+			if !ok {
+				if token != nil {
+					token.OnDropped()
+				}
+				return errors.Errorf("reader limiter short circuited")
+			}
+			g.Go(func() (err error) {
+				defer func() {
+					if err == nil {
+						token.OnSuccess()
+					} else {
+						token.OnDropped()
+					}
+				}()
+				err = diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, chunk, diffs)
+				return errors.WithStack(err)
 			})
 		}
 		err := g.Wait()

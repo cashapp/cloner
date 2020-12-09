@@ -62,8 +62,22 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			g.Go(func() error {
-				err := diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, readerLimiter, chunk, diffs)
+			token, ok := readerLimiter.Acquire(ctx)
+			if !ok {
+				if token != nil {
+					token.OnDropped()
+				}
+				return errors.Errorf("reader limiter short circuited")
+			}
+			g.Go(func() (err error) {
+				defer func() {
+					if err == nil {
+						token.OnSuccess()
+					} else {
+						token.OnDropped()
+					}
+				}()
+				err = diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
 				return errors.WithStack(err)
 			})
 			chunkCount++

@@ -36,7 +36,6 @@ func (cmd *Clone) Run() error {
 
 	var err error
 
-	// TODO timeout?
 	g, ctx := errgroup.WithContext(context.Background())
 
 	// Create synced reader conns

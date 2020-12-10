@@ -36,11 +36,27 @@ var (
 		},
 		[]string{"table"},
 	)
+	readTimer = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "read_timer",
+			Help: "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
+		},
+		[]string{"table", "from"},
+	)
+	diffTimer = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "diff_timer",
+			Help: "Total duration of diffing a chunk (including database reads).",
+		},
+		[]string{"table"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
+	prometheus.MustRegister(readTimer)
+	prometheus.MustRegister(diffTimer)
 }
 
 type Diff struct {
@@ -216,6 +232,9 @@ func coerceFloat64(value interface{}) (float64, error) {
 }
 
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
+	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	defer timer.ObserveDuration()
+
 	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
 
 	retriesLeft := config.ReadRetries
@@ -256,17 +275,19 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, timeout time.Duration, source DBReader, name string, chunk Chunk) (RowStream, error) {
+func bufferChunk(ctx context.Context, timeout time.Duration, source DBReader, from string, chunk Chunk) (RowStream, error) {
+	timer := prometheus.NewTimer(readTimer.WithLabelValues(chunk.Table.Name, from))
+	defer timer.ObserveDuration()
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	stream, err := StreamChunk(timeoutCtx, source, chunk)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
+		return nil, errors.Wrapf(err, "failed to stream chunk from %s", from)
 	}
 	defer stream.Close()
 	buffered, err := buffer(stream)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
+		return nil, errors.Wrapf(err, "failed to stream chunk from %s", from)
 	}
 	return buffered, nil
 }

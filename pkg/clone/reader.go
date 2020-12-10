@@ -7,25 +7,10 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
-	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
-
-var (
-	writesEnqueued = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "writes_enqueued",
-			Help: "How many writes, partitioned by table and type (insert, update, delete).",
-		},
-		[]string{"table", "type"},
-	)
-)
-
-func init() {
-	prometheus.MustRegister(writesEnqueued)
-}
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
 func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter core.Limiter, targetFilter []*topodata.KeyRange) error {
@@ -116,7 +101,6 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			case Insert:
 				inserts += size
 			}
-			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
 			if err != nil {
 				return errors.WithStack(err)

@@ -16,15 +16,29 @@ import (
 )
 
 var (
-	writesProcessed = prometheus.NewCounterVec(
+	writesRequested = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "writes_processed",
-			Help: "How many writes, partitioned by table and type (insert, update, delete).",
+			Name: "writes_requested",
+			Help: "How many writes (rows) have been requested, partitioned by table and type (insert, update, delete).",
 		},
 		[]string{"table", "type"},
 	)
-	writesTimer = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
+	writesSucceeded = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_succeeded",
+			Help: "How many writes (rows) have succeeded, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+	writesFailed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_errors",
+			Help: "How many writes (rows) have failed irrecoverably, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+	writesTimer = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
 			Name: "writes_timer",
 			Help: "Total duration of writes (including retries and backoff).",
 		},
@@ -33,11 +47,14 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(writesProcessed)
+	prometheus.MustRegister(writesRequested)
+	prometheus.MustRegister(writesSucceeded)
+	prometheus.MustRegister(writesFailed)
 	prometheus.MustRegister(writesTimer)
 }
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
+	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 	token, ok := writerLimiter.Acquire(ctx)
 	if !ok {
 		if token != nil {

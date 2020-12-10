@@ -64,10 +64,12 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 	}
 	g.Go(func() (err error) {
 		defer func() {
-			if err == nil {
-				token.OnSuccess()
-			} else {
-				token.OnDropped()
+			if token != nil {
+				if err == nil {
+					token.OnSuccess()
+				} else {
+					token.OnDropped()
+				}
 			}
 		}()
 		err = Write(ctx, cmd, writer, batch)
@@ -80,7 +82,11 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 			// If we fail to write due to a uniqueness constraint violation
 			// we'll split the batch so that we can write all the rows in the batch
 			// that are not conflicting
-			if strings.HasPrefix(err.Error(), "Error 1062:") {
+			if isUniquenessConstraintViolation(err) {
+				// Uniqueness constraint is treated as a successful write
+				// if not scheduling the new
+				token.OnSuccess()
+				token = nil
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
 					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
@@ -113,6 +119,10 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 	return nil
 }
 
+func isUniquenessConstraintViolation(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "Error 1062:")
+}
+
 func splitBatch(batch Batch) (Batch, Batch) {
 	rows := batch.Rows
 	size := len(rows)
@@ -135,15 +145,21 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
+func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
 	timer := prometheus.NewTimer(writesTimer.WithLabelValues(batch.Table.Name, string(batch.Type)))
 	defer timer.ObserveDuration()
-	defer writesProcessed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+	defer func() {
+		if err == nil {
+			writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+		} else {
+			writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+		}
+	}()
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
-	err := backoff.Retry(func() (err error) {
+	err = backoff.Retry(func() (err error) {
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
@@ -159,6 +175,11 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) error {
 				return nil
 			}
 		})
+
+		if isUniquenessConstraintViolation(err) {
+			// These should not be retried
+			return backoff.Permanent(err)
+		}
 
 		if err != nil {
 			return errors.WithStack(err)

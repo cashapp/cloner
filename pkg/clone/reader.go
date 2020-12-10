@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
@@ -21,22 +21,14 @@ var (
 		},
 		[]string{"table", "type"},
 	)
-	writesProcessed = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "writes_processed",
-			Help: "How many writes, partitioned by table and type (insert, update, delete).",
-		},
-		[]string{"table", "type"},
-	)
 )
 
 func init() {
 	prometheus.MustRegister(writesEnqueued)
-	prometheus.MustRegister(writesProcessed)
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter *semaphore.Weighted, readerLimiter *semaphore.Weighted, targetFilter []*topodata.KeyRange) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter core.Limiter, targetFilter []*topodata.KeyRange) error {
 	logger := log.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
@@ -53,18 +45,10 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk, cmd.QueueSize)
 	g.Go(func() error {
-		err := readerLimiter.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer readerLimiter.Release(1)
-
-		logger := logger.WithField("task", "chunker")
-		err = GenerateTableChunks(ctx, source, table, cmd.ChunkSize, cmd.ChunkingTimeout, chunks)
+		err := GenerateTableChunks(ctx, cmd.ReaderConfig, source, table, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		if err != nil {
-			logger.WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 		return nil
@@ -76,14 +60,22 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			err := readerLimiter.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
+			token, ok := readerLimiter.Acquire(ctx)
+			if !ok {
+				if token != nil {
+					token.OnDropped()
+				}
+				return errors.Errorf("reader limiter short circuited")
 			}
-			g.Go(func() error {
-				defer readerLimiter.Release(1)
-
-				err := diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
+			g.Go(func() (err error) {
+				defer func() {
+					if err == nil {
+						token.OnSuccess()
+					} else {
+						token.OnDropped()
+					}
+				}()
+				err = diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
 				return errors.WithStack(err)
 			})
 			chunkCount++
@@ -100,7 +92,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	})
 
 	// Batch up the diffs
-	batches := make(chan Batch, cmd.QueueSize)
+	batches := make(chan Batch)
 	g.Go(func() error {
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)
@@ -125,7 +117,10 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 				inserts += size
 			}
 			writesEnqueued.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-			scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
+			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 		}
 		err := g.Wait()
 		if err != nil {

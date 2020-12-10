@@ -24,9 +24,45 @@ type Row struct {
 	Data       []interface{}
 }
 
+type bufferStream struct {
+	rows []*Row
+}
+
+func (b *bufferStream) Next() (*Row, error) {
+	if len(b.rows) == 0 {
+		return nil, nil
+	}
+	row := b.rows[0]
+	b.rows = b.rows[1:]
+	return row, nil
+}
+
+func (b *bufferStream) Close() error {
+	// nothing to do here
+	return nil
+}
+
+// buffer buffers all of the rows into memory
+func buffer(stream RowStream) (RowStream, error) {
+	defer stream.Close()
+	var rows []*Row
+	for {
+		row, err := stream.Next()
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if row == nil {
+			break
+		}
+		rows = append(rows, row)
+	}
+	return &bufferStream{rows}, nil
+}
+
 type RowStream interface {
 	// Next returns the next row or nil if we're done
-	Next(context.Context) (*Row, error)
+	Next() (*Row, error)
+	// Close releases any potential underlying resources
 	Close() error
 }
 
@@ -44,7 +80,7 @@ func newRowStream(table *Table, rows *sql.Rows) (*rowStream, error) {
 	return &rowStream{table, rows, columns}, nil
 }
 
-func (s *rowStream) Next(ctx context.Context) (*Row, error) {
+func (s *rowStream) Next() (*Row, error) {
 	if !s.rows.Next() {
 		return nil, nil
 	}
@@ -100,9 +136,9 @@ type rejectStream struct {
 	reject func(row *Row) (bool, error)
 }
 
-func (s *rejectStream) Next(ctx context.Context) (*Row, error) {
+func (s *rejectStream) Next() (*Row, error) {
 	for {
-		next, err := s.source.Next(ctx)
+		next, err := s.source.Next()
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}

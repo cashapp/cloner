@@ -110,8 +110,8 @@ func (cmd *Clone) Run() error {
 	}
 	close(tableCh)
 
-	writerLimiter := semaphore.NewWeighted(int64(cmd.WriterCount))
-	readerLimiter := semaphore.NewWeighted(int64(cmd.ReaderCount))
+	writerLimiter := makeLimiter("write_limiter")
+	readerLimiter := makeLimiter("read_limiter")
 
 	if cmd.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")

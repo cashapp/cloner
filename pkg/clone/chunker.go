@@ -2,9 +2,12 @@ package clone
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"io"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -73,37 +76,158 @@ type Chunk struct {
 //	return nil
 //}
 
+type PeekingIdStreamer interface {
+	// Next returns next id and a boolean indicating if there is a next after this one
+	Next(context.Context) (int64, bool, error)
+}
+
+type peekingIdStreamer struct {
+	wrapped   IdStreamer
+	peeked    int64
+	hasPeeked bool
+}
+
+func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
+	var err error
+	if !p.hasPeeked {
+		// first time round load the first entry
+		p.peeked, err = p.wrapped.Next(ctx)
+		if err == io.EOF {
+			return p.peeked, false, err
+		} else {
+			if err != nil {
+				return p.peeked, false, errors.WithStack(err)
+			}
+		}
+		p.hasPeeked = true
+	}
+
+	next := p.peeked
+	hasNext := true
+
+	p.peeked, err = p.wrapped.Next(ctx)
+	if err == io.EOF {
+		hasNext = false
+	} else {
+		if err != nil {
+			return next, hasNext, errors.WithStack(err)
+		}
+	}
+	return next, hasNext, nil
+}
+
+type IdStreamer interface {
+	Next(context.Context) (int64, error)
+}
+
+type pagingStreamer struct {
+	conn         DBReader
+	timeout      time.Duration
+	first        bool
+	currentPage  []int64
+	currentIndex int
+	table        *Table
+	pageSize     int
+	retries      uint64
+}
+
+func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
+	if p.currentIndex == len(p.currentPage) {
+		var err error
+		p.currentPage, err = p.loadPage(ctx)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		p.currentIndex = 0
+	}
+	if len(p.currentPage) == 0 {
+		return 0, io.EOF
+	}
+	next := p.currentPage[p.currentIndex]
+	p.currentIndex++
+	return next, nil
+}
+
+func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err error) {
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), p.retries), ctx)
+	err = backoff.Retry(func() error {
+		ctx, cancel := context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+
+		result = make([]int64, 0, p.pageSize)
+		var err error
+		var rows *sql.Rows
+		if p.first {
+			p.first = false
+			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc limit %d",
+				p.table.IDColumn, p.table.Name, p.table.IDColumn, p.pageSize))
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer rows.Close()
+		} else {
+			lastId := p.currentPage[len(p.currentPage)-1]
+			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s > %d order by %s asc limit %d",
+				p.table.IDColumn, p.table.Name, p.table.IDColumn, lastId, p.table.IDColumn, p.pageSize))
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer rows.Close()
+		}
+		for rows.Next() {
+			var id int64
+			err := rows.Scan(&id)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			result = append(result, id)
+		}
+		return err
+	}, b)
+
+	return
+}
+
+func streamIds(conn DBReader, table *Table, timeout time.Duration, pageSize int, retries uint64) PeekingIdStreamer {
+	return &peekingIdStreamer{
+		wrapped: &pagingStreamer{
+			conn:         conn,
+			timeout:      timeout,
+			retries:      retries,
+			first:        true,
+			pageSize:     pageSize,
+			currentPage:  nil,
+			currentIndex: 0,
+			table:        table,
+		},
+	}
+}
+
 func GenerateTableChunks(
 	ctx context.Context,
+	config ReaderConfig,
 	conn DBReader,
 	table *Table,
-	chunkSize int,
-	chunkingTimeout time.Duration,
 	chunks chan Chunk,
 ) error {
-	ctx, cancel := context.WithTimeout(ctx, chunkingTimeout)
-	defer cancel()
+	chunkSize := config.ChunkSize
+	ids := streamIds(conn, table, config.ReadTimeout, chunkSize, config.ReadRetries)
 
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc",
-		table.IDColumn, table.Name, table.IDColumn))
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer rows.Close()
+	var err error
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
 	var id int64
-	next := rows.Next()
-	for next {
-		err := rows.Scan(&id)
+	hasNext := true
+	for hasNext {
+		id, hasNext, err = ids.Next(ctx)
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			return errors.WithStack(err)
 		}
-
 		currentChunkSize++
-
-		next = rows.Next()
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
@@ -112,7 +236,7 @@ func GenerateTableChunks(
 				Start: startId,
 				End:   id,
 				First: first,
-				Last:  !next,
+				Last:  !hasNext,
 				Size:  currentChunkSize,
 			}
 			// Next id should be the next start id

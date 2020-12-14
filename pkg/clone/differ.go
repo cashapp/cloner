@@ -235,35 +235,25 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()
 
-	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
+	// TODO start off by running fast checksum queries
 
-	retriesLeft := config.ReadRetries
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
-	err := backoff.RetryNotify(func() error {
-		// TODO start off by running a fast checksum query
+	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	targetStream, err := bufferChunk(ctx, config, target, "target", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if len(targetFilter) > 0 {
+		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
+	}
+	err = StreamDiff(sourceStream, targetStream, diffs)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
-		sourceStream, err := bufferChunk(ctx, config.ReadTimeout, source, "source", chunk)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		targetStream, err := bufferChunk(ctx, config.ReadTimeout, target, "target", chunk)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		if len(targetFilter) > 0 {
-			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
-		}
-		err = StreamDiff(sourceStream, targetStream, diffs)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		return nil
-	}, b, func(err error, duration time.Duration) {
-		retriesLeft--
-		logger.WithError(err).Warnf("failed diffing, retrying in %s (retries left %d): %s",
-			duration, retriesLeft, err)
-	})
+	return nil
 
 	if err != nil {
 		return errors.WithStack(err)
@@ -275,19 +265,32 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, timeout time.Duration, source DBReader, from string, chunk Chunk) (RowStream, error) {
-	timer := prometheus.NewTimer(readTimer.WithLabelValues(chunk.Table.Name, from))
-	defer timer.ObserveDuration()
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	stream, err := StreamChunk(timeoutCtx, source, chunk)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", from)
-	}
-	defer stream.Close()
-	buffered, err := buffer(stream)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", from)
-	}
-	return buffered, nil
+func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from string, chunk Chunk) (RowStream, error) {
+	var result RowStream
+
+	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
+	retriesLeft := config.ReadRetries
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
+	err := backoff.RetryNotify(func() error {
+		timer := prometheus.NewTimer(readTimer.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
+		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
+		defer cancel()
+		stream, err := StreamChunk(timeoutCtx, source, chunk)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from %s", from)
+		}
+		defer stream.Close()
+		result, err = buffer(stream)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from %s", from)
+		}
+		return nil
+	}, b, func(err error, duration time.Duration) {
+		retriesLeft--
+		logger.WithError(err).Warnf("failed reading chunk from %s, retrying in %s (retries left %d): %s",
+			from, duration, retriesLeft, err)
+	})
+
+	return result, err
 }

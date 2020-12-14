@@ -15,8 +15,6 @@ type ReaderConfig struct {
 
 	ChunkSize int `help:"Size of the chunks to diff" default:"5000"`
 
-	QueueSize int `help:"Queue size of the chunk queue" default:"10000"`
-
 	TableParallelism int           `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount      int           `help:"Number of reader connections" default:"20"`
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`

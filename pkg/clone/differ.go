@@ -253,13 +253,8 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 		return errors.WithStack(err)
 	}
 
-	return nil
-
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
 	return nil
 }
 

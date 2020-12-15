@@ -126,6 +126,9 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 		if strings.HasSuffix(tableName, "_seq") {
 			continue
 		}
+		if strings.HasSuffix(tableName, "_lookup") {
+			continue
+		}
 		if tableName == "schema_version" {
 			continue
 		}

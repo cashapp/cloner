@@ -47,8 +47,8 @@ func TestChunker(t *testing.T) {
 	ctx := context.Background()
 	db, err := source.DB()
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10}
-	tables, err := LoadTables(ctx, config, source)
+	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	err = GenerateTableChunks(ctx, config, db, tables[0], chunks)
 	assert.NoError(t, err)
@@ -110,8 +110,9 @@ func TestPeekingIdStreamer(t *testing.T) {
 	db, err := source.DB()
 	assert.NoError(t, err)
 
-	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10}
-	tables, err := LoadTables(ctx, config, source)
+	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10,
+		SourceTargetConfig: SourceTargetConfig{Source: source}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
 	queriedIds := make([]int64, 0, rowCount)
@@ -163,8 +164,9 @@ func TestChunkerEmptyTable(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10}
-	tables, err := LoadTables(ctx, config, source)
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10,
+		SourceTargetConfig: SourceTargetConfig{Source: source}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
 	err = GenerateTableChunks(ctx, config, conns[0], tables[0], chunks)
@@ -205,8 +207,9 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10}
-	tables, err := LoadTables(ctx, config, source)
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10,
+		SourceTargetConfig: SourceTargetConfig{Source: source}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
 	err = GenerateTableChunks(ctx, config, conns[0], tables[0], chunks)

@@ -9,7 +9,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
-	"vitess.io/vitess/go/vt/key"
 )
 
 type Checksum struct {
@@ -59,17 +58,13 @@ func (cmd *Checksum) run() ([]Diff, error) {
 	defer prometheus.Unregister(targetReaderCollector)
 
 	// Load tables
-	sourceVitessTarget, err := parseTarget(cmd.Source.Database)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	tables, err := LoadTables(ctx, cmd.ReaderConfig, cmd.Target)
+	tables, err := LoadTables(ctx, cmd.ReaderConfig)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	// Parse the keyrange on the source so that we can filter the target
-	shardingSpec, err := key.ParseShardingSpec(sourceVitessTarget.Shard)
+	shardingSpec, err := cmd.Source.ShardingKeyrange()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

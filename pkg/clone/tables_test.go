@@ -14,8 +14,9 @@ func TestLoadTables(t *testing.T) {
 
 	ctx := context.Background()
 
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}}
-	tables, err := LoadTables(ctx, config, vitessContainer.Config())
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"},
+		SourceTargetConfig: SourceTargetConfig{Source: vitessContainer.Config()}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{
@@ -37,8 +38,9 @@ func TestLoadTablesTiDB(t *testing.T) {
 
 	ctx := context.Background()
 
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}}
-	tables, err := LoadTables(ctx, config, tidbContainer.Config())
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"},
+		SourceTargetConfig: SourceTargetConfig{Source: tidbContainer.Config()}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{

@@ -30,8 +30,19 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig) ([]*Table, error) {
+func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	var err error
+
+	// If the source has keyspace use that, otherwise use the target schema
+	dbConfig := config.Target
+	sourceSchema, err := config.Source.Schema()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if sourceSchema != "" {
+		// TODO if using the source filter the tables with the target schema unless we're doing a consistent clone
+		dbConfig = config.Source
+	}
 
 	db, err := dbConfig.ReaderDB()
 	if err != nil {
@@ -57,23 +68,13 @@ func LoadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig) ([]
 }
 
 func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
-	sharded := false
-	schema := dbConfig.Schema()
-	if dbConfig.Type == Vitess {
-		if strings.Contains(schema, "/") {
-			sourceVitessTarget, err := parseTarget(schema)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			schema = sourceVitessTarget.Keyspace
-			sharded = isSharded(sourceVitessTarget)
-		} else {
-			// Remove the tablet type
-			last := strings.LastIndexAny(schema, "@")
-			if last != -1 {
-				schema = schema[0 : last-1]
-			}
-		}
+	sharded, err := dbConfig.IsSharded()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	schema, err := dbConfig.Schema()
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
 
 	tableNames := config.Tables

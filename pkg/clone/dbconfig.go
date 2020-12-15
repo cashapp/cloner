@@ -12,11 +12,14 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v2"
 	"software.sslmate.com/src/go-pkcs12"
+	"vitess.io/vitess/go/vt/key"
+	"vitess.io/vitess/go/vt/proto/query"
+	"vitess.io/vitess/go/vt/proto/topodata"
+	"vitess.io/vitess/go/vt/topo/topoproto"
 	"vitess.io/vitess/go/vt/vitessdriver"
 )
 
@@ -126,18 +129,109 @@ func (c DBConfig) String() string {
 	}
 }
 
-func (c DBConfig) Schema() string {
+func parseTarget(targetString string) (*query.Target, error) {
+	// Default tablet type is master.
+	target := &query.Target{
+		TabletType: topodata.TabletType_MASTER,
+	}
+	last := strings.LastIndexAny(targetString, "@")
+	if last != -1 {
+		// No need to check the error. UNKNOWN will be returned on
+		// error and it will fail downstream.
+		tabletType, err := topoproto.ParseTabletType(targetString[last+1:])
+		if err != nil {
+			return target, err
+		}
+		target.TabletType = tabletType
+		targetString = targetString[:last]
+	}
+	last = strings.LastIndexAny(targetString, "/:")
+	if last != -1 {
+		target.Shard = targetString[last+1:]
+		targetString = targetString[:last]
+	}
+	target.Keyspace = targetString
+	if target.Keyspace == "" {
+		return target, fmt.Errorf("no keyspace in: %v", targetString)
+	}
+	if target.Shard == "" {
+		return target, fmt.Errorf("no shard in: %v", targetString)
+	}
+	return target, nil
+}
+
+func (c DBConfig) Schema() (string, error) {
+	if c.Type == Vitess {
+		target, err := c.VitessTarget()
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		if target != nil {
+			return target.Keyspace, nil
+		}
+		schema := c.Database
+		if schema == "" {
+			return "", nil
+		}
+		// Remove the tablet type
+		last := strings.LastIndexAny(c.Database, "@")
+		if last == 0 {
+			return "", nil
+		}
+		if last != -1 {
+			schema = schema[0 : last-1]
+		}
+		return schema, nil
+	}
 	if c.Database != "" {
-		return c.Database
+		return c.Database, nil
 	}
 	if c.MiskDatasource != "" {
 		miskDatasource, err := parseMiskDatasource(c.MiskDatasource)
-		logrus.Panicf("failed to parse misk datasource: %v", err)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
 		for _, clusterConfig := range miskDatasource.DataSourceClusters {
-			return clusterConfig.Writer.Database
+			return clusterConfig.Writer.Database, nil
 		}
 	}
-	return ""
+	return "", nil
+}
+
+func (c DBConfig) ShardingKeyrange() ([]*topodata.KeyRange, error) {
+	target, err := c.VitessTarget()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if target != nil {
+		return key.ParseShardingSpec(target.Shard)
+	}
+	return nil, nil
+}
+
+func (c DBConfig) IsSharded() (bool, error) {
+	if c.Type == Vitess {
+		return false, nil
+	}
+	target, err := c.VitessTarget()
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	if target != nil {
+		return isSharded(target), nil
+	}
+	return false, nil
+}
+
+func (c DBConfig) VitessTarget() (*query.Target, error) {
+	if c.Type == Vitess && strings.Contains(c.Database, "/") {
+		target, err := parseTarget(c.Database)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return target, nil
+	}
+	return nil, nil
 }
 
 type miskDataSourceConfig struct {

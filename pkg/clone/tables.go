@@ -30,15 +30,22 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
+func LoadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig) ([]*Table, error) {
 	var err error
+
+	db, err := dbConfig.ReaderDB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer db.Close()
+
 	var tables []*Table
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
 	err = backoff.Retry(func() error {
 		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 
-		tables, err = loadTables(ctx, config, databaseType, db, schema, sharded)
+		tables, err = loadTables(ctx, config, dbConfig, db)
 		if len(tables) == 0 {
 			return errors.Errorf("no tables found")
 		}
@@ -49,20 +56,39 @@ func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 	return tables, err
 }
 
-func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
+func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
+	sharded := false
+	schema := dbConfig.Schema()
+	if dbConfig.Type == Vitess {
+		if strings.Contains(schema, "/") {
+			sourceVitessTarget, err := parseTarget(schema)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			schema = sourceVitessTarget.Keyspace
+			sharded = isSharded(sourceVitessTarget)
+		} else {
+			// Remove the tablet type
+			last := strings.LastIndexAny(schema, "@")
+			if last != -1 {
+				schema = schema[0 : last-1]
+			}
+		}
+	}
+
 	tableNames := config.Tables
 
 	if len(config.Tables) == 0 {
 		var err error
 		var rows *sql.Rows
-		if databaseType == MySQL {
+		if dbConfig.Type == MySQL {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema = ?", schema)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
 			defer rows.Close()
-		} else if databaseType == Vitess {
+		} else if dbConfig.Type == Vitess {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema like ?",
 				fmt.Sprintf("vt_%s%%", schema))
@@ -71,7 +97,7 @@ func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 			}
 			defer rows.Close()
 		} else {
-			return nil, errors.Errorf("Not supported: %v", databaseType)
+			return nil, errors.Errorf("Not supported: %v", dbConfig.Type)
 		}
 		for rows.Next() {
 			var tableName string
@@ -105,7 +131,7 @@ func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 		if len(tableNames) > 0 && !contains(tableNames, tableName) {
 			continue
 		}
-		table, err := loadTable(ctx, config, databaseType, db, schema, tableName, sharded)
+		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, sharded)
 		if err != nil {
 			return nil, err
 		}

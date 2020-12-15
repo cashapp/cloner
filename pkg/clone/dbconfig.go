@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v2"
@@ -107,7 +108,7 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 }
 
 func (c DBConfig) openMisk() (*sql.DB, error) {
-	config, err := parseConfig(c.MiskDatasource)
+	config, err := parseMiskDatasource(c.MiskDatasource)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -123,6 +124,20 @@ func (c DBConfig) String() string {
 	} else {
 		return fmt.Sprintf("%s/%s", c.Host, c.Database)
 	}
+}
+
+func (c DBConfig) Schema() string {
+	if c.Database != "" {
+		return c.Database
+	}
+	if c.MiskDatasource != "" {
+		miskDatasource, err := parseMiskDatasource(c.MiskDatasource)
+		logrus.Panicf("failed to parse misk datasource: %v", err)
+		for _, clusterConfig := range miskDatasource.DataSourceClusters {
+			return clusterConfig.Writer.Database
+		}
+	}
+	return ""
 }
 
 type miskDataSourceConfig struct {
@@ -146,7 +161,7 @@ type miskDataSourceClustersConfig struct {
 	DataSourceClusters map[string]miskDataSourceClusterConfig `yaml:"data_source_clusters"`
 }
 
-func parseConfig(path string) (*miskDataSourceClustersConfig, error) {
+func parseMiskDatasource(path string) (*miskDataSourceClustersConfig, error) {
 	data, err := ioutil.ReadFile(path) // nolint: gosec
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not open database configuration file %q", path)

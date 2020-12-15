@@ -82,11 +82,9 @@ func (cmd *Clone) Run() error {
 	defer prometheus.Unregister(targetReaderCollector)
 
 	// Load tables
-	sourceVitessTarget, err := parseTarget(cmd.Source.Database)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	tables, err := LoadTables(ctx, cmd.ReaderConfig, cmd.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget))
+	// TODO in consistent clone we should diff the schema of the source with the target,
+	//      for now we just use the target schema
+	tables, err := LoadTables(ctx, cmd.ReaderConfig, cmd.Target)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -94,6 +92,10 @@ func (cmd *Clone) Run() error {
 	logger := log.WithField("tables", len(tables))
 
 	// Parse the keyrange on the source so that we can filter the target
+	sourceVitessTarget, err := parseTarget(cmd.Source.Database)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	var shardingSpec []*topodata.KeyRange
 	if isSharded(sourceVitessTarget) {
 		shardingSpec, err = key.ParseShardingSpec(sourceVitessTarget.Shard)

@@ -193,3 +193,70 @@ func TestUnshardedClone(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }
+
+func TestCloneNoDiff(t *testing.T) {
+	err := startAll()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+	target := tidbContainer.Config()
+
+	rowCount := 1000
+	err = insertBunchaData(source, "Name", rowCount)
+	assert.NoError(t, err)
+
+	// Insert some stuff that matches
+	err = insertBunchaData(target, "Name", 50)
+	assert.NoError(t, err)
+	// Insert some stuff that DOES NOT match to trigger updates
+	err = insertBunchaData(target, "AnotherName", 50)
+	assert.NoError(t, err)
+	// The clone should not touch the rows in the right 80- shard
+	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
+	assert.NoError(t, err)
+
+	source.Database = "customer/-80@replica"
+	clone := &Clone{
+		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source,
+				Target: target,
+			},
+			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		},
+		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+		NoDiff:         true,
+	}
+	err = kong.ApplyDefaults(clone)
+	assert.NoError(t, err)
+	err = clone.Run()
+	assert.NoError(t, err)
+
+	// Sanity check the number of rows
+	sourceRowCount, err := countRows(source, "customers")
+	assert.NoError(t, err)
+	targetRowCount, err := countRowsShardFilter(target, "-80")
+	assert.NoError(t, err)
+	assert.Equal(t, sourceRowCount, targetRowCount)
+
+	// Check we didn't delete the rows in the right shard in the target
+	rightRowCountAfter, err := countRowsShardFilter(target, "80-")
+	assert.NoError(t, err)
+	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
+
+	// Do a full checksum
+	checksum := &Checksum{
+		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source,
+				Target: target,
+			},
+		},
+	}
+	err = kong.ApplyDefaults(checksum)
+	assert.NoError(t, err)
+	diffs, err := checksum.run()
+	assert.NoError(t, err)
+	// Nothing is deleted so some stuff will be left around
+	assert.Equal(t, 0, len(diffs))
+}

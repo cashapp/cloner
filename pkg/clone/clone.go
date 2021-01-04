@@ -18,6 +18,8 @@ type Clone struct {
 
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
+	NoDiff bool `help:"Clone without diffing" default:"false"`
+
 	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
 	WriterCount     int           `help:"Number of writer connections" default:"10"`
 	WriteRetryCount uint64        `help:"Number of retries" default:"5"`

@@ -239,6 +239,32 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
+// readChunk reads a chunk without diffing producing only insert diffs
+func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk Chunk, diffs chan Diff) error {
+	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	defer timer.ObserveDuration()
+
+	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for {
+		row, err := sourceStream.Next()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if row == nil {
+			break
+		}
+		readsProcessed.WithLabelValues(row.Table.Name, "source").Inc()
+		diffs <- Diff{Insert, row, nil}
+	}
+
+	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
+	return nil
+}
+
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()

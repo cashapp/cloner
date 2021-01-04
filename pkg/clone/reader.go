@@ -60,7 +60,11 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 						token.OnDropped()
 					}
 				}()
-				err = diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
+				if cmd.NoDiff {
+					err = readChunk(ctx, cmd.ReaderConfig, source, chunk, diffs)
+				} else {
+					err = diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
+				}
 				return errors.WithStack(err)
 			})
 			chunkCount++

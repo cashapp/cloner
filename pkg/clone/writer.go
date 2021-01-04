@@ -163,16 +163,20 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
-			switch batch.Type {
-			case Insert:
-				return insertBatch(ctx, logger, tx, batch)
-			case Delete:
-				return deleteBatch(ctx, logger, tx, batch)
-			case Update:
-				return updateBatch(ctx, logger, tx, batch)
-			default:
-				logger.Panicf("Unknown batch type %s", batch.Type)
-				return nil
+			if cmd.NoDiff {
+				return replaceBatch(ctx, logger, tx, batch)
+			} else {
+				switch batch.Type {
+				case Insert:
+					return insertBatch(ctx, logger, tx, batch)
+				case Delete:
+					return deleteBatch(ctx, logger, tx, batch)
+				case Update:
+					return updateBatch(ctx, logger, tx, batch)
+				default:
+					logger.Panicf("Unknown batch type %s", batch.Type)
+					return nil
+				}
 			}
 		})
 
@@ -213,6 +217,37 @@ func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 	}
 	stmt := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
+	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
+	if err != nil {
+		logger.WithError(err).Warnf("could not execute: %s", stmt)
+		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	return nil
+}
+
+func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	logger = logger.WithField("op", "insert")
+	logger.Debugf("inserting %d rows", len(batch.Rows))
+
+	table := batch.Table
+	columns := table.Columns
+	questionMarks := make([]string, 0, len(columns))
+	for range columns {
+		questionMarks = append(questionMarks, "?")
+	}
+	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
+
+	rows := batch.Rows
+	valueStrings := make([]string, 0, len(rows))
+	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
+	for _, row := range rows {
+		valueStrings = append(valueStrings, values)
+		for i := range columns {
+			valueArgs = append(valueArgs, row.Data[i])
+		}
+	}
+	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
+		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		logger.WithError(err).Warnf("could not execute: %s", stmt)

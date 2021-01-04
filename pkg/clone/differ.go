@@ -22,12 +22,12 @@ const (
 )
 
 var (
-	readsProcessed = prometheus.NewCounterVec(
+	chunksEnqueued = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "reads_processed",
-			Help: "How many rows read by table.",
+			Name: "chunks_enqueued",
+			Help: "How many chunks has been enqueued, partitioned by table.",
 		},
-		[]string{"table", "side"},
+		[]string{"table"},
 	)
 	chunksProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -35,6 +35,13 @@ var (
 			Help: "How many chunks has been processed, partitioned by table.",
 		},
 		[]string{"table"},
+	)
+	readsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "reads_processed",
+			Help: "How many rows read by table.",
+		},
+		[]string{"table", "side"},
 	)
 	readTimer = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
@@ -55,6 +62,7 @@ var (
 func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
+	prometheus.MustRegister(chunksProcessed)
 	prometheus.MustRegister(readTimer)
 	prometheus.MustRegister(diffTimer)
 }

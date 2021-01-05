@@ -116,7 +116,13 @@ func (c DBConfig) openMisk() (*sql.DB, error) {
 		return nil, errors.WithStack(err)
 	}
 	for _, clusterConfig := range config.DataSourceClusters {
-		return openMisk(clusterConfig.Writer)
+		writer := clusterConfig.Writer
+		// Let the database name from flags override if present
+		// TODO We should probably be able to override everything with command line flags
+		if c.Database != "" {
+			writer.Database = c.Database
+		}
+		return openMisk(writer)
 	}
 	return nil, errors.Errorf("No database found in %s: %v", c.MiskDatasource, config)
 }

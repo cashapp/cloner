@@ -23,6 +23,14 @@ var (
 		},
 		[]string{"table", "type"},
 	)
+	writesRowsAffected = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_rows_affected",
+			Help: "How many \"rows affected\" that have been returned from executed batch write statements, " +
+				"partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
 	writesSucceeded = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "writes_succeeded",
@@ -48,6 +56,7 @@ var (
 
 func init() {
 	prometheus.MustRegister(writesRequested)
+	prometheus.MustRegister(writesRowsAffected)
 	prometheus.MustRegister(writesSucceeded)
 	prometheus.MustRegister(writesFailed)
 	prometheus.MustRegister(writesTimer)
@@ -217,15 +226,23 @@ func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 	}
 	stmt := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
-	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
+	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	rowsAffected, err := result.RowsAffected()
+	// If we get an error we'll just ignore that...
+	if err != nil {
+		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
 	}
 	return nil
 }
 
 func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+	if batch.Type != Insert {
+		return fmt.Errorf("this method only handles inserts")
+	}
 	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
@@ -248,11 +265,17 @@ func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batc
 	}
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
+	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
+	rowsAffected, err := result.RowsAffected()
+	// If we get an error we'll just ignore that...
+	if err != nil {
+		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+	}
+
 	return nil
 }
 
@@ -279,10 +302,15 @@ func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	_, err := tx.ExecContext(ctx, stmt, valueArgs...)
+	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		// If we get an error we'll just ignore that...
+		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
 	}
 	return nil
 }
@@ -321,10 +349,15 @@ func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 		}
 		args = append(args, row.ID)
 
-		_, err = prepared.ExecContext(ctx, args...)
+		result, err := prepared.ExecContext(ctx, args...)
 		if err != nil {
 			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
+		}
+		rowsAffected, err := result.RowsAffected()
+		// If we get an error we'll just ignore that...
+		if err != nil {
+			writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
 		}
 	}
 	return nil

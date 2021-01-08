@@ -88,6 +88,8 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 				return errors.WithStack(err)
 			}
 
+			logger := log.WithField("table", batch.Table.Name).WithError(err)
+
 			// If we fail to write due to a uniqueness constraint violation
 			// we'll split the batch so that we can write all the rows in the batch
 			// that are not conflicting
@@ -110,9 +112,6 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 				}
 			}
 
-			logger := log.WithField("table", batch.Table.Name).
-				WithError(err)
-
 			if !cmd.Consistent {
 				// If we're doing a best effort clone we just give up on this batch
 				logger.Warnf("failed write batch after retries and backoff, "+
@@ -130,6 +129,10 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 
 func isUniquenessConstraintViolation(err error) bool {
 	return err != nil && strings.HasPrefix(err.Error(), "Error 1062:")
+}
+
+func isTableDoesntExist(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "Error 1146:")
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {
@@ -189,8 +192,8 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 			}
 		})
 
-		if isUniquenessConstraintViolation(err) {
-			// These should not be retried
+		// These should not be retried
+		if isUniquenessConstraintViolation(err) || isTableDoesntExist(err) {
 			return backoff.Permanent(err)
 		}
 

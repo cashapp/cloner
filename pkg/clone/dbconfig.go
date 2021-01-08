@@ -209,10 +209,11 @@ func (c DBConfig) ShardingKeyrange() ([]*topodata.KeyRange, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if target.Shard == "0" {
-		return nil, nil
-	}
 	if target != nil {
+		if target.Shard == "0" {
+			// This is also used (incorrectly) to indicate an unsharded keyspace
+			return nil, nil
+		}
 		return key.ParseShardingSpec(target.Shard)
 	}
 	return nil, nil

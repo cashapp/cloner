@@ -79,7 +79,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 
 	tableNames := config.Tables
 
-	if len(config.Tables) == 0 {
+	if len(tableNames) == 0 {
 		var err error
 		var rows *sql.Rows
 		if dbConfig.Type == MySQL {
@@ -107,7 +107,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 				return nil, errors.WithStack(err)
 			}
 			// There are duplicates with vttestserver because multiples shards run in the same mysqld
-			if !contains(tableNames, tableName) {
+			if !contains(tableNames, tableName) && !contains(config.IgnoreTables, tableName) {
 				tableNames = append(tableNames, tableName)
 			}
 		}

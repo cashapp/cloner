@@ -209,6 +209,9 @@ func (c DBConfig) ShardingKeyrange() ([]*topodata.KeyRange, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	if target.Shard == "0" {
+		return nil, nil
+	}
 	if target != nil {
 		return key.ParseShardingSpec(target.Shard)
 	}

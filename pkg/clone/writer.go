@@ -93,7 +93,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 			// If we fail to write due to a uniqueness constraint violation
 			// we'll split the batch so that we can write all the rows in the batch
 			// that are not conflicting
-			if isUniquenessConstraintViolation(err) {
+			if isConstraintViolation(err) {
 				// Uniqueness constraint is treated as a successful write
 				// if not scheduling the new
 				token.OnSuccess()
@@ -127,8 +127,12 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 	return nil
 }
 
-func isUniquenessConstraintViolation(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "Error 1062:")
+func isConstraintViolation(err error) bool {
+	return err != nil &&
+		// Uniqueness constraint error
+		strings.HasPrefix(err.Error(), "Error 1062:") &&
+		// Error 1292: Incorrect timestamp value: '0000-00-00'
+		strings.HasPrefix(err.Error(), "Error 1292:")
 }
 
 func isTableDoesntExist(err error) bool {
@@ -193,7 +197,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		})
 
 		// These should not be retried
-		if isUniquenessConstraintViolation(err) || isTableDoesntExist(err) {
+		if isConstraintViolation(err) || isTableDoesntExist(err) {
 			return backoff.Permanent(err)
 		}
 

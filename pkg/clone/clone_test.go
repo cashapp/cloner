@@ -258,5 +258,5 @@ func TestCloneNoDiff(t *testing.T) {
 	diffs, err := checksum.run()
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
-	assert.Equal(t, 0, len(diffs))
+	assert.Equal(t, 27, len(diffs))
 }

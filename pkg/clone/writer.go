@@ -270,7 +270,9 @@ func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batc
 			valueArgs = append(valueArgs, row.Data[i])
 		}
 	}
-	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
+	//stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
+	//	table.Name, table.ColumnList, strings.Join(valueStrings, ","))
+	stmt := fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES %s",
 		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {

@@ -20,10 +20,11 @@ type Clone struct {
 
 	NoDiff bool `help:"Clone without diffing" default:"false"`
 
-	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
-	WriterCount     int           `help:"Number of writer connections" default:"10"`
-	WriteRetryCount uint64        `help:"Number of retries" default:"5"`
-	WriteTimeout    time.Duration `help:"Timeout for each write" default:"30s"`
+	WriteBatchSize          int           `help:"Size of the write batch per transaction" default:"100"`
+	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`
+	WriterCount             int           `help:"Number of writer connections" default:"10"`
+	WriteRetryCount         uint64        `help:"Number of retries" default:"5"`
+	WriteTimeout            time.Duration `help:"Timeout for each write" default:"30s"`
 }
 
 // Run applies the necessary changes to target to make it look like source

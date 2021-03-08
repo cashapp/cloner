@@ -109,7 +109,8 @@ func TestCloneWithTargetData(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
@@ -171,7 +172,8 @@ func TestUnshardedClone(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
@@ -224,8 +226,9 @@ func TestCloneNoDiff(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
-		NoDiff:         true,
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		NoDiff:                  true,
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)

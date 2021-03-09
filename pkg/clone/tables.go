@@ -30,15 +30,33 @@ type Table struct {
 	ColumnList    string
 }
 
-func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
+func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	var err error
+
+	// If the source has keyspace use that, otherwise use the target schema
+	dbConfig := config.Target
+	sourceSchema, err := config.Source.Schema()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if sourceSchema != "" {
+		// TODO if using the source filter the tables with the target schema unless we're doing a consistent clone
+		dbConfig = config.Source
+	}
+
+	db, err := dbConfig.ReaderDB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer db.Close()
+
 	var tables []*Table
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
 	err = backoff.Retry(func() error {
 		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 
-		tables, err = loadTables(ctx, config, databaseType, db, schema, sharded)
+		tables, err = loadTables(ctx, config, dbConfig, db)
 		if len(tables) == 0 {
 			return errors.Errorf("no tables found")
 		}
@@ -49,20 +67,29 @@ func LoadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 	return tables, err
 }
 
-func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourceType, db DBReader, schema string, sharded bool) ([]*Table, error) {
+func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
+	sharded, err := dbConfig.IsSharded()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	schema, err := dbConfig.Schema()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	tableNames := config.Tables
 
-	if len(config.Tables) == 0 {
+	if len(tableNames) == 0 {
 		var err error
 		var rows *sql.Rows
-		if databaseType == MySQL {
+		if dbConfig.Type == MySQL {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema = ?", schema)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
 			defer rows.Close()
-		} else if databaseType == Vitess {
+		} else if dbConfig.Type == Vitess {
 			rows, err = db.QueryContext(ctx,
 				"select table_name from information_schema.tables where table_schema like ?",
 				fmt.Sprintf("vt_%s%%", schema))
@@ -71,7 +98,7 @@ func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 			}
 			defer rows.Close()
 		} else {
-			return nil, errors.Errorf("Not supported: %v", databaseType)
+			return nil, errors.Errorf("Not supported: %v", dbConfig.Type)
 		}
 		for rows.Next() {
 			var tableName string
@@ -80,7 +107,7 @@ func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 				return nil, errors.WithStack(err)
 			}
 			// There are duplicates with vttestserver because multiples shards run in the same mysqld
-			if !contains(tableNames, tableName) {
+			if !contains(tableNames, tableName) && !contains(config.IgnoreTables, tableName) {
 				tableNames = append(tableNames, tableName)
 			}
 		}
@@ -99,13 +126,16 @@ func loadTables(ctx context.Context, config ReaderConfig, databaseType DataSourc
 		if strings.HasSuffix(tableName, "_seq") {
 			continue
 		}
+		if strings.HasSuffix(tableName, "_lookup") {
+			continue
+		}
 		if tableName == "schema_version" {
 			continue
 		}
 		if len(tableNames) > 0 && !contains(tableNames, tableName) {
 			continue
 		}
-		table, err := loadTable(ctx, config, databaseType, db, schema, tableName, sharded)
+		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, sharded)
 		if err != nil {
 			return nil, err
 		}

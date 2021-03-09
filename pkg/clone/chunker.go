@@ -9,17 +9,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
-)
-
-var (
-	chunksEnqueued = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "chunks_enqueued",
-			Help: "How many chunks has been enqueued, partitioned by table.",
-		},
-		[]string{"table"},
-	)
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)

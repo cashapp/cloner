@@ -14,12 +14,33 @@ func TestLoadTables(t *testing.T) {
 
 	ctx := context.Background()
 
-	db, err := vitessContainer.Config().DB()
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"},
+		SourceTargetConfig: SourceTargetConfig{Source: vitessContainer.Config()}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
-	conn, err := db.Conn(ctx)
+	assert.Equal(t, []*Table{
+		{
+			Name:                "customers",
+			IDColumn:            "id",
+			IDColumnIndex:       0,
+			ShardingColumn:      "id",
+			ShardingColumnIndex: 0,
+			Columns:             []string{"id", "name"},
+			ColumnsQuoted:       []string{"`id`", "`name`"},
+			ColumnList:          "`id`,`name`",
+		},
+	}, tables)
+}
+
+func TestLoadTablesTiDB(t *testing.T) {
+	err := startTidb()
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}}
-	tables, err := LoadTables(ctx, config, Vitess, conn, "customer", true)
+
+	ctx := context.Background()
+
+	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"},
+		SourceTargetConfig: SourceTargetConfig{Source: tidbContainer.Config()}}
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{

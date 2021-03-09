@@ -16,6 +16,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v2"
 	"software.sslmate.com/src/go-pkcs12"
+	"vitess.io/vitess/go/vt/key"
+	"vitess.io/vitess/go/vt/proto/query"
+	"vitess.io/vitess/go/vt/proto/topodata"
+	"vitess.io/vitess/go/vt/topo/topoproto"
 	"vitess.io/vitess/go/vt/vitessdriver"
 )
 
@@ -107,12 +111,18 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 }
 
 func (c DBConfig) openMisk() (*sql.DB, error) {
-	config, err := parseConfig(c.MiskDatasource)
+	config, err := parseMiskDatasource(c.MiskDatasource)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	for _, clusterConfig := range config.DataSourceClusters {
-		return openMisk(clusterConfig.Writer)
+		writer := clusterConfig.Writer
+		// Let the database name from flags override if present
+		// TODO We should probably be able to override everything with command line flags
+		if c.Database != "" {
+			writer.Database = c.Database
+		}
+		return openMisk(writer)
 	}
 	return nil, errors.Errorf("No database found in %s: %v", c.MiskDatasource, config)
 }
@@ -123,6 +133,115 @@ func (c DBConfig) String() string {
 	} else {
 		return fmt.Sprintf("%s/%s", c.Host, c.Database)
 	}
+}
+
+func parseTarget(targetString string) (*query.Target, error) {
+	// Default tablet type is master.
+	target := &query.Target{
+		TabletType: topodata.TabletType_MASTER,
+	}
+	last := strings.LastIndexAny(targetString, "@")
+	if last != -1 {
+		// No need to check the error. UNKNOWN will be returned on
+		// error and it will fail downstream.
+		tabletType, err := topoproto.ParseTabletType(targetString[last+1:])
+		if err != nil {
+			return target, err
+		}
+		target.TabletType = tabletType
+		targetString = targetString[:last]
+	}
+	last = strings.LastIndexAny(targetString, "/:")
+	if last != -1 {
+		target.Shard = targetString[last+1:]
+		targetString = targetString[:last]
+	}
+	target.Keyspace = targetString
+	if target.Keyspace == "" {
+		return target, fmt.Errorf("no keyspace in: %v", targetString)
+	}
+	if target.Shard == "" {
+		return target, fmt.Errorf("no shard in: %v", targetString)
+	}
+	return target, nil
+}
+
+func (c DBConfig) Schema() (string, error) {
+	if c.Type == Vitess {
+		target, err := c.VitessTarget()
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		if target != nil {
+			return target.Keyspace, nil
+		}
+		schema := c.Database
+		if schema == "" {
+			return "", nil
+		}
+		// Remove the tablet type
+		last := strings.LastIndexAny(c.Database, "@")
+		if last == 0 {
+			return "", nil
+		}
+		if last != -1 {
+			schema = schema[0 : last-1]
+		}
+		return schema, nil
+	}
+	if c.Database != "" {
+		return c.Database, nil
+	}
+	if c.MiskDatasource != "" {
+		miskDatasource, err := parseMiskDatasource(c.MiskDatasource)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		for _, clusterConfig := range miskDatasource.DataSourceClusters {
+			return clusterConfig.Writer.Database, nil
+		}
+	}
+	return "", nil
+}
+
+func (c DBConfig) ShardingKeyrange() ([]*topodata.KeyRange, error) {
+	target, err := c.VitessTarget()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if target != nil {
+		if target.Shard == "0" {
+			// This is also used (incorrectly) to indicate an unsharded keyspace
+			return nil, nil
+		}
+		return key.ParseShardingSpec(target.Shard)
+	}
+	return nil, nil
+}
+
+func (c DBConfig) IsSharded() (bool, error) {
+	if c.Type == Vitess {
+		return false, nil
+	}
+	target, err := c.VitessTarget()
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	if target != nil {
+		return isSharded(target), nil
+	}
+	return false, nil
+}
+
+func (c DBConfig) VitessTarget() (*query.Target, error) {
+	if c.Type == Vitess && strings.Contains(c.Database, "/") {
+		target, err := parseTarget(c.Database)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return target, nil
+	}
+	return nil, nil
 }
 
 type miskDataSourceConfig struct {
@@ -146,7 +265,7 @@ type miskDataSourceClustersConfig struct {
 	DataSourceClusters map[string]miskDataSourceClusterConfig `yaml:"data_source_clusters"`
 }
 
-func parseConfig(path string) (*miskDataSourceClustersConfig, error) {
+func parseMiskDatasource(path string) (*miskDataSourceClustersConfig, error) {
 	data, err := ioutil.ReadFile(path) // nolint: gosec
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not open database configuration file %q", path)

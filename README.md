@@ -80,6 +80,8 @@ We divide each table into chunks as above. Then for each chunk we calculate the 
 
 In order to differentiate between the two possibilities we simply re-run the checksum a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
 
+We could use the same approach for calculating a checksum as pt-table-checksum: https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367
+
 ## Consistent clone
 
 To be able to start replication we have to clone the database at a specific GTID. To do that we have to either:

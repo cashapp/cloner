@@ -22,12 +22,12 @@ const (
 )
 
 var (
-	readsProcessed = prometheus.NewCounterVec(
+	chunksEnqueued = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "reads_processed",
-			Help: "How many rows read by table.",
+			Name: "chunks_enqueued",
+			Help: "How many chunks has been enqueued, partitioned by table.",
 		},
-		[]string{"table", "side"},
+		[]string{"table"},
 	)
 	chunksProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -36,11 +36,35 @@ var (
 		},
 		[]string{"table"},
 	)
+	readsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "reads_processed",
+			Help: "How many rows read by table.",
+		},
+		[]string{"table", "side"},
+	)
+	readTimer = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "read_timer",
+			Help: "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
+		},
+		[]string{"table", "from"},
+	)
+	diffTimer = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name: "diff_timer",
+			Help: "Total duration of diffing a chunk (including database reads).",
+		},
+		[]string{"table"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
+	prometheus.MustRegister(chunksProcessed)
+	prometheus.MustRegister(readTimer)
+	prometheus.MustRegister(diffTimer)
 }
 
 type Diff struct {
@@ -215,58 +239,87 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
+// readChunk reads a chunk without diffing producing only insert diffs
+func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk Chunk, diffs chan Diff) error {
+	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	defer timer.ObserveDuration()
+
+	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for {
+		row, err := sourceStream.Next()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if row == nil {
+			break
+		}
+		readsProcessed.WithLabelValues(row.Table.Name, "source").Inc()
+		diffs <- Diff{Insert, row, nil}
+	}
+
+	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
+	return nil
+}
+
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
-	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
+	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	defer timer.ObserveDuration()
 
-	retriesLeft := config.ReadRetries
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
-	err := backoff.RetryNotify(func() error {
-		// TODO start off by running a fast checksum query
+	// TODO start off by running fast checksum queries
 
-		sourceStream, err := bufferChunk(ctx, config.ReadTimeout, source, "source", chunk)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		targetStream, err := bufferChunk(ctx, config.ReadTimeout, target, "target", chunk)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		if len(targetFilter) > 0 {
-			targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
-		}
-		err = StreamDiff(sourceStream, targetStream, diffs)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		return nil
-	}, b, func(err error, duration time.Duration) {
-		retriesLeft--
-		logger.WithError(err).Warnf("failed diffing, retrying in %s (retries left %d): %s",
-			duration, retriesLeft, err)
-	})
-
+	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	targetStream, err := bufferChunk(ctx, config, target, "target", chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if len(targetFilter) > 0 {
+		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
+	}
+	err = StreamDiff(sourceStream, targetStream, diffs)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
 	return nil
 }
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, timeout time.Duration, source DBReader, name string, chunk Chunk) (RowStream, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	stream, err := StreamChunk(timeoutCtx, source, chunk)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
-	}
-	defer stream.Close()
-	buffered, err := buffer(stream)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk from %s", name)
-	}
-	return buffered, nil
+func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from string, chunk Chunk) (RowStream, error) {
+	var result RowStream
+
+	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
+	retriesLeft := config.ReadRetries
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
+	err := backoff.RetryNotify(func() error {
+		timer := prometheus.NewTimer(readTimer.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
+		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
+		defer cancel()
+		stream, err := StreamChunk(timeoutCtx, source, chunk)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from %s", from)
+		}
+		defer stream.Close()
+		result, err = buffer(stream)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk from %s", from)
+		}
+		return nil
+	}, b, func(err error, duration time.Duration) {
+		retriesLeft--
+		logger.WithError(err).Warnf("failed reading chunk from %s, retrying in %s (retries left %d): %s",
+			from, duration, retriesLeft, err)
+	})
+
+	return result, err
 }

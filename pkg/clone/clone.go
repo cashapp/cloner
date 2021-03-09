@@ -2,9 +2,7 @@ package clone
 
 import (
 	"context"
-	"fmt"
 	_ "net/http/pprof"
-	"strings"
 	"time"
 
 	"github.com/dlmiddlecote/sqlstats"
@@ -13,16 +11,14 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"vitess.io/vitess/go/vt/key"
-	"vitess.io/vitess/go/vt/proto/query"
-	"vitess.io/vitess/go/vt/proto/topodata"
-	"vitess.io/vitess/go/vt/topo/topoproto"
 )
 
 type Clone struct {
 	ReaderConfig
 
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
+
+	NoDiff bool `help:"Clone without diffing" default:"false"`
 
 	WriteBatchSize  int           `help:"Size of the write batches" default:"100"`
 	WriterCount     int           `help:"Number of writer connections" default:"10"`
@@ -36,7 +32,6 @@ func (cmd *Clone) Run() error {
 
 	var err error
 
-	// TODO timeout?
 	g, ctx := errgroup.WithContext(context.Background())
 
 	// Create synced reader conns
@@ -83,24 +78,18 @@ func (cmd *Clone) Run() error {
 	defer prometheus.Unregister(targetReaderCollector)
 
 	// Load tables
-	sourceVitessTarget, err := parseTarget(cmd.Source.Database)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	tables, err := LoadTables(ctx, cmd.ReaderConfig, cmd.Source.Type, sourceReader, sourceVitessTarget.Keyspace, isSharded(sourceVitessTarget))
+	// TODO in consistent clone we should diff the schema of the source with the target,
+	//      for now we just use the target schema
+	tables, err := LoadTables(ctx, cmd.ReaderConfig)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	logger := log.WithField("tables", len(tables))
 
-	// Parse the keyrange on the source so that we can filter the target
-	var shardingSpec []*topodata.KeyRange
-	if isSharded(sourceVitessTarget) {
-		shardingSpec, err = key.ParseShardingSpec(sourceVitessTarget.Shard)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	shardingSpec, err := cmd.Source.ShardingKeyrange()
+	if err != nil {
+		return errors.WithStack(err)
 	}
 
 	// Queue up tables to read
@@ -151,35 +140,4 @@ func (cmd *Clone) Run() error {
 
 type stackTracer interface {
 	StackTrace() errors.StackTrace
-}
-
-func parseTarget(targetString string) (*query.Target, error) {
-	// Default tablet type is master.
-	target := &query.Target{
-		TabletType: topodata.TabletType_MASTER,
-	}
-	last := strings.LastIndexAny(targetString, "@")
-	if last != -1 {
-		// No need to check the error. UNKNOWN will be returned on
-		// error and it will fail downstream.
-		tabletType, err := topoproto.ParseTabletType(targetString[last+1:])
-		if err != nil {
-			return target, err
-		}
-		target.TabletType = tabletType
-		targetString = targetString[:last]
-	}
-	last = strings.LastIndexAny(targetString, "/:")
-	if last != -1 {
-		target.Shard = targetString[last+1:]
-		targetString = targetString[:last]
-	}
-	target.Keyspace = targetString
-	if target.Keyspace == "" {
-		return target, fmt.Errorf("no keyspace in: %v", targetString)
-	}
-	if target.Shard == "" {
-		return target, fmt.Errorf("no shard in: %v", targetString)
-	}
-	return target, nil
 }

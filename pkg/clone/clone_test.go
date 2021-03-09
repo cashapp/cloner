@@ -109,7 +109,8 @@ func TestCloneWithTargetData(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
@@ -171,7 +172,8 @@ func TestUnshardedClone(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
@@ -224,8 +226,9 @@ func TestCloneNoDiff(t *testing.T) {
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		},
-		WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
-		NoDiff:         true,
+		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
+		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		NoDiff:                  true,
 	}
 	err = kong.ApplyDefaults(clone)
 	assert.NoError(t, err)
@@ -258,5 +261,5 @@ func TestCloneNoDiff(t *testing.T) {
 	diffs, err := checksum.run()
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
-	assert.Equal(t, 0, len(diffs))
+	assert.Equal(t, 27, len(diffs))
 }

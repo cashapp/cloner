@@ -180,15 +180,15 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 			if cmd.NoDiff {
-				return replaceBatch(ctx, logger, tx, batch)
+				return replaceBatch(ctx, cmd, logger, tx, batch)
 			} else {
 				switch batch.Type {
 				case Insert:
-					return insertBatch(ctx, logger, tx, batch)
+					return insertBatch(ctx, cmd, logger, tx, batch)
 				case Delete:
-					return deleteBatch(ctx, logger, tx, batch)
+					return deleteBatch(ctx, cmd, logger, tx, batch)
 				case Update:
-					return updateBatch(ctx, logger, tx, batch)
+					return updateBatch(ctx, cmd, logger, tx, batch)
 				default:
 					logger.Panicf("Unknown batch type %s", batch.Type)
 					return nil
@@ -216,7 +216,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 	return nil
 }
 
-func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
 	logger.Debugf("deleting %d rows", len(rows))
@@ -246,7 +246,7 @@ func deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 	return nil
 }
 
-func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	if batch.Type != Insert {
 		return fmt.Errorf("this method only handles inserts")
 	}
@@ -261,32 +261,52 @@ func replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batc
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	rows := batch.Rows
-	valueStrings := make([]string, 0, len(rows))
-	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
-	for _, row := range rows {
-		valueStrings = append(valueStrings, values)
-		for i := range columns {
-			valueArgs = append(valueArgs, row.Data[i])
+	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	for _, statementBatch := range statementBatches {
+		valueStrings := make([]string, 0, len(statementBatch))
+		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
+		for _, row := range statementBatch {
+			valueStrings = append(valueStrings, values)
+			for i := range columns {
+				valueArgs = append(valueArgs, row.Data[i])
+			}
 		}
-	}
-	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
-		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
-	if err != nil {
-		logger.WithError(err).Warnf("could not execute: %s", stmt)
-		return errors.Wrapf(err, "could not execute: %s", stmt)
-	}
-	rowsAffected, err := result.RowsAffected()
-	// If we get an error we'll just ignore that...
-	if err != nil {
-		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+		//stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
+		//	table.Name, table.ColumnList, strings.Join(valueStrings, ","))
+		stmt := fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES %s",
+			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
+		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
+		if err != nil {
+			logger.WithError(err).Warnf("could not execute: %s", stmt)
+			return errors.Wrapf(err, "could not execute: %s", stmt)
+		}
+		rowsAffected, err := result.RowsAffected()
+		// If we get an error we'll just ignore that...
+		if err != nil {
+			writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+		}
 	}
 
 	return nil
 }
 
-func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func batches(rows []*Row, limit int) [][]*Row {
+	size := len(rows)
+	batches := make([][]*Row, 0, size/limit)
+	for i := 0; i < size; i += limit {
+		batches = append(batches, rows[i:min(i+limit, size)])
+	}
+	return batches
+}
+
+func min(a, b int) int {
+	if a <= b {
+		return a
+	}
+	return b
+}
+
+func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
@@ -298,31 +318,33 @@ func insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	rows := batch.Rows
-	valueStrings := make([]string, 0, len(rows))
-	valueArgs := make([]interface{}, 0, len(rows)*len(columns))
-	for _, row := range rows {
-		valueStrings = append(valueStrings, values)
-		for i := range columns {
-			valueArgs = append(valueArgs, row.Data[i])
+	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	for _, statementBatch := range statementBatches {
+		valueStrings := make([]string, 0, len(statementBatch))
+		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
+		for _, row := range statementBatch {
+			valueStrings = append(valueStrings, values)
+			for i := range columns {
+				valueArgs = append(valueArgs, row.Data[i])
+			}
 		}
-	}
-	stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
-		table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
-	if err != nil {
-		logger.WithError(err).Warnf("could not execute: %s", stmt)
-		return errors.Wrapf(err, "could not execute: %s", stmt)
-	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		// If we get an error we'll just ignore that...
-		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+		stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
+		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
+		if err != nil {
+			logger.WithError(err).Warnf("could not execute: %s", stmt)
+			return errors.Wrapf(err, "could not execute: %s", stmt)
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			// If we get an error we'll just ignore that...
+			writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+		}
 	}
 	return nil
 }
 
-func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "update")
 	rows := batch.Rows
 	logger.Debugf("updating %d rows", len(rows))
@@ -337,6 +359,9 @@ func updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch
 			columnValues = append(columnValues, c)
 		}
 	}
+
+	// We don't use batch statements for updates, instead we prepare a single statement and do all the updates
+	// in the same transaction
 
 	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE `%s` = ?",
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)

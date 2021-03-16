@@ -31,6 +31,7 @@ type DBConfig struct {
 	Password         string         `help:"Password" optional:""`
 	Database         string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
 	MiskDatasource   string         `help:"Misk formatted config yaml file" optional:"" path:""`
+	MiskReader       bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
 	GrpcCustomHeader []string       `help:"Custom GRPC headers separated by ="`
 }
 
@@ -198,7 +199,11 @@ func (c DBConfig) Schema() (string, error) {
 			return "", errors.WithStack(err)
 		}
 		for _, clusterConfig := range miskDatasource.DataSourceClusters {
-			return clusterConfig.Writer.Database, nil
+			if c.MiskReader {
+				return clusterConfig.Reader.Database, nil
+			} else {
+				return clusterConfig.Writer.Database, nil
+			}
 		}
 	}
 	return "", nil

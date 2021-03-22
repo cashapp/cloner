@@ -43,17 +43,19 @@ var (
 		},
 		[]string{"table", "side"},
 	)
-	readTimer = prometheus.NewSummaryVec(
+	readDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
-			Name: "read_timer",
-			Help: "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
+			Name:       "read_duration",
+			Help:       "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
 		},
 		[]string{"table", "from"},
 	)
-	diffTimer = prometheus.NewSummaryVec(
+	diffDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
-			Name: "diff_timer",
-			Help: "Total duration of diffing a chunk (including database reads).",
+			Name:       "diff_duration",
+			Help:       "Total duration of diffing a chunk (including database reads).",
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
 		},
 		[]string{"table"},
 	)
@@ -63,8 +65,8 @@ func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
 	prometheus.MustRegister(chunksProcessed)
-	prometheus.MustRegister(readTimer)
-	prometheus.MustRegister(diffTimer)
+	prometheus.MustRegister(readDuration)
+	prometheus.MustRegister(diffDuration)
 }
 
 type Diff struct {
@@ -241,7 +243,7 @@ func coerceFloat64(value interface{}) (float64, error) {
 
 // readChunk reads a chunk without diffing producing only insert diffs
 func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk Chunk, diffs chan Diff) error {
-	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()
 
 	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
@@ -266,7 +268,7 @@ func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk 
 }
 
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
-	timer := prometheus.NewTimer(diffTimer.WithLabelValues(chunk.Table.Name))
+	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()
 
 	// TODO start off by running fast checksum queries
@@ -301,7 +303,7 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 	retriesLeft := config.ReadRetries
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
 	err := backoff.RetryNotify(func() error {
-		timer := prometheus.NewTimer(readTimer.WithLabelValues(chunk.Table.Name, from))
+		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
 		defer timer.ObserveDuration()
 		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()

@@ -59,6 +59,12 @@ var (
 		},
 		[]string{"table"},
 	)
+	readLimiterDelay = prometheus.NewSummary(
+		prometheus.SummaryOpts{
+			Name: "read_limiter_delay_duration",
+			Help: "Duration of back off from the concurrency limiter for reads.",
+		},
+	)
 )
 
 func init() {

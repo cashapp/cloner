@@ -99,6 +99,7 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
+			acquireTimer := prometheus.NewTimer(readLimiterDelay)
 			token, ok := readerLimiter.Acquire(ctx)
 			if !ok {
 				if token != nil {
@@ -106,6 +107,7 @@ func (cmd *Checksum) run() ([]Diff, error) {
 				}
 				return errors.Errorf("reader limiter short circuited")
 			}
+			acquireTimer.ObserveDuration()
 			g.Go(func() (err error) {
 				defer func() {
 					if err == nil {

@@ -53,6 +53,12 @@ var (
 		},
 		[]string{"table", "type"},
 	)
+	writeLimiterDelay = prometheus.NewSummary(
+		prometheus.SummaryOpts{
+			Name: "writer_limiter_delay_duration",
+			Help: "Duration of back off from the concurrency limiter.",
+		},
+	)
 )
 
 func init() {
@@ -61,10 +67,12 @@ func init() {
 	prometheus.MustRegister(writesSucceeded)
 	prometheus.MustRegister(writesFailed)
 	prometheus.MustRegister(writeDuration)
+	prometheus.MustRegister(writeLimiterDelay)
 }
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+	acquireTimer := prometheus.NewTimer(writeLimiterDelay)
 	token, ok := writerLimiter.Acquire(ctx)
 	if !ok {
 		if token != nil {
@@ -72,6 +80,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 		}
 		return errors.Errorf("write limiter short circuited")
 	}
+	acquireTimer.ObserveDuration()
 	g.Go(func() (err error) {
 		defer func() {
 			if token != nil {

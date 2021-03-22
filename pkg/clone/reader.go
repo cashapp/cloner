@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"github.com/prometheus/client_golang/prometheus"
 	"time"
 
 	"github.com/pkg/errors"
@@ -46,12 +47,14 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		for c := range chunks {
 			chunk := c
 			token, ok := readerLimiter.Acquire(ctx)
+			acquireTimer := prometheus.NewTimer(readLimiterDelay)
 			if !ok {
 				if token != nil {
 					token.OnDropped()
 				}
 				return errors.Errorf("reader limiter short circuited")
 			}
+			acquireTimer.ObserveDuration()
 			g.Go(func() (err error) {
 				defer func() {
 					if err == nil {

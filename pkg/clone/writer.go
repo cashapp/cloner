@@ -45,10 +45,11 @@ var (
 		},
 		[]string{"table", "type"},
 	)
-	writesTimer = prometheus.NewSummaryVec(
+	writeDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
-			Name: "writes_timer",
-			Help: "Total duration of writes (including retries and backoff).",
+			Name:       "write_duration",
+			Help:       "Total duration of writes (including retries and backoff).",
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
 		},
 		[]string{"table", "type"},
 	)
@@ -59,7 +60,7 @@ func init() {
 	prometheus.MustRegister(writesRowsAffected)
 	prometheus.MustRegister(writesSucceeded)
 	prometheus.MustRegister(writesFailed)
-	prometheus.MustRegister(writesTimer)
+	prometheus.MustRegister(writeDuration)
 }
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
@@ -164,7 +165,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	timer := prometheus.NewTimer(writesTimer.WithLabelValues(batch.Table.Name, string(batch.Type)))
+	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
 	defer timer.ObserveDuration()
 	defer func() {
 		if err == nil {

@@ -49,7 +49,7 @@ var (
 		prometheus.SummaryOpts{
 			Name:       "write_duration",
 			Help:       "Total duration of writes (including retries and backoff).",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table", "type"},
 	)

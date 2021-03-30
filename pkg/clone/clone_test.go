@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"vitess.io/vitess/go/vt/proto/topodata"
 
 	"github.com/alecthomas/kong"
 	"github.com/pkg/errors"
@@ -72,14 +73,24 @@ func countRowsShardFilter(target DBConfig, shard string) (int, error) {
 		if err != nil {
 			return 0, errors.WithStack(err)
 		}
-		if InShard(uint64(id), spec) {
+		if inShard(uint64(id), spec) {
 			rowCount++
 		}
 	}
 	return rowCount, err
 }
 
-func TestCloneWithTargetData(t *testing.T) {
+func inShard(id uint64, shard []*topodata.KeyRange) bool {
+	destination := key.DestinationKeyspaceID(vhash(id))
+	for _, keyRange := range shard {
+		if key.KeyRangeContains(keyRange, destination) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestShardedCloneWithTargetData(t *testing.T) {
 	err := startAll()
 	assert.NoError(t, err)
 
@@ -101,14 +112,23 @@ func TestCloneWithTargetData(t *testing.T) {
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
-	clone := &Clone{
-		ReaderConfig: ReaderConfig{
-			SourceTargetConfig: SourceTargetConfig{
-				Source: source,
-				Target: target,
-			},
-			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
 		},
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to -80
+					TargetWhere: "(vitess_hash(id) >> 56) < 128",
+				},
+			},
+		},
+	}
+	clone := &Clone{
+		ReaderConfig:            readerConfig,
 		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
@@ -131,12 +151,7 @@ func TestCloneWithTargetData(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		ReaderConfig: ReaderConfig{
-			SourceTargetConfig: SourceTargetConfig{
-				Source: source,
-				Target: target,
-			},
-		},
+		ReaderConfig: readerConfig,
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
@@ -218,14 +233,23 @@ func TestCloneNoDiff(t *testing.T) {
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
-	clone := &Clone{
-		ReaderConfig: ReaderConfig{
-			SourceTargetConfig: SourceTargetConfig{
-				Source: source,
-				Target: target,
-			},
-			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
 		},
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to -80
+					TargetWhere: "(vitess_hash(id) >> 56) < 128",
+				},
+			},
+		},
+	}
+	clone := &Clone{
+		ReaderConfig:            readerConfig,
 		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		NoDiff:                  true,
@@ -249,12 +273,7 @@ func TestCloneNoDiff(t *testing.T) {
 
 	// Do a full checksum
 	checksum := &Checksum{
-		ReaderConfig: ReaderConfig{
-			SourceTargetConfig: SourceTargetConfig{
-				Source: source,
-				Target: target,
-			},
-		},
+		ReaderConfig: readerConfig,
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)

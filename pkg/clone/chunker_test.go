@@ -164,7 +164,13 @@ func TestChunkerEmptyTable(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10,
+	config := ReaderConfig{ReadTimeout: time.Second,
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {},
+			},
+		},
+		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
@@ -207,7 +213,13 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.NoError(t, err)
 	conns, err := OpenConnections(ctx, db, 1)
 	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second, Tables: []string{"customers"}, ChunkSize: 10,
+	config := ReaderConfig{ReadTimeout: time.Second,
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {},
+			},
+		},
+		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)

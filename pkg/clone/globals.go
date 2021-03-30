@@ -9,6 +9,16 @@ type SourceTargetConfig struct {
 	Target DBConfig `help:"Database config of source to be copied from" prefix:"target-" embed:""`
 }
 
+type TableConfig struct {
+	IgnoreColumns []string `toml:"ignore_columns" help:"Ignore columns in table"`
+	TargetWhere   string   `toml:"extra_where_clause" help:"Extra where clause that is added on the target"`
+	SourceWhere   string   `toml:"extra_where_clause" help:"Extra where clause that is added on the target"`
+}
+
+type Config struct {
+	Tables map[string]TableConfig `toml:"table"`
+}
+
 // ReaderConfig are used to control the read side, shared between Clone and Checksum
 type ReaderConfig struct {
 	SourceTargetConfig
@@ -20,7 +30,5 @@ type ReaderConfig struct {
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries      uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
 
-	Tables        []string `help:"Tables to clone (if unset will clone all of them)" optional:"" name:"table"`
-	IgnoreTables  []string `help:"Tables to ignore" optional:"" name:"ignore-table"`
-	IgnoreColumns []string `help:"Columns to ignore, format: \"table_name.column_name\"" optional:"" name:"ignore-column"`
+	Config Config `kong:"-"`
 }

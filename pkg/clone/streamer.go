@@ -135,7 +135,7 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, extraWhereClau
 	} else {
 		where := ""
 		if extraWhereClause != "" {
-			where = fmt.Sprintf(" %s and", extraWhereClause)
+			where = fmt.Sprintf(" (%s) and", extraWhereClause)
 		}
 		if chunk.First {
 			logger.Debugf("reading chunk -%v", chunk.End)

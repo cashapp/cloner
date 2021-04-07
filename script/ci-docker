@@ -14,7 +14,7 @@ export STAGING_PUSH_TARGETS="${STAGING_PUSH_TARGETS:-"-s"}"
 export CASH_CI_ROOT=/tmp/cash-ci-gap
 if [ ! -d ${CASH_CI_ROOT} ]; then
   mkdir -p ${CASH_CI_ROOT}
-  git clone --depth=1 ssh://git@git.sqcorp.co/cash/cash-ci.git ${CASH_CI_ROOT}
+  git clone --depth=1 org-49461806@github.com:squareup/cash-ci.git ${CASH_CI_ROOT}
 else
   pushd ${CASH_CI_ROOT}
   git fetch origin
@@ -38,12 +38,15 @@ if [[ -n "$STAGING_BUILD" ]]; then
   PUSH="-l ${STAGING_PUSH_TARGETS}"
 elif [[ "$(uname)" == "Darwin" ]]; then
   DOCKER_TAG=$(echo ${APP_NAME} | tr -cd [:alnum:])
+elif [[ -n "${KOCHIKU_CANARY_BUILD:-}" ]]; then
+  DOCKER_TAG="$APP_NAME:$GIT_COMMIT"
+  PUSH="${STAGING_PUSH_TARGETS}"
 else
   DOCKER_TAG="$APP_NAME:$GIT_COMMIT"
   PUSH="-s -p"
 fi
 
-docker build -t "${DOCKER_TAG}" --build-arg SERVICE="${APP_NAME}" --build-arg GIT_COMMIT="${GIT_COMMIT}" .
+time docker build -t "${DOCKER_TAG}" --build-arg SERVICE="${APP_NAME}" --build-arg GIT_COMMIT="${GIT_COMMIT}" .
 if [[ -n "$PUSH" ]]; then
   if [[ -z "$STAGING_BUILD" && "$GIT_BRANCH" != "master" && -z "${KOCHIKU_CANARY_BUILD:-}" ]]; then
     echo "Skipping docker upload for $GIT_BRANCH."

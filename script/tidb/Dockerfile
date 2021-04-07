@@ -13,12 +13,12 @@ RUN wget -O /usr/local/bin/dumb-init https://github.com/Yelp/dumb-init/releases/
 RUN mkdir -p /go/src/github.com/pingcap
 WORKDIR /go/src/github.com/pingcap
 
-RUN git clone https://github.com/bezmax/tidb.git
+RUN git clone https://github.com/tirsen/tidb.git
 RUN git clone https://github.com/bezmax/tipb.git
 RUN git clone https://github.com/pingcap/parser.git
 
 WORKDIR /go/src/github.com/pingcap/tidb
-RUN git checkout bezmax-vitess-hash
+RUN git checkout vitess-hash-on-5
 WORKDIR /go/src/github.com/pingcap/tipb
 RUN git checkout bezmax-vitess-hash
 

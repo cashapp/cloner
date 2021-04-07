@@ -1,7 +1,10 @@
 package clone
 
 import (
+	"github.com/pkg/errors"
 	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 type SourceTargetConfig struct {
@@ -30,5 +33,19 @@ type ReaderConfig struct {
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries      uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
 
+	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
+
 	Config Config `kong:"-"`
+}
+
+// LoadConfig loads the ConfigFile if specified
+func (c *ReaderConfig) LoadConfig() error {
+	if c.ConfigFile == "" {
+		return nil
+	}
+	_, err := toml.DecodeFile(c.ConfigFile, &c.Config)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }

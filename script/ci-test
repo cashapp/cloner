@@ -8,9 +8,6 @@
 
 set -euxo pipefail
 
-# Temporarily build a tidb image with the vitess_hash function
-script/tidb/build
-
 export RUN_LIST="${RUN_LIST:-}"
 
 # Generate RUN_LIST when not running under Kochiku.

@@ -177,7 +177,7 @@ func startTidb() error {
 	}
 
 	// pulls an image, creates a container based on it and runs it
-	resource, err := pool.Run("tidb", "vitess-hash", []string{})
+	resource, err := pool.Run("pingcap/tidb", "v5.0.0-nightly", []string{})
 	if err != nil {
 		return errors.WithStack(err)
 	}

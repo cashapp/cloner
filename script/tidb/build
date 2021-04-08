@@ -1,3 +1,0 @@
-#!/bin/bash
-
-docker build -t tidb:vitess-hash script/tidb

@@ -20,10 +20,7 @@ type Table struct {
 	// ShardingColumnIndex is the index of the ID column in the Columns field
 	IDColumnIndex int
 
-	// ShardingColumn is the column we shard by
-	ShardingColumn string
-	// ShardingColumnIndex is the index of the sharding column in the Columns field
-	ShardingColumnIndex int
+	Config TableConfig
 
 	Columns       []string
 	ColumnsQuoted []string
@@ -68,18 +65,14 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 }
 
 func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
-	sharded, err := dbConfig.IsSharded()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
 	schema, err := dbConfig.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	tableNames := config.Tables
+	var tableNames []string
 
-	if len(tableNames) == 0 {
+	if len(config.Config.Tables) == 0 {
 		var err error
 		var rows *sql.Rows
 		if dbConfig.Type == MySQL {
@@ -107,13 +100,18 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 				return nil, errors.WithStack(err)
 			}
 			// There are duplicates with vttestserver because multiples shards run in the same mysqld
-			if !contains(tableNames, tableName) && !contains(config.IgnoreTables, tableName) {
+			if !contains(tableNames, tableName) {
 				tableNames = append(tableNames, tableName)
 			}
 		}
 		err = rows.Close()
 		if err != nil {
 			return nil, err
+		}
+	} else {
+		tableNames = make([]string, 0, len(config.Config.Tables))
+		for t := range config.Config.Tables {
+			tableNames = append(tableNames, t)
 		}
 	}
 	tables := make([]*Table, 0, len(tableNames))
@@ -132,10 +130,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 		if tableName == "schema_version" {
 			continue
 		}
-		if len(tableNames) > 0 && !contains(tableNames, tableName) {
-			continue
-		}
-		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, sharded)
+		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +152,7 @@ func contains(strings []string, str string) bool {
 	return false
 }
 
-func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn DBReader, schema, tableName string, sharded bool) (*Table, error) {
+func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn DBReader, schema, tableName string, tableConfig TableConfig) (*Table, error) {
 	var err error
 	var rows *sql.Rows
 	if databaseType == MySQL {
@@ -191,7 +186,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		if contains(columnNames, columnName) {
 			continue
 		}
-		if contains(config.IgnoreColumns, fmt.Sprintf("%s.%s", tableName, columnName)) {
+		if contains(tableConfig.IgnoreColumns, columnName) {
 			continue
 		}
 		columnNames = append(columnNames, columnName)
@@ -204,57 +199,19 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 	// Yep, hardcoded, maybe we should fix that at some point...
 	idColumn := "id"
-	var shardingColumn string
-	// Yes hardcoded for now, ideally we should look this up in the vschema
-	switch tableName {
-	case "customers":
-		shardingColumn = "id"
-	case "abuse_reports":
-		shardingColumn = "reporter_customer_id"
-	case "asset_verification_attempts":
-		shardingColumn = "target_customer_id"
-	case "archiver_messages":
-		shardingColumn = "entity_group_root_id"
-	case "campaign_donations":
-		shardingColumn = "sender_id"
-	case "campaign_enrollments":
-		shardingColumn = "candidate_customer_id"
-	case "evently_sharded_producer_actions":
-		shardingColumn = "local_shard_key"
-	case "referrals":
-		shardingColumn = "referrer_customer_id"
-	case "reward_payments":
-		shardingColumn = "recipient_id"
-	case "sharded_spooled_immediate_jobs":
-		shardingColumn = "cid"
-	case "sharded_spooled_future_jobs":
-		shardingColumn = "cid"
-	case "known_aliases":
-		shardingColumn = "source_customer_id"
-	default:
-		shardingColumn = "customer_id"
-	}
 	idColumnIndex := -1
-	shardingColumnIndex := -1
 	for i, column := range columnNames {
 		if column == idColumn {
 			idColumnIndex = i
 		}
-		if column == shardingColumn {
-			shardingColumnIndex = i
-		}
-	}
-	if sharded && shardingColumnIndex == -1 {
-		return nil, errors.Errorf("sharding column not found for %v", tableName)
 	}
 	return &Table{
-		Name:                tableName,
-		IDColumn:            idColumn,
-		IDColumnIndex:       idColumnIndex,
-		ShardingColumn:      shardingColumn,
-		ShardingColumnIndex: shardingColumnIndex,
-		Columns:             columnNames,
-		ColumnsQuoted:       columnNamesQuoted,
-		ColumnList:          strings.Join(columnNamesQuoted, ","),
+		Name:          tableName,
+		IDColumn:      idColumn,
+		IDColumnIndex: idColumnIndex,
+		Columns:       columnNames,
+		ColumnsQuoted: columnNamesQuoted,
+		ColumnList:    strings.Join(columnNamesQuoted, ","),
+		Config:        tableConfig,
 	}, nil
 }

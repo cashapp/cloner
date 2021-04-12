@@ -47,7 +47,7 @@ var (
 		prometheus.SummaryOpts{
 			Name:       "read_duration",
 			Help:       "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table", "from"},
 	)
@@ -55,7 +55,7 @@ var (
 		prometheus.SummaryOpts{
 			Name:       "diff_duration",
 			Help:       "Total duration of diffing a chunk (including database reads).",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001, 0.999: 0.001},
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table"},
 	)
@@ -287,9 +287,6 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	if len(targetFilter) > 0 {
-		targetStream = filterStreamByShard(targetStream, chunk.Table, targetFilter)
-	}
 	err = StreamDiff(sourceStream, targetStream, diffs)
 	if err != nil {
 		return errors.WithStack(err)
@@ -313,7 +310,14 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 		defer timer.ObserveDuration()
 		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
-		stream, err := StreamChunk(timeoutCtx, source, chunk)
+		extraWhereClause := ""
+		if from == "target" {
+			extraWhereClause = chunk.Table.Config.TargetWhere
+		}
+		if from == "source" {
+			extraWhereClause = chunk.Table.Config.SourceWhere
+		}
+		stream, err := StreamChunk(timeoutCtx, source, chunk, extraWhereClause)
 		if err != nil {
 			return errors.Wrapf(err, "failed to stream chunk from %s", from)
 		}

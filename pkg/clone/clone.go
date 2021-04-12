@@ -18,7 +18,7 @@ type Clone struct {
 
 	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
-	NoDiff bool `help:"Clone without diffing" default:"false"`
+	NoDiff bool `help:"Clone without diffing using INSERT IGNORE can be faster as a first pass" default:"false"`
 
 	WriteBatchSize          int           `help:"Size of the write batch per transaction" default:"100"`
 	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`

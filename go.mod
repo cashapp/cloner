@@ -3,6 +3,7 @@ module cloner
 go 1.14
 
 require (
+	github.com/BurntSushi/toml v0.3.1
 	github.com/alecthomas/kong v0.2.11
 	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/dlmiddlecote/sqlstats v1.0.1

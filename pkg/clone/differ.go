@@ -85,7 +85,7 @@ type Diff struct {
 }
 
 // StreamDiff sends the changes need to make target become exactly like source
-func StreamDiff(source RowStream, target RowStream, diffs chan Diff) error {
+func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs chan Diff) error {
 	var err error
 
 	advanceSource := true
@@ -118,11 +118,19 @@ func StreamDiff(source RowStream, target RowStream, diffs chan Diff) error {
 		if sourceRow != nil {
 			if targetRow != nil {
 				if sourceRow.ID < targetRow.ID {
-					diffs <- Diff{Insert, sourceRow, nil}
+					select {
+					case diffs <- Diff{Insert, sourceRow, nil}:
+					case <-ctx.Done():
+						return nil
+					}
 					advanceSource = true
 					advanceTarget = false
 				} else if sourceRow.ID > targetRow.ID {
-					diffs <- Diff{Delete, targetRow, nil}
+					select {
+					case diffs <- Diff{Delete, targetRow, nil}:
+					case <-ctx.Done():
+						return nil
+					}
 					advanceSource = false
 					advanceTarget = true
 				} else {
@@ -131,7 +139,11 @@ func StreamDiff(source RowStream, target RowStream, diffs chan Diff) error {
 						return errors.WithStack(err)
 					}
 					if !isEqual {
-						diffs <- Diff{Update, sourceRow, targetRow}
+						select {
+						case diffs <- Diff{Update, sourceRow, targetRow}:
+						case <-ctx.Done():
+							return nil
+						}
 						advanceSource = true
 						advanceTarget = true
 					} else {
@@ -287,7 +299,7 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	err = StreamDiff(sourceStream, targetStream, diffs)
+	err = StreamDiff(ctx, sourceStream, targetStream, diffs)
 	if err != nil {
 		return errors.WithStack(err)
 	}

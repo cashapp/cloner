@@ -29,9 +29,16 @@ type Clone struct {
 
 // Run applies the necessary changes to target to make it look like source
 func (cmd *Clone) Run() error {
+	var err error
+
 	start := time.Now()
 
-	var err error
+	err = cmd.ReaderConfig.LoadConfig()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	log.WithField("config", cmd).Infof("using config")
 
 	g, ctx := errgroup.WithContext(context.Background())
 

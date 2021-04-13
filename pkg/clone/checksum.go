@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	log "github.com/sirupsen/logrus"
 	_ "net/http/pprof"
 	"time"
 
@@ -17,6 +18,15 @@ type Checksum struct {
 
 // Run applies the necessary changes to target to make it look like source
 func (cmd *Checksum) Run() error {
+	var err error
+
+	err = cmd.ReaderConfig.LoadConfig()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	log.WithField("config", cmd).Infof("using config")
+
 	diffs, err := cmd.run()
 	if err != nil {
 		return errors.WithStack(err)

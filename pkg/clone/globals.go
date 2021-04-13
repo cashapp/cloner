@@ -2,6 +2,7 @@ package clone
 
 import (
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -40,12 +41,12 @@ type ReaderConfig struct {
 
 // LoadConfig loads the ConfigFile if specified
 func (c *ReaderConfig) LoadConfig() error {
-	if c.ConfigFile == "" {
-		return nil
-	}
-	_, err := toml.DecodeFile(c.ConfigFile, &c.Config)
-	if err != nil {
-		return errors.WithStack(err)
+	if c.ConfigFile != "" {
+		log.Infof("loading config from %v", c.ConfigFile)
+		_, err := toml.DecodeFile(c.ConfigFile, &c.Config)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 	return nil
 }

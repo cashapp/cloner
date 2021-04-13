@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -181,7 +182,7 @@ func TestStreamDiff(t *testing.T) {
 					result = append(result, toTestDiff(diff))
 				}
 			}()
-			err := StreamDiff(streamTestRows(test.source), streamTestRows(test.target), diffsChan)
+			err := StreamDiff(context.Background(), streamTestRows(test.source), streamTestRows(test.target), diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()

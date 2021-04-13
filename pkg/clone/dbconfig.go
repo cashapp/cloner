@@ -112,20 +112,31 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 }
 
 func (c DBConfig) openMisk() (*sql.DB, error) {
-	config, err := parseMiskDatasource(c.MiskDatasource)
+	endpoint, err := c.miskEndpoint()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	for _, clusterConfig := range config.DataSourceClusters {
-		writer := clusterConfig.Writer
-		// Let the database name from flags override if present
-		// TODO We should probably be able to override everything with command line flags
-		if c.Database != "" {
-			writer.Database = c.Database
-		}
-		return openMisk(writer)
+	// Let the database name from flags override if present
+	// TODO We should probably be able to override everything with command line flags
+	if c.Database != "" {
+		endpoint.Database = c.Database
 	}
-	return nil, errors.Errorf("No database found in %s: %v", c.MiskDatasource, config)
+	return openMisk(endpoint)
+}
+
+func (c DBConfig) miskEndpoint() (miskDataSourceConfig, error) {
+	config, err := parseMiskDatasource(c.MiskDatasource)
+	if err != nil {
+		return miskDataSourceConfig{}, errors.WithStack(err)
+	}
+	for _, clusterConfig := range config.DataSourceClusters {
+		if c.MiskReader {
+			return clusterConfig.Reader, nil
+		} else {
+			return clusterConfig.Writer, nil
+		}
+	}
+	return miskDataSourceConfig{}, errors.Errorf("No database found in %s: %v", c.MiskDatasource, config)
 }
 
 func (c DBConfig) String() string {
@@ -194,17 +205,11 @@ func (c DBConfig) Schema() (string, error) {
 		return c.Database, nil
 	}
 	if c.MiskDatasource != "" {
-		miskDatasource, err := parseMiskDatasource(c.MiskDatasource)
+		endpoint, err := c.miskEndpoint()
 		if err != nil {
 			return "", errors.WithStack(err)
 		}
-		for _, clusterConfig := range miskDatasource.DataSourceClusters {
-			if c.MiskReader {
-				return clusterConfig.Reader.Database, nil
-			} else {
-				return clusterConfig.Writer.Database, nil
-			}
-		}
+		return endpoint.Database, nil
 	}
 	return "", nil
 }

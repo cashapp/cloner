@@ -38,6 +38,8 @@ func (cmd *Clone) Run() error {
 		return errors.WithStack(err)
 	}
 
+	log.WithField("config", cmd).Infof("using config")
+
 	g, ctx := errgroup.WithContext(context.Background())
 
 	// Create synced reader conns

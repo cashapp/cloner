@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	log "github.com/sirupsen/logrus"
 	_ "net/http/pprof"
 	"time"
 
@@ -23,6 +24,8 @@ func (cmd *Checksum) Run() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+
+	log.WithField("config", cmd).Infof("using config")
 
 	diffs, err := cmd.run()
 	if err != nil {

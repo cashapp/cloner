@@ -2,8 +2,10 @@ package clone
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -289,7 +291,21 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()
 
-	// TODO start off by running fast checksum queries
+	if config.UseCRC32Checksum {
+		// start off by running a fast checksum query
+		sourceChecksum, err := checksumChunk(ctx, "source", source, chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		targetChecksum, err := checksumChunk(ctx, "target", target, chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if sourceChecksum == targetChecksum {
+			// Checksums match, no need to do any further diffing
+			return nil
+		}
+	}
 
 	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
 	if err != nil {
@@ -307,6 +323,31 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 
 	return nil
+}
+
+func checksumChunk(ctx context.Context, from string, reader DBReader, chunk Chunk) (int64, error) {
+	extraWhereClause := ""
+	if from == "target" {
+		extraWhereClause = chunk.Table.Config.TargetWhere
+	}
+	if from == "source" {
+		extraWhereClause = chunk.Table.Config.SourceWhere
+	}
+	sql := fmt.Sprintf("SELECT BIT_XOR(CRC32(CONCAT_WS(' ', %s))) FROM `%s` %s",
+		strings.Join(chunk.Table.ColumnsQuoted, ", "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+	rows, err := reader.QueryContext(ctx, sql)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	if !rows.Next() {
+		return 0, errors.Errorf("no checksum result")
+	}
+	var checksum int64
+	err = rows.Scan(&checksum)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	return checksum, nil
 }
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have

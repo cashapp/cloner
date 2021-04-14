@@ -34,6 +34,8 @@ type ReaderConfig struct {
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries      uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
 
+	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
+
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 
 	Config Config `kong:"-"`

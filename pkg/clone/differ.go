@@ -72,7 +72,7 @@ var (
 			Help:       "Duration of running the crc32 pre-diffing check.",
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
-		[]string{"table"},
+		[]string{"table", "from"},
 	)
 	diffDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{

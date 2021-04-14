@@ -66,6 +66,14 @@ var (
 		},
 		[]string{"table", "from"},
 	)
+	crc32Duration = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "crc32_duration",
+			Help:       "Duration of running the crc32 pre-diffing check.",
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+		},
+		[]string{"table"},
+	)
 	diffDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "diff_duration",
@@ -89,6 +97,7 @@ func init() {
 	prometheus.MustRegister(chunksWithDiffs)
 	prometheus.MustRegister(diffCount)
 	prometheus.MustRegister(readDuration)
+	prometheus.MustRegister(crc32Duration)
 	prometheus.MustRegister(diffDuration)
 }
 
@@ -366,6 +375,8 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 	var checksum int64
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
 	err := backoff.Retry(func() error {
+		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
 		extraWhereClause := ""
 		if from == "target" {
 			extraWhereClause = chunk.Table.Config.TargetWhere
@@ -373,8 +384,8 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 		if from == "source" {
 			extraWhereClause = chunk.Table.Config.SourceWhere
 		}
-		sql := fmt.Sprintf("SELECT BIT_XOR(CRC32(CONCAT_WS(' ', %s))) FROM `%s` %s",
-			strings.Join(chunk.Table.ColumnsQuoted, ", "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+		sql := fmt.Sprintf("SELECT BIT_XOR(%s) FROM `%s` %s",
+			strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
 		rows, err := reader.QueryContext(ctx, sql)
 		if err != nil {
 			return errors.WithStack(err)

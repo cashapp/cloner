@@ -24,6 +24,7 @@ type Table struct {
 
 	Columns       []string
 	ColumnsQuoted []string
+	CRC32Columns  []string
 	ColumnList    string
 }
 
@@ -176,6 +177,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 	var columnNames []string
 	var columnNamesQuoted []string
+	var columnNamesCRC32 []string
 	for rows.Next() {
 		var columnName string
 		err := rows.Scan(&columnName)
@@ -191,6 +193,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		}
 		columnNames = append(columnNames, columnName)
 		columnNamesQuoted = append(columnNamesQuoted, fmt.Sprintf("`%s`", columnName))
+		columnNamesCRC32 = append(columnNamesCRC32, fmt.Sprintf("crc32(ifnull(`%s`, 0))", columnName))
 	}
 	// Close explicitly to check for close errors
 	err = rows.Close()
@@ -211,6 +214,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		IDColumnIndex: idColumnIndex,
 		Columns:       columnNames,
 		ColumnsQuoted: columnNamesQuoted,
+		CRC32Columns:  columnNamesCRC32,
 		ColumnList:    strings.Join(columnNamesQuoted, ","),
 		Config:        tableConfig,
 	}, nil

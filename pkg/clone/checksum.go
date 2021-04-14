@@ -73,12 +73,6 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	// Parse the keyrange on the source so that we can filter the target
-	shardingSpec, err := cmd.Source.ShardingKeyrange()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
 	chunks := make(chan Chunk, cmd.ChunkSize)
 	diffs := make(chan Diff, cmd.ChunkSize)
 	g, ctx := errgroup.WithContext(ctx)
@@ -126,7 +120,7 @@ func (cmd *Checksum) run() ([]Diff, error) {
 						token.OnDropped()
 					}
 				}()
-				err = diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, shardingSpec, chunk, diffs)
+				err = diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, chunk, diffs)
 				return errors.WithStack(err)
 			})
 		}

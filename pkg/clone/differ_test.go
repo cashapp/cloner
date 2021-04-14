@@ -40,6 +40,7 @@ func toTestRow(row *Row) testRow {
 }
 
 func TestStreamDiff(t *testing.T) {
+	table := &Table{Name: "foobar"}
 	tests := []struct {
 		name   string
 		source []testRow
@@ -182,7 +183,7 @@ func TestStreamDiff(t *testing.T) {
 					result = append(result, toTestDiff(diff))
 				}
 			}()
-			err := StreamDiff(context.Background(), streamTestRows(test.source), streamTestRows(test.target), diffsChan)
+			err := StreamDiff(context.Background(), table, streamTestRows(test.source), streamTestRows(test.target), diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()

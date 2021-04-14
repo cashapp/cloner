@@ -58,6 +58,13 @@ var (
 		},
 		[]string{"table", "side"},
 	)
+	rowsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rows_processed",
+			Help: "How many rows processed on the source side (chunks processed times chunk size).",
+		},
+		[]string{"table"},
+	)
 	readDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "read_duration",
@@ -94,6 +101,7 @@ func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
 	prometheus.MustRegister(chunksProcessed)
+	prometheus.MustRegister(rowsProcessed)
 	prometheus.MustRegister(chunksWithDiffs)
 	prometheus.MustRegister(diffCount)
 	prometheus.MustRegister(readDuration)
@@ -367,6 +375,7 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	}
 
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+	rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 
 	return nil
 }

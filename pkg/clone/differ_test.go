@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"github.com/alecthomas/kong"
 	"sync"
 	"testing"
 
@@ -231,4 +232,82 @@ func TestRowsEqual(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	assert.True(t, isEqual)
+}
+
+func TestDiffWithChecksum(t *testing.T) {
+	err := startAll()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+	source.Database = "customer/-80@replica"
+	sourceDB, err := source.DB()
+	assert.NoError(t, err)
+	target := tidbContainer.Config()
+	targetDB, err := target.DB()
+	assert.NoError(t, err)
+
+	config := &ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
+		},
+	}
+	err = kong.ApplyDefaults(config)
+	config.UseCRC32Checksum = true
+
+	type row struct {
+		id   int64
+		name string
+	}
+	type diff struct {
+		diffType DiffType
+		row      row
+	}
+	tests := []struct {
+		name   string
+		source []row
+		target []row
+		diff   []diff
+	}{
+		{
+			name:   "empty",
+			source: nil,
+			target: nil,
+			diff:   nil,
+		},
+		// TODO add more tests
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err = deleteAllData(source)
+			assert.NoError(t, err)
+			err = deleteAllData(target)
+			assert.NoError(t, err)
+
+			// TODO insert data, how can I make sure they end up in -80?
+
+			diffsChan := make(chan Diff)
+			var result []diff
+			wg := sync.WaitGroup{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for d := range diffsChan {
+					result = append(result, diff{d.Type, row{d.Row.ID, d.Row.Data[0].(string)}})
+				}
+			}()
+
+			ctx := context.Background()
+			tables, err := loadTables(ctx, *config, source, sourceDB)
+			assert.NoError(t, err)
+			chunk := Chunk{
+				Table: tables[0],
+			}
+			err = diffChunk(ctx, *config, sourceDB, targetDB, chunk, diffsChan)
+			assert.NoError(t, err)
+			close(diffsChan)
+			wg.Wait()
+			assert.Equal(t, test.diff, result)
+		})
+	}
 }

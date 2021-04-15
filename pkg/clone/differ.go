@@ -397,7 +397,7 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 			hint = chunk.Table.Config.SourceHint
 		}
 		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
-			strings.Join(chunk.Table.CRC32Columns, " ^ "), hint, chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
 		rows, err := reader.QueryContext(ctx, sql)
 		if err != nil {
 			return errors.WithStack(err)

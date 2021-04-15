@@ -115,12 +115,12 @@ func (s *rowStream) Close() error {
 	return s.rows.Close()
 }
 
-func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, extraWhereClause string) (RowStream, error) {
+func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, extraWhereClause string) (RowStream, error) {
 	table := chunk.Table
 	columns := table.ColumnList
 
 	where := chunkWhere(chunk, extraWhereClause)
-	sql := fmt.Sprintf("select %s from %s %s order by %s asc", columns, table.Name, where, table.IDColumn)
+	sql := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
 	rows, err := conn.QueryContext(ctx, sql)
 	if err != nil {
 		return nil, errors.WithStack(err)

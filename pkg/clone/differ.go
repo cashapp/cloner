@@ -387,15 +387,17 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
 		defer timer.ObserveDuration()
 		extraWhereClause := ""
+		hint := ""
 		if from == "target" {
 			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
 		}
 		if from == "source" {
 			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
 		}
-		// The STREAM_AGG hint is to force TiDB not to pull everything into memory
-		sql := fmt.Sprintf("SELECT /*+ STREAM_AGG() */ BIT_XOR(%s) FROM `%s` %s",
-			strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
+			strings.Join(chunk.Table.CRC32Columns, " ^ "), hint, chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
 		rows, err := reader.QueryContext(ctx, sql)
 		if err != nil {
 			return errors.WithStack(err)
@@ -427,13 +429,16 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 		extraWhereClause := ""
+		hint := ""
 		if from == "target" {
 			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
 		}
 		if from == "source" {
 			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
 		}
-		stream, err := StreamChunk(timeoutCtx, source, chunk, extraWhereClause)
+		stream, err := StreamChunk(timeoutCtx, source, chunk, hint, extraWhereClause)
 		if err != nil {
 			return errors.Wrapf(err, "failed to stream chunk from %s", from)
 		}

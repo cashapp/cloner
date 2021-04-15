@@ -16,7 +16,9 @@ type SourceTargetConfig struct {
 type TableConfig struct {
 	IgnoreColumns []string `toml:"ignore_columns" help:"Ignore columns in table"`
 	TargetWhere   string   `toml:"target_where" help:"Extra where clause that is added on the target"`
+	TargetHint    string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
 	SourceWhere   string   `toml:"source_where" help:"Extra where clause that is added on the source"`
+	SourceHint    string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
 }
 
 type Config struct {

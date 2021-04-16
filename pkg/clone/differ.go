@@ -197,13 +197,13 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 					}
 				}
 			} else {
-				hasDiff = true
 				select {
 				case diffs <- Diff{Insert, sourceRow, nil}:
 				case <-ctx.Done():
 					return nil
 				}
 				diffCount.WithLabelValues(table.Name, "insert").Inc()
+				hasDiff = true
 				advanceSource = true
 			}
 		} else if targetRow != nil {
@@ -214,6 +214,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 				return nil
 			}
 			diffCount.WithLabelValues(table.Name, "delete").Inc()
+			hasDiff = true
 			advanceTarget = true
 		} else {
 			return nil

@@ -2,15 +2,16 @@ package clone
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
-	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 type DiffType string
@@ -36,6 +37,20 @@ var (
 		},
 		[]string{"table"},
 	)
+	chunksWithDiffs = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "chunks_with_diffs",
+			Help: "How many chunks have diffs, partitioned by table.",
+		},
+		[]string{"table"},
+	)
+	diffCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "diff_count",
+			Help: "How many diffs (rows to delete/insert/update).",
+		},
+		[]string{"table", "type"},
+	)
 	readsProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "reads_processed",
@@ -43,10 +58,25 @@ var (
 		},
 		[]string{"table", "side"},
 	)
+	rowsProcessed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rows_processed",
+			Help: "How many rows processed on the source side (chunks processed times chunk size).",
+		},
+		[]string{"table"},
+	)
 	readDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "read_duration",
 			Help:       "Total duration of the database read (including retries and backoff) of a chunk from a table from either source or target.",
+			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+		},
+		[]string{"table", "from"},
+	)
+	crc32Duration = prometheus.NewSummaryVec(
+		prometheus.SummaryOpts{
+			Name:       "crc32_duration",
+			Help:       "Duration of running the crc32 pre-diffing check.",
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table", "from"},
@@ -71,7 +101,11 @@ func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
 	prometheus.MustRegister(chunksProcessed)
+	prometheus.MustRegister(rowsProcessed)
+	prometheus.MustRegister(chunksWithDiffs)
+	prometheus.MustRegister(diffCount)
 	prometheus.MustRegister(readDuration)
+	prometheus.MustRegister(crc32Duration)
 	prometheus.MustRegister(diffDuration)
 }
 
@@ -85,9 +119,17 @@ type Diff struct {
 }
 
 // StreamDiff sends the changes need to make target become exactly like source
-func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs chan Diff) error {
+func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowStream, diffs chan Diff) error {
 	var err error
 
+	chunksWithDiffs := chunksWithDiffs.WithLabelValues(table.Name)
+
+	hasDiff := false
+	defer func() {
+		if hasDiff {
+			chunksWithDiffs.Inc()
+		}
+	}()
 	advanceSource := true
 	advanceTarget := true
 
@@ -99,18 +141,14 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			if sourceRow != nil {
-				readsProcessed.WithLabelValues(sourceRow.Table.Name, "source").Inc()
-			}
+			readsProcessed.WithLabelValues(table.Name, "source").Inc()
 		}
 		if advanceTarget {
 			targetRow, err = target.Next()
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			if targetRow != nil {
-				readsProcessed.WithLabelValues(targetRow.Table.Name, "target").Inc()
-			}
+			readsProcessed.WithLabelValues(table.Name, "target").Inc()
 		}
 		advanceSource = false
 		advanceTarget = false
@@ -123,6 +161,8 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 					case <-ctx.Done():
 						return nil
 					}
+					diffCount.WithLabelValues(table.Name, "insert").Inc()
+					hasDiff = true
 					advanceSource = true
 					advanceTarget = false
 				} else if sourceRow.ID > targetRow.ID {
@@ -131,6 +171,8 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 					case <-ctx.Done():
 						return nil
 					}
+					diffCount.WithLabelValues(table.Name, "delete").Inc()
+					hasDiff = true
 					advanceSource = false
 					advanceTarget = true
 				} else {
@@ -144,6 +186,8 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 						case <-ctx.Done():
 							return nil
 						}
+						hasDiff = true
+						diffCount.WithLabelValues(table.Name, "update").Inc()
 						advanceSource = true
 						advanceTarget = true
 					} else {
@@ -153,11 +197,24 @@ func StreamDiff(ctx context.Context, source RowStream, target RowStream, diffs c
 					}
 				}
 			} else {
-				diffs <- Diff{Insert, sourceRow, nil}
+				select {
+				case diffs <- Diff{Insert, sourceRow, nil}:
+				case <-ctx.Done():
+					return nil
+				}
+				diffCount.WithLabelValues(table.Name, "insert").Inc()
+				hasDiff = true
 				advanceSource = true
 			}
 		} else if targetRow != nil {
-			diffs <- Diff{Delete, targetRow, nil}
+			hasDiff = true
+			select {
+			case diffs <- Diff{Delete, targetRow, nil}:
+			case <-ctx.Done():
+				return nil
+			}
+			diffCount.WithLabelValues(table.Name, "delete").Inc()
+			hasDiff = true
 			advanceTarget = true
 		} else {
 			return nil
@@ -285,11 +342,25 @@ func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk 
 	return nil
 }
 
-func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, targetFilter []*topodata.KeyRange, chunk Chunk, diffs chan Diff) error {
+func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, chunk Chunk, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer timer.ObserveDuration()
 
-	// TODO start off by running fast checksum queries
+	if config.UseCRC32Checksum {
+		// start off by running a fast checksum query
+		sourceChecksum, err := checksumChunk(ctx, config, "source", source, chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		targetChecksum, err := checksumChunk(ctx, config, "target", target, chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if sourceChecksum == targetChecksum {
+			// Checksums match, no need to do any further diffing
+			return nil
+		}
+	}
 
 	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
 	if err != nil {
@@ -299,14 +370,50 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	err = StreamDiff(ctx, sourceStream, targetStream, diffs)
+	err = StreamDiff(ctx, chunk.Table, sourceStream, targetStream, diffs)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+	rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 
 	return nil
+}
+
+func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader DBReader, chunk Chunk) (int64, error) {
+	var checksum int64
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	err := backoff.Retry(func() error {
+		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
+		extraWhereClause := ""
+		hint := ""
+		if from == "target" {
+			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
+		}
+		if from == "source" {
+			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
+		}
+		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
+			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+		rows, err := reader.QueryContext(ctx, sql)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if !rows.Next() {
+			return errors.Errorf("no checksum result")
+		}
+		err = rows.Scan(&checksum)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}, b)
+
+	return checksum, errors.WithStack(err)
 }
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
@@ -323,13 +430,16 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 		timeoutCtx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()
 		extraWhereClause := ""
+		hint := ""
 		if from == "target" {
 			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
 		}
 		if from == "source" {
 			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
 		}
-		stream, err := StreamChunk(timeoutCtx, source, chunk, extraWhereClause)
+		stream, err := StreamChunk(timeoutCtx, source, chunk, hint, extraWhereClause)
 		if err != nil {
 			return errors.Wrapf(err, "failed to stream chunk from %s", from)
 		}

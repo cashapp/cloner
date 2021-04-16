@@ -66,7 +66,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 				if cmd.NoDiff {
 					err = readChunk(ctx, cmd.ReaderConfig, source, chunk, diffs)
 				} else {
-					err = diffChunk(ctx, cmd.ReaderConfig, source, target, targetFilter, chunk, diffs)
+					err = diffChunk(ctx, cmd.ReaderConfig, source, target, chunk, diffs)
 				}
 				return errors.WithStack(err)
 			})

@@ -133,6 +133,8 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
+	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
+	clone.UseCRC32Checksum = true
 	assert.NoError(t, err)
 	err = clone.Run()
 	assert.NoError(t, err)
@@ -154,6 +156,8 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 		ReaderConfig: readerConfig,
 	}
 	err = kong.ApplyDefaults(checksum)
+	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
+	clone.UseCRC32Checksum = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run()
 	assert.NoError(t, err)

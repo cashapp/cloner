@@ -16,7 +16,9 @@ type SourceTargetConfig struct {
 type TableConfig struct {
 	IgnoreColumns []string `toml:"ignore_columns" help:"Ignore columns in table"`
 	TargetWhere   string   `toml:"target_where" help:"Extra where clause that is added on the target"`
+	TargetHint    string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
 	SourceWhere   string   `toml:"source_where" help:"Extra where clause that is added on the source"`
+	SourceHint    string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
 }
 
 type Config struct {
@@ -33,6 +35,8 @@ type ReaderConfig struct {
 	ReaderCount      int           `help:"Number of reader connections" default:"20"`
 	ReadTimeout      time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries      uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
+
+	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 

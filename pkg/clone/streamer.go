@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
+	"strings"
 )
 
 // DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can
@@ -115,53 +115,40 @@ func (s *rowStream) Close() error {
 	return s.rows.Close()
 }
 
-func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, extraWhereClause string) (RowStream, error) {
+func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, extraWhereClause string) (RowStream, error) {
 	table := chunk.Table
 	columns := table.ColumnList
 
-	logger := log.WithField("table", chunk.Table.Name)
+	where := chunkWhere(chunk, extraWhereClause)
+	sql := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
+	rows, err := conn.QueryContext(ctx, sql)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return newRowStream(table, rows)
+}
+
+func chunkWhere(chunk Chunk, extraWhereClause string) string {
+	table := chunk.Table
+	var clauses []string
+	if extraWhereClause != "" {
+		clauses = append(clauses, "("+extraWhereClause+")")
+	}
 	if chunk.First && chunk.Last {
-		logger.Debugf("reading chunk -")
-		where := ""
-		if extraWhereClause != "" {
-			where = fmt.Sprintf(" where %s", extraWhereClause)
-		}
-		rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s%s order by %s asc",
-			columns, table.Name, where, table.IDColumn))
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		return newRowStream(table, rows)
+		// this chunk is the full table, no where clause
 	} else {
-		where := ""
-		if extraWhereClause != "" {
-			where = fmt.Sprintf(" (%s) and", extraWhereClause)
-		}
 		if chunk.First {
-			logger.Debugf("reading chunk -%v", chunk.End)
-			rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where%s %s < ? order by %s asc",
-				columns, table.Name, where, table.IDColumn, table.IDColumn), chunk.End)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			return newRowStream(table, rows)
+			clauses = append(clauses, fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 		} else if chunk.Last {
-			logger.Debugf("reading chunk %v-", chunk.Start)
-			rows, err := conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where%s %s >= ? order by %s asc",
-				columns, table.Name, where, table.IDColumn, table.IDColumn), chunk.Start)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			return newRowStream(table, rows)
+			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
 		} else {
-			logger.Debugf("reading chunk [%v-%v)", chunk.Start, chunk.End)
-			rows, err := conn.QueryContext(ctx,
-				fmt.Sprintf("select %s from %s where%s %s >= ? and %s < ? order by %s asc",
-					columns, table.Name, where, table.IDColumn, table.IDColumn, table.IDColumn), chunk.Start, chunk.End)
-			if err != nil {
-				return nil, errors.WithStack(err)
-			}
-			return newRowStream(table, rows)
+			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
+			clauses = append(clauses, fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 		}
+	}
+	if len(clauses) == 0 {
+		return ""
+	} else {
+		return "where " + strings.Join(clauses, " and ")
 	}
 }

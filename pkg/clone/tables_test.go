@@ -30,7 +30,11 @@ func TestLoadTables(t *testing.T) {
 			IDColumnIndex: 0,
 			Columns:       []string{"id", "name"},
 			ColumnsQuoted: []string{"`id`", "`name`"},
-			ColumnList:    "`id`,`name`",
+			CRC32Columns: []string{
+				"crc32(ifnull(`id`, 0))",
+				"crc32(ifnull(`name`, 0))",
+			},
+			ColumnList: "`id`,`name`",
 		},
 	}, tables)
 }
@@ -57,7 +61,11 @@ func TestLoadTablesTiDB(t *testing.T) {
 			IDColumnIndex: 0,
 			Columns:       []string{"id", "name"},
 			ColumnsQuoted: []string{"`id`", "`name`"},
-			ColumnList:    "`id`,`name`",
+			CRC32Columns: []string{
+				"crc32(ifnull(`id`, 0))",
+				"crc32(ifnull(`name`, 0))",
+			},
+			ColumnList: "`id`,`name`",
 		},
 	}, tables)
 }

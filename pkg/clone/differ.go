@@ -319,7 +319,11 @@ func coerceFloat64(value interface{}) (float64, error) {
 // readChunk reads a chunk without diffing producing only insert diffs
 func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk Chunk, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
-	defer timer.ObserveDuration()
+	defer func() {
+		timer.ObserveDuration()
+		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
+	}()
 
 	sourceStream, err := bufferChunk(ctx, config, source, "source", chunk)
 	if err != nil {
@@ -337,14 +341,16 @@ func readChunk(ctx context.Context, config ReaderConfig, source DBReader, chunk 
 		diffs <- Diff{Insert, row, nil}
 	}
 
-	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
-
 	return nil
 }
 
 func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target DBReader, chunk Chunk, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
-	defer timer.ObserveDuration()
+	defer func() {
+		timer.ObserveDuration()
+		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
+	}()
 
 	if config.UseCRC32Checksum {
 		// start off by running a fast checksum query
@@ -374,9 +380,6 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 	if err != nil {
 		return errors.WithStack(err)
 	}
-
-	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
-	rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 
 	return nil
 }

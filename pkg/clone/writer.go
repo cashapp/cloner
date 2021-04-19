@@ -274,7 +274,6 @@ func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
 	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
-		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
 	rowsAffected, err := result.RowsAffected()
@@ -316,7 +315,6 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()
@@ -371,7 +369,6 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()
@@ -406,7 +403,6 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {
-		logger.WithError(err).Warnf("could not prepare: %s", stmt)
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
 	defer prepared.Close()
@@ -422,7 +418,6 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 
 		result, err := prepared.ExecContext(ctx, args...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()

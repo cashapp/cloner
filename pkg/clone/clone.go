@@ -67,6 +67,7 @@ func (cmd *Clone) Run() error {
 	defer writer.Close()
 	// Refresh connections regularly so they don't go stale
 	writer.SetConnMaxLifetime(time.Minute)
+	writer.SetMaxOpenConns(cmd.WriterCount)
 	writerCollector := sqlstats.NewStatsCollector("target_writer", writer)
 	prometheus.MustRegister(writerCollector)
 	defer prometheus.Unregister(writerCollector)

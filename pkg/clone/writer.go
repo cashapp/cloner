@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"strings"
 
 	"github.com/cenkalti/backoff/v4"
@@ -72,26 +73,8 @@ func init() {
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-	acquireTimer := prometheus.NewTimer(writeLimiterDelay)
-	token, ok := writerLimiter.Acquire(ctx)
-	if !ok {
-		if token != nil {
-			token.OnDropped()
-		}
-		return errors.Errorf("write limiter short circuited")
-	}
-	acquireTimer.ObserveDuration()
 	g.Go(func() (err error) {
-		defer func() {
-			if token != nil {
-				if err == nil {
-					token.OnSuccess()
-				} else {
-					token.OnDropped()
-				}
-			}
-		}()
-		err = Write(ctx, cmd, writer, batch)
+		err = Write(ctx, cmd, writerLimiter, writer, batch)
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -104,10 +87,6 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 			// we'll split the batch so that we can write all the rows in the batch
 			// that are not conflicting
 			if isConstraintViolation(err) {
-				// Uniqueness constraint is treated as a successful write
-				// if not scheduling the new
-				token.OnSuccess()
-				token = nil
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
 					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
@@ -137,16 +116,58 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 	return nil
 }
 
-func isConstraintViolation(err error) bool {
-	return err != nil &&
-		// Uniqueness constraint error
-		strings.HasPrefix(err.Error(), "Error 1062:") &&
-		// Error 1292: Incorrect timestamp value: '0000-00-00'
-		strings.HasPrefix(err.Error(), "Error 1292:")
+// mysqlError returns a mysql.MySQLError if there is such in the causal chain, if not returns nil
+func mysqlError(err error) *mysql.MySQLError {
+	if err == nil {
+		return nil
+	}
+	me, ok := err.(*mysql.MySQLError)
+	if ok {
+		return me
+	}
+	cause := errors.Cause(err)
+	if cause == err {
+		// errors.Cause returns the error if there is no cause
+		return nil
+	} else {
+		return mysqlError(cause)
+	}
 }
 
-func isTableDoesntExist(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "Error 1146:")
+// isConstraintViolation are errors caused by a single row in a batch, for these errors we break down the batch
+// into smaller parts until we find the erroneous row, uniqueness constraints can also be fixed by clone jobs for other
+// shards removing the row if the row has been copied from one shard to the other
+func isConstraintViolation(err error) bool {
+	me := mysqlError(err)
+	if me == nil {
+		return false
+	}
+	switch me.Number {
+	// Various constraint violations
+	case 1022, 1048, 1052, 1062, 1169, 1216, 1217, 1451, 1452, 1557, 1586, 1761, 1762, 1859:
+		return true
+	// Error 1292: Incorrect timestamp value: '0000-00-00'
+	case 1292:
+		return true
+	default:
+		return false
+	}
+}
+
+// isSchemaError are errors that should immediately fail the clone operation and can't be fixed by retrying
+func isSchemaError(err error) bool {
+	me := mysqlError(err)
+	if me == nil {
+		return false
+	}
+	switch me.Number {
+	// Error 1146: Table does not exist
+	// TODO we should also check for unknown column
+	case 1146:
+		return true
+	default:
+		return false
+	}
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {
@@ -171,7 +192,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error) {
+func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
@@ -186,6 +207,24 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
 	err = backoff.Retry(func() (err error) {
+		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
+		token, ok := writerLimiter.Acquire(ctx)
+		if !ok {
+			if token != nil {
+				token.OnDropped()
+			}
+			return errors.Errorf("write limiter short circuited")
+		}
+		acquireTimer.ObserveDuration()
+		defer func() {
+			if token != nil {
+				if err == nil {
+					token.OnSuccess()
+				} else {
+					token.OnDropped()
+				}
+			}
+		}()
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
@@ -207,7 +246,12 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		})
 
 		// These should not be retried
-		if isConstraintViolation(err) || isTableDoesntExist(err) {
+		if isSchemaError(err) {
+			return backoff.Permanent(err)
+		}
+		// We immediately fail constraint violation of non-single row batches,
+		// the caller will do binary chop to find the violating row
+		if isConstraintViolation(err) && len(batch.Rows) > 1 {
 			return backoff.Permanent(err)
 		}
 
@@ -245,7 +289,6 @@ func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
 	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
-		logger.WithError(err).Warnf("could not execute: %s", stmt)
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
 	rowsAffected, err := result.RowsAffected()
@@ -287,7 +330,6 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()
@@ -342,7 +384,6 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()
@@ -377,7 +418,6 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 		table.Name, strings.Join(columnValues, ","), table.IDColumn)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {
-		logger.WithError(err).Warnf("could not prepare: %s", stmt)
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
 	defer prepared.Close()
@@ -393,7 +433,6 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 
 		result, err := prepared.ExecContext(ctx, args...)
 		if err != nil {
-			logger.WithError(err).Warnf("could not execute: %s", stmt)
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
 		rowsAffected, err := result.RowsAffected()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/go-sql-driver/mysql"
 	"strings"
 
 	"github.com/cenkalti/backoff/v4"
@@ -138,15 +139,38 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 }
 
 func isConstraintViolation(err error) bool {
-	return err != nil &&
-		// Uniqueness constraint error
-		strings.HasPrefix(err.Error(), "Error 1062:") &&
+	if err == nil {
+		return false
+	}
+	cause := errors.Cause(err)
+	if isConstraintViolation(cause) {
+		return true
+	}
+
+	me, ok := err.(*mysql.MySQLError)
+	if !ok {
+		return false
+	}
+	// Error 1062: Uniqueness constraint error
+	return me.Number == 1062 ||
 		// Error 1292: Incorrect timestamp value: '0000-00-00'
-		strings.HasPrefix(err.Error(), "Error 1292:")
+		me.Number == 1292
 }
 
 func isTableDoesntExist(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "Error 1146:")
+	if err == nil {
+		return false
+	}
+	cause := errors.Cause(err)
+	if isConstraintViolation(cause) {
+		return true
+	}
+
+	me, ok := err.(*mysql.MySQLError)
+	if !ok {
+		return false
+	}
+	return me.Number == 1146
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {
@@ -207,7 +231,12 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		})
 
 		// These should not be retried
-		if isConstraintViolation(err) || isTableDoesntExist(err) {
+		if isTableDoesntExist(err) {
+			return backoff.Permanent(err)
+		}
+		// We immediately fail constraint violation of non-single row batches,
+		// the caller will do binary chop to find the violating row
+		if isConstraintViolation(err) && len(batch.Rows) > 1 {
 			return backoff.Permanent(err)
 		}
 

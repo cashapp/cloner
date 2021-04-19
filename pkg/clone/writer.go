@@ -134,25 +134,40 @@ func mysqlError(err error) *mysql.MySQLError {
 	}
 }
 
+// isConstraintViolation are errors caused by a single row in a batch, for these errors we break down the batch
+// into smaller parts until we find the erroneous row, uniqueness constraints can also be fixed by clone jobs for other
+// shards removing the row if the row has been copied from one shard to the other
 func isConstraintViolation(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
 		return false
 	}
-	// Error 1062: Uniqueness constraint error
-	return me.Number == 1062 ||
-		// Error 1292: Incorrect timestamp value: '0000-00-00'
-		me.Number == 1292
+	switch me.Number {
+	// Various constraint violations
+	case 1022, 1048, 1052, 1062, 1169, 1216, 1217, 1451, 1452, 1557, 1586, 1761, 1762, 1859:
+		return true
+	// Error 1292: Incorrect timestamp value: '0000-00-00'
+	case 1292:
+		return true
+	default:
+		return false
+	}
 }
 
+// isSchemaError are errors that should immediately fail the clone operation and can't be fixed by retrying
 func isSchemaError(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
 		return false
 	}
+	switch me.Number {
 	// Error 1146: Table does not exist
 	// TODO we should also check for unknown column
-	return me.Number == 1146
+	case 1146:
+		return true
+	default:
+		return false
+	}
 }
 
 func splitBatch(batch Batch) (Batch, Batch) {

@@ -138,17 +138,27 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 	return nil
 }
 
-func isConstraintViolation(err error) bool {
+// mysqlError returns a mysql.MySQLError if there is such in the causal chain, if not returns nil
+func mysqlError(err error) *mysql.MySQLError {
 	if err == nil {
-		return false
+		return nil
+	}
+	me, ok := err.(*mysql.MySQLError)
+	if ok {
+		return me
 	}
 	cause := errors.Cause(err)
-	if isConstraintViolation(cause) {
-		return true
+	if cause == err {
+		// errors.Cause returns the error if there is no cause
+		return nil
+	} else {
+		return mysqlError(cause)
 	}
+}
 
-	me, ok := err.(*mysql.MySQLError)
-	if !ok {
+func isConstraintViolation(err error) bool {
+	me := mysqlError(err)
+	if me == nil {
 		return false
 	}
 	// Error 1062: Uniqueness constraint error
@@ -157,19 +167,13 @@ func isConstraintViolation(err error) bool {
 		me.Number == 1292
 }
 
-func isTableDoesntExist(err error) bool {
-	if err == nil {
+func isSchemaError(err error) bool {
+	me := mysqlError(err)
+	if me == nil {
 		return false
 	}
-	cause := errors.Cause(err)
-	if isConstraintViolation(cause) {
-		return true
-	}
-
-	me, ok := err.(*mysql.MySQLError)
-	if !ok {
-		return false
-	}
+	// Error 1146: Table does not exist
+	// TODO we should also check for unknown column
 	return me.Number == 1146
 }
 
@@ -231,7 +235,7 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 		})
 
 		// These should not be retried
-		if isTableDoesntExist(err) {
+		if isSchemaError(err) {
 			return backoff.Permanent(err)
 		}
 		// We immediately fail constraint violation of non-single row batches,

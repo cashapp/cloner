@@ -73,26 +73,8 @@ func init() {
 
 func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-	acquireTimer := prometheus.NewTimer(writeLimiterDelay)
-	token, ok := writerLimiter.Acquire(ctx)
-	if !ok {
-		if token != nil {
-			token.OnDropped()
-		}
-		return errors.Errorf("write limiter short circuited")
-	}
-	acquireTimer.ObserveDuration()
 	g.Go(func() (err error) {
-		defer func() {
-			if token != nil {
-				if err == nil {
-					token.OnSuccess()
-				} else {
-					token.OnDropped()
-				}
-			}
-		}()
-		err = Write(ctx, cmd, writer, batch)
+		err = Write(ctx, cmd, writerLimiter, writer, batch)
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -105,10 +87,6 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 			// we'll split the batch so that we can write all the rows in the batch
 			// that are not conflicting
 			if isConstraintViolation(err) {
-				// Uniqueness constraint is treated as a successful write
-				// if not scheduling the new
-				token.OnSuccess()
-				token = nil
 				if len(batch.Rows) > 1 {
 					batch1, batch2 := splitBatch(batch)
 					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
@@ -199,7 +177,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error) {
+func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
@@ -214,6 +192,24 @@ func Write(ctx context.Context, cmd *Clone, db *sql.DB, batch Batch) (err error)
 
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
 	err = backoff.Retry(func() (err error) {
+		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
+		token, ok := writerLimiter.Acquire(ctx)
+		if !ok {
+			if token != nil {
+				token.OnDropped()
+			}
+			return errors.Errorf("write limiter short circuited")
+		}
+		acquireTimer.ObserveDuration()
+		defer func() {
+			if token != nil {
+				if err == nil {
+					token.OnSuccess()
+				} else {
+					token.OnDropped()
+				}
+			}
+		}()
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {

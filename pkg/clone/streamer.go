@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
+	"github.com/prometheus/client_golang/prometheus"
 	"strings"
 )
 
@@ -18,6 +20,41 @@ type Row struct {
 	Table *Table
 	ID    int64
 	Data  []interface{}
+}
+
+type limitingDBReader struct {
+	limiter       core.Limiter
+	acquireMetric prometheus.Observer
+	reader        DBReader
+}
+
+func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args ...interface{}) (rows *sql.Rows, err error) {
+	token, ok := l.limiter.Acquire(ctx)
+	acquireTimer := prometheus.NewTimer(l.acquireMetric)
+	if !ok {
+		if token != nil {
+			token.OnDropped()
+		}
+		return nil, errors.Errorf("reader limiter short circuited")
+	}
+	acquireTimer.ObserveDuration()
+	defer func() {
+		if err == nil {
+			token.OnSuccess()
+		} else {
+			token.OnDropped()
+		}
+	}()
+	rows, err = l.reader.QueryContext(ctx, query, args...)
+	return rows, err
+}
+
+func Limit(db DBReader, limiter core.Limiter, acquireMetric prometheus.Observer) DBReader {
+	return &limitingDBReader{
+		limiter:       limiter,
+		acquireMetric: acquireMetric,
+		reader:        db,
+	}
 }
 
 type bufferStream struct {
@@ -120,8 +157,8 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	columns := table.ColumnList
 
 	where := chunkWhere(chunk, extraWhereClause)
-	sql := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
-	rows, err := conn.QueryContext(ctx, sql)
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
+	rows, err := conn.QueryContext(ctx, stmt)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

@@ -3,18 +3,16 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"github.com/prometheus/client_golang/prometheus"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"vitess.io/vitess/go/vt/proto/topodata"
 )
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter, readerLimiter core.Limiter, targetFilter []*topodata.KeyRange) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter) error {
 	logger := log.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start")
@@ -46,23 +44,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			token, ok := readerLimiter.Acquire(ctx)
-			acquireTimer := prometheus.NewTimer(readLimiterDelay)
-			if !ok {
-				if token != nil {
-					token.OnDropped()
-				}
-				return errors.Errorf("reader limiter short circuited")
-			}
-			acquireTimer.ObserveDuration()
 			g.Go(func() (err error) {
-				defer func() {
-					if err == nil {
-						token.OnSuccess()
-					} else {
-						token.OnDropped()
-					}
-				}()
 				if cmd.NoDiff {
 					err = readChunk(ctx, cmd.ReaderConfig, source, chunk, diffs)
 				} else {

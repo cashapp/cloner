@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"time"
 
@@ -104,11 +105,17 @@ func (cmd *Checksum) run() ([]Diff, error) {
 
 	// Forward chunks to differs
 	g.Go(func() error {
+		readerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
+			err := readerParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 			g.Go(func() (err error) {
-				err = diffChunk(ctx, cmd.ReaderConfig, limitedTargetReader, limitedSourceReader, chunk, diffs)
+				defer readerParallelism.Release(1)
+				err = diffChunk(ctx, cmd.ReaderConfig, limitedSourceReader, limitedTargetReader, chunk, diffs)
 				return errors.WithStack(err)
 			})
 		}

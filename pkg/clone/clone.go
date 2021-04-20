@@ -56,9 +56,12 @@ func (cmd *Clone) Run() error {
 	defer sourceReader.Close()
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
+	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
 	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
+	limitedSourceReader := Limit(
+		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
 
 	writer, err := cmd.Target.DB()
 	if err != nil {
@@ -82,9 +85,12 @@ func (cmd *Clone) Run() error {
 	defer targetReader.Close()
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
+	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
+	limitedTargetReader := Limit(
+		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
 
 	// Load tables
 	// TODO in consistent clone we should diff the schema of the source with the target,
@@ -96,11 +102,6 @@ func (cmd *Clone) Run() error {
 
 	logger := log.WithField("tables", len(tables))
 
-	shardingSpec, err := cmd.Source.ShardingKeyrange()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
 	// Queue up tables to read
 	tableCh := make(chan *Table, len(tables))
 	for _, table := range tables {
@@ -109,7 +110,6 @@ func (cmd *Clone) Run() error {
 	close(tableCh)
 
 	writerLimiter := makeLimiter("write_limiter")
-	readerLimiter := makeLimiter("read_limiter")
 
 	if cmd.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")
@@ -127,7 +127,7 @@ func (cmd *Clone) Run() error {
 				return errors.WithStack(err)
 			}
 			defer tableLimiter.Release(1)
-			err = processTable(ctx, sourceReader, targetReader, table, cmd, writer, writerLimiter, readerLimiter, shardingSpec)
+			err = processTable(ctx, limitedSourceReader, limitedTargetReader, table, cmd, writer, writerLimiter)
 			return errors.WithStack(err)
 		})
 	}

@@ -89,11 +89,12 @@ var (
 		},
 		[]string{"table"},
 	)
-	readLimiterDelay = prometheus.NewSummary(
+	readLimiterDelay = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name: "read_limiter_delay_duration",
 			Help: "Duration of back off from the concurrency limiter for reads.",
 		},
+		[]string{"from"},
 	)
 )
 
@@ -406,6 +407,7 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		defer rows.Close()
 		if !rows.Next() {
 			return errors.Errorf("no checksum result")
 		}

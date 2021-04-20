@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"time"
 
@@ -50,9 +51,12 @@ func (cmd *Checksum) run() ([]Diff, error) {
 	}
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
+	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
 	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
+	limitedSourceReader := Limit(
+		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -63,9 +67,12 @@ func (cmd *Checksum) run() ([]Diff, error) {
 	}
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
+	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
+	limitedTargetReader := Limit(
+		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
 
 	// Load tables
 	tables, err := LoadTables(ctx, cmd.ReaderConfig)
@@ -85,7 +92,7 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		for _, t := range tables {
 			table := t
 			g.Go(func() error {
-				return GenerateTableChunks(ctx, cmd.ReaderConfig, sourceReader, table, chunks)
+				return GenerateTableChunks(ctx, cmd.ReaderConfig, limitedSourceReader, table, chunks)
 			})
 		}
 		err := g.Wait()
@@ -96,31 +103,19 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		return nil
 	})
 
-	readerLimiter := makeLimiter("read_limiter")
-
 	// Forward chunks to differs
 	g.Go(func() error {
+		readerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
-			acquireTimer := prometheus.NewTimer(readLimiterDelay)
-			token, ok := readerLimiter.Acquire(ctx)
-			if !ok {
-				if token != nil {
-					token.OnDropped()
-				}
-				return errors.Errorf("reader limiter short circuited")
+			err := readerParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
 			}
-			acquireTimer.ObserveDuration()
 			g.Go(func() (err error) {
-				defer func() {
-					if err == nil {
-						token.OnSuccess()
-					} else {
-						token.OnDropped()
-					}
-				}()
-				err = diffChunk(ctx, cmd.ReaderConfig, sourceReader, targetReader, chunk, diffs)
+				defer readerParallelism.Release(1)
+				err = diffChunk(ctx, cmd.ReaderConfig, limitedSourceReader, limitedTargetReader, chunk, diffs)
 				return errors.WithStack(err)
 			})
 		}

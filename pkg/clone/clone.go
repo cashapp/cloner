@@ -60,8 +60,9 @@ func (cmd *Clone) Run() error {
 	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
-	limitedSourceReader := Limit(
-		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
+	//limitedSourceReader := Limit(
+	//	sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
+	limitedSourceReader := sourceReader
 
 	writer, err := cmd.Target.DB()
 	if err != nil {
@@ -89,8 +90,9 @@ func (cmd *Clone) Run() error {
 	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
-	limitedTargetReader := Limit(
-		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
+	//limitedTargetReader := Limit(
+	//	targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
+	limitedTargetReader := targetReader
 
 	// Load tables
 	// TODO in consistent clone we should diff the schema of the source with the target,

@@ -3,6 +3,8 @@ package clone
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
 	"testing"
 	"vitess.io/vitess/go/vt/proto/topodata"
 
@@ -88,6 +90,14 @@ func inShard(id uint64, shard []*topodata.KeyRange) bool {
 		}
 	}
 	return false
+}
+
+func startMetricsServer() {
+	go func() {
+		bindAddr := "localhost:9102"
+		http.Handle("/metrics", promhttp.Handler())
+		_ = http.ListenAndServe(bindAddr, nil)
+	}()
 }
 
 func TestShardedCloneWithTargetData(t *testing.T) {

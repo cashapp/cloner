@@ -3,12 +3,12 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"time"
-
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+	"time"
 )
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
@@ -41,10 +41,16 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Diff each chunk as they are produced
 	diffs := make(chan Diff)
 	g.Go(func() error {
+		readerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
+			err := readerParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 			g.Go(func() (err error) {
+				defer readerParallelism.Release(1)
 				if cmd.NoDiff {
 					err = readChunk(ctx, cmd.ReaderConfig, source, chunk, diffs)
 				} else {

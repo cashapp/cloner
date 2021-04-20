@@ -38,6 +38,7 @@ func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args 
 		return nil, errors.Errorf("reader limiter short circuited")
 	}
 	acquireTimer.ObserveDuration()
+
 	defer func() {
 		if err == nil {
 			token.OnSuccess()
@@ -45,6 +46,7 @@ func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args 
 			token.OnDropped()
 		}
 	}()
+
 	rows, err = l.reader.QueryContext(ctx, query, args...)
 	return rows, err
 }

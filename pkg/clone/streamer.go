@@ -29,13 +29,17 @@ type limitingDBReader struct {
 }
 
 func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args ...interface{}) (rows *sql.Rows, err error) {
-	token, ok := l.limiter.Acquire(ctx)
 	acquireTimer := prometheus.NewTimer(l.acquireMetric)
+	token, ok := l.limiter.Acquire(ctx)
 	if !ok {
 		if token != nil {
 			token.OnDropped()
 		}
-		return nil, errors.Wrap(ctx.Err(), "deadline expired")
+		if ctx.Err() != nil {
+			return nil, errors.Wrap(ctx.Err(), "context deadline exceeded")
+		} else {
+			return nil, errors.New("context deadline exceeded")
+		}
 	}
 	acquireTimer.ObserveDuration()
 
@@ -48,7 +52,7 @@ func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args 
 	}()
 
 	rows, err = l.reader.QueryContext(ctx, query, args...)
-	return rows, err
+	return rows, errors.WithStack(err)
 }
 
 func Limit(db DBReader, limiter core.Limiter, acquireMetric prometheus.Observer) DBReader {

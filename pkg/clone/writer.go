@@ -194,16 +194,6 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
-	defer timer.ObserveDuration()
-	defer func() {
-		if err == nil {
-			writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-		} else {
-			writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-		}
-	}()
-
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
 	err = backoff.Retry(func() (err error) {
 		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
@@ -227,6 +217,16 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
 		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+			timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
+			defer timer.ObserveDuration()
+			defer func() {
+				if err == nil {
+					writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+				} else {
+					writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+				}
+			}()
+
 			if cmd.NoDiff {
 				return replaceBatch(ctx, cmd, logger, tx, batch)
 			} else {

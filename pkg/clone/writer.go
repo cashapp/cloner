@@ -49,7 +49,7 @@ var (
 	writeDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "write_duration",
-			Help:       "Total duration of writes (including retries and backoff).",
+			Help:       "Duration of writes (does not include retries and backoff).",
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table", "type"},
@@ -83,22 +83,21 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 
 			logger := log.WithField("table", batch.Table.Name).WithError(err)
 
-			// If we fail to write due to a uniqueness constraint violation
-			// we'll split the batch so that we can write all the rows in the batch
-			// that are not conflicting
-			if isConstraintViolation(err) {
-				if len(batch.Rows) > 1 {
-					batch1, batch2 := splitBatch(batch)
-					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-					err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-					return nil
+			// If we fail to write we'll split the batch
+			// * It could be because of a conflict violation in which case we want to write all the non-conflicting rows
+			// * It could be because some rows in the batch are too big in which case we want to decrease the batch size
+			// In either case splitting the rows are better
+			if len(batch.Rows) > 1 {
+				batch1, batch2 := splitBatch(batch)
+				err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
+				if err != nil {
+					return errors.WithStack(err)
 				}
+				err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				return nil
 			}
 
 			if !cmd.Consistent {
@@ -249,9 +248,8 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 		if isSchemaError(err) {
 			return backoff.Permanent(err)
 		}
-		// We immediately fail constraint violation of non-single row batches,
-		// the caller will do binary chop to find the violating row
-		if isConstraintViolation(err) && len(batch.Rows) > 1 {
+		// We immediately fail non-single row batches, the caller will do binary chop to find the violating row
+		if len(batch.Rows) > 1 {
 			return backoff.Permanent(err)
 		}
 

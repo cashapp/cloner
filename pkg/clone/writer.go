@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/go-sql-driver/mysql"
+	"golang.org/x/sync/semaphore"
 	"strings"
 
 	"github.com/cenkalti/backoff/v4"
@@ -71,9 +72,14 @@ func init() {
 	prometheus.MustRegister(writeLimiterDelay)
 }
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
+func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *semaphore.Weighted, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
+	err = writerParallelism.Acquire(ctx, 1)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 	g.Go(func() (err error) {
+		defer writerParallelism.Release(1)
 		err = Write(ctx, cmd, writerLimiter, writer, batch)
 
 		if err != nil {
@@ -89,11 +95,11 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limi
 			// In either case splitting the rows are better
 			if len(batch.Rows) > 1 {
 				batch1, batch2 := splitBatch(batch)
-				err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
+				err = scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch1)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
+				err := scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch2)
 				if err != nil {
 					return errors.WithStack(err)
 				}

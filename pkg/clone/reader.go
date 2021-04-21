@@ -85,6 +85,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 
 	// Write every batch
 	g.Go(func() error {
+		writerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for batch := range batches {
 			size := len(batch.Rows)
@@ -96,7 +97,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			case Insert:
 				inserts += size
 			}
-			err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch)
+			err := scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch)
 			if err != nil {
 				return errors.WithStack(err)
 			}

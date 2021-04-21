@@ -35,7 +35,7 @@ func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args 
 		if token != nil {
 			token.OnDropped()
 		}
-		return nil, errors.Errorf("reader limiter short circuited")
+		return nil, errors.Wrap(ctx.Err(), "deadline expired")
 	}
 	acquireTimer.ObserveDuration()
 

@@ -213,7 +213,7 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 			if token != nil {
 				token.OnDropped()
 			}
-			return errors.Errorf("write limiter short circuited")
+			return errors.Wrap(ctx.Err(), "deadline expired")
 		}
 		acquireTimer.ObserveDuration()
 		defer func() {

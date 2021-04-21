@@ -62,7 +62,9 @@ func (cmd *Clone) Run() error {
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
 	limitedSourceReader := Limit(
-		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
+		sourceReader,
+		makeLimiter("source_reader_limiter", cmd.ReadTimeout),
+		readLimiterDelay.WithLabelValues("source"))
 
 	writer, err := cmd.Target.DB()
 	if err != nil {
@@ -91,7 +93,9 @@ func (cmd *Clone) Run() error {
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
 	limitedTargetReader := Limit(
-		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
+		targetReader,
+		makeLimiter("target_reader_limiter", cmd.ReadTimeout),
+		readLimiterDelay.WithLabelValues("target"))
 
 	// Load tables
 	// TODO in consistent clone we should diff the schema of the source with the target,
@@ -110,7 +114,7 @@ func (cmd *Clone) Run() error {
 	}
 	close(tableCh)
 
-	writerLimiter := makeLimiter("write_limiter")
+	writerLimiter := makeLimiter("write_limiter", cmd.WriteTimeout)
 
 	if cmd.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")

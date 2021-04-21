@@ -56,7 +56,9 @@ func (cmd *Checksum) run() ([]Diff, error) {
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
 	limitedSourceReader := Limit(
-		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
+		sourceReader,
+		makeLimiter("source_reader_limiter", cmd.ReadTimeout),
+		readLimiterDelay.WithLabelValues("source"))
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
@@ -72,7 +74,9 @@ func (cmd *Checksum) run() ([]Diff, error) {
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
 	limitedTargetReader := Limit(
-		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
+		targetReader,
+		makeLimiter("target_reader_limiter", cmd.ReadTimeout),
+		readLimiterDelay.WithLabelValues("target"))
 
 	// Load tables
 	tables, err := LoadTables(ctx, cmd.ReaderConfig)

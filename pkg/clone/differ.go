@@ -427,8 +427,9 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 	var result RowStream
 
 	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
-	retriesLeft := config.ReadRetries
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), retriesLeft), ctx)
+	start := time.Now()
+	retries := 0
+	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
 	err := backoff.RetryNotify(func() error {
 		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
 		defer timer.ObserveDuration()
@@ -455,10 +456,15 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 		}
 		return nil
 	}, b, func(err error, duration time.Duration) {
-		retriesLeft--
-		logger.WithError(err).Warnf("failed reading chunk from %s, retrying in %s (retries left %d): %s",
-			from, duration, retriesLeft, err)
+		retries++
 	})
+	if err != nil {
+		logger.WithField("table", chunk.Table).
+			WithField("from", from).
+			WithError(err).
+			Errorf("failed reading chunk from %s, after %d retries and total duration of %v: %s",
+				from, retries, time.Since(start), err)
+	}
 
 	return result, err
 }

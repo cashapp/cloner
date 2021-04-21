@@ -220,13 +220,17 @@ func GenerateTableChunks(
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			chunks <- Chunk{
+			select {
+			case chunks <- Chunk{
 				Table: table,
 				Start: startId,
 				End:   id,
 				First: first,
 				Last:  !hasNext,
 				Size:  currentChunkSize,
+			}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			// Next id should be the next start id
 			startId = id

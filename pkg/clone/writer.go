@@ -87,8 +87,6 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 				return errors.WithStack(err)
 			}
 
-			logger := log.WithField("table", batch.Table.Name).WithError(err)
-
 			// If we fail to write we'll split the batch
 			// * It could be because of a conflict violation in which case we want to write all the non-conflicting rows
 			// * It could be because some rows in the batch are too big in which case we want to decrease the batch size
@@ -107,14 +105,14 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 			}
 
 			if !cmd.Consistent {
+				logger := log.WithField("table", batch.Table.Name).WithError(err)
 				// If we're doing a best effort clone we just give up on this batch
 				logger.Warnf("failed write batch after retries and backoff, "+
 					"since this is a best effort clone we just give up: %+v", err)
 				return nil
 			}
 
-			logger.Errorf("failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
-			return errors.WithStack(err)
+			return errors.Wrapf(err, "failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
 		}
 		return nil
 	})

@@ -62,7 +62,6 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		}
 		err := g.Wait()
 		if err != nil {
-			logger.WithField("task", "differ").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 
@@ -77,7 +76,6 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
 		close(batches)
 		if err != nil {
-			logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 		return nil
@@ -104,7 +102,6 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		}
 		err := g.Wait()
 		if err != nil {
-			logger.WithField("task", "writer").WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 			return errors.WithStack(err)
 		}
 		return nil
@@ -123,7 +120,6 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		WithField("updates", updates)
 
 	if err != nil {
-		logger.WithError(err).Errorf("err: %+v\ncontext error: %+v", err, ctx.Err())
 		return errors.WithStack(err)
 	}
 

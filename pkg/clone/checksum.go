@@ -17,9 +17,11 @@ type Checksum struct {
 	ReaderConfig
 }
 
-// Run applies the necessary changes to target to make it look like source
+// Run finds any differences between source and target
 func (cmd *Checksum) Run() error {
 	var err error
+
+	start := time.Now()
 
 	err = cmd.ReaderConfig.LoadConfig()
 	if err != nil {
@@ -29,13 +31,23 @@ func (cmd *Checksum) Run() error {
 	log.WithField("config", cmd).Infof("using config")
 
 	diffs, err := cmd.run()
+
+	elapsed := time.Since(start)
+	logger := log.WithField("duration", elapsed)
 	if err != nil {
-		return errors.WithStack(err)
+		if stackErr, ok := err.(stackTracer); ok {
+			logger = logger.WithField("stacktrace", stackErr.StackTrace())
+		}
+		logger.WithError(err).Errorf("error: %+v", err)
+	} else {
+		logger.Infof("full checksum success")
 	}
+
 	if len(diffs) > 0 {
-		return errors.Errorf("Found diffs")
+		// TODO log a more detailed diff report
+		return errors.Errorf("found diffs")
 	}
-	return nil
+	return errors.WithStack(err)
 }
 
 func (cmd *Checksum) run() ([]Diff, error) {

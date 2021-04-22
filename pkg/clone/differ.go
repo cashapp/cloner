@@ -11,7 +11,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
 )
 
 type DiffType string
@@ -426,7 +425,6 @@ func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader
 func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from string, chunk Chunk) (RowStream, error) {
 	var result RowStream
 
-	logger := log.WithField("task", "differ").WithField("table", chunk.Table.Name)
 	start := time.Now()
 	retries := 0
 	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
@@ -458,13 +456,7 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 	}, b, func(err error, duration time.Duration) {
 		retries++
 	})
-	if err != nil {
-		logger.WithField("table", chunk.Table).
-			WithField("from", from).
-			WithError(err).
-			Errorf("failed reading chunk from %s, after %d retries and total duration of %v: %s",
-				from, retries, time.Since(start), err)
-	}
 
-	return result, err
+	return result, errors.Wrapf(err, "failed reading chunk from %s, after %d retries and total duration of %v",
+		from, retries, time.Since(start))
 }

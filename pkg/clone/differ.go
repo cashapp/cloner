@@ -105,6 +105,7 @@ func init() {
 	prometheus.MustRegister(chunksWithDiffs)
 	prometheus.MustRegister(diffCount)
 	prometheus.MustRegister(readDuration)
+	prometheus.MustRegister(readLimiterDelay)
 	prometheus.MustRegister(crc32Duration)
 	prometheus.MustRegister(diffDuration)
 }

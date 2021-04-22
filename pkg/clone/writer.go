@@ -199,7 +199,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), cmd.WriteRetryCount), ctx)
 	err = backoff.Retry(func() (err error) {
 		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
 		token, ok := writerLimiter.Acquire(ctx)

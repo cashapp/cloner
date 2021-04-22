@@ -387,7 +387,7 @@ func diffChunk(ctx context.Context, config ReaderConfig, source DBReader, target
 
 func checksumChunk(ctx context.Context, config ReaderConfig, from string, reader DBReader, chunk Chunk) (int64, error) {
 	var checksum int64
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), config.ReadRetries), ctx)
 	err := backoff.Retry(func() error {
 		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
 		defer timer.ObserveDuration()
@@ -428,7 +428,7 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 
 	start := time.Now()
 	retries := 0
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), config.ReadRetries), ctx)
 	err := backoff.RetryNotify(func() error {
 		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
 		defer timer.ObserveDuration()
@@ -460,4 +460,11 @@ func bufferChunk(ctx context.Context, config ReaderConfig, source DBReader, from
 
 	return result, errors.Wrapf(err, "failed reading chunk from %s, after %d retries and total duration of %v",
 		from, retries, time.Since(start))
+}
+
+func InfiniteExponentialBackOff() *backoff.ExponentialBackOff {
+	exponentialBackOff := backoff.NewExponentialBackOff()
+	exponentialBackOff.MaxInterval = 5 * time.Minute
+	exponentialBackOff.MaxElapsedTime = 0
+	return exponentialBackOff
 }

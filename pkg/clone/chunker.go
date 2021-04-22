@@ -142,7 +142,7 @@ func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 }
 
 func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err error) {
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), p.retries), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), p.retries), ctx)
 	err = backoff.Retry(func() error {
 		ctx, cancel := context.WithTimeout(ctx, p.timeout)
 		defer cancel()

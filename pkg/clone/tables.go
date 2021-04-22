@@ -49,7 +49,7 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	defer db.Close()
 
 	var tables []*Table
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), config.ReadRetries), ctx)
 	err = backoff.Retry(func() error {
 		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
 		defer cancel()

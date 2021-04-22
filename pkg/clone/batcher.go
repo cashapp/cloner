@@ -70,7 +70,11 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 				// Write the final unfilled batches
 				for _, batch := range batchesByType {
 					if len(batch.Rows) > 0 {
-						batches <- batch
+						select {
+						case batches <- batch:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
 				}
 				return nil
@@ -83,7 +87,12 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 			batch.Rows = append(batch.Rows, diff.Row)
 
 			if len(batch.Rows) >= batchSize {
-				batches <- batch
+				select {
+				case batches <- batch:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
 				// and clear it
 				batch.Rows = nil
 			}

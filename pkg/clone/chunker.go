@@ -124,6 +124,10 @@ func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 	if p.currentIndex == len(p.currentPage) {
 		var err error
 		p.currentPage, err = p.loadPage(ctx)
+		if err == io.EOF {
+			// Race condition, the table was emptied
+			return 0, io.EOF
+		}
 		if err != nil {
 			return 0, errors.WithStack(err)
 		}
@@ -155,6 +159,11 @@ func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err erro
 			}
 			defer rows.Close()
 		} else {
+			result = nil
+			if len(p.currentPage) == 0 {
+				// Race condition, the table was emptied
+				return backoff.Permanent(io.EOF)
+			}
 			lastId := p.currentPage[len(p.currentPage)-1]
 			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s > %d order by %s asc limit %d",
 				p.table.IDColumn, p.table.Name, p.table.IDColumn, lastId, p.table.IDColumn, p.pageSize))

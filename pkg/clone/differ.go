@@ -159,7 +159,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 					select {
 					case diffs <- Diff{Insert, sourceRow, nil}:
 					case <-ctx.Done():
-						return nil
+						return ctx.Err()
 					}
 					diffCount.WithLabelValues(table.Name, "insert").Inc()
 					hasDiff = true
@@ -169,7 +169,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 					select {
 					case diffs <- Diff{Delete, targetRow, nil}:
 					case <-ctx.Done():
-						return nil
+						return ctx.Err()
 					}
 					diffCount.WithLabelValues(table.Name, "delete").Inc()
 					hasDiff = true
@@ -184,7 +184,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 						select {
 						case diffs <- Diff{Update, sourceRow, targetRow}:
 						case <-ctx.Done():
-							return nil
+							return ctx.Err()
 						}
 						hasDiff = true
 						diffCount.WithLabelValues(table.Name, "update").Inc()
@@ -200,7 +200,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 				select {
 				case diffs <- Diff{Insert, sourceRow, nil}:
 				case <-ctx.Done():
-					return nil
+					return ctx.Err()
 				}
 				diffCount.WithLabelValues(table.Name, "insert").Inc()
 				hasDiff = true
@@ -211,7 +211,7 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 			select {
 			case diffs <- Diff{Delete, targetRow, nil}:
 			case <-ctx.Done():
-				return nil
+				return ctx.Err()
 			}
 			diffCount.WithLabelValues(table.Name, "delete").Inc()
 			hasDiff = true

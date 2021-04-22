@@ -42,7 +42,7 @@ readChannel:
 				break readChannel
 			}
 		case <-ctx.Done():
-			break readChannel
+			return ctx.Err()
 		}
 	}
 
@@ -50,7 +50,11 @@ readChannel:
 	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {
-				batches <- batch
+				select {
+				case batches <- batch:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}
@@ -99,7 +103,7 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 
 			batchesByType[diff.Type] = batch
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		}
 	}
 }

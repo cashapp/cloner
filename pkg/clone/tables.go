@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"strings"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
 )
@@ -49,17 +48,13 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	defer db.Close()
 
 	var tables []*Table
-	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), config.ReadRetries), ctx)
-	err = backoff.Retry(func() error {
-		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
-		defer cancel()
-
+	err = Retry(ctx, config.ReadRetries, config.ReadTimeout, func(ctx context.Context) error {
 		tables, err = loadTables(ctx, config, dbConfig, db)
 		if len(tables) == 0 {
 			return errors.Errorf("no tables found")
 		}
 		return err
-	}, b)
+	})
 	// Shuffle the tables so they are processed in random order (which spreads out load)
 	rand.Shuffle(len(tables), func(i, j int) { tables[i], tables[j] = tables[j], tables[i] })
 	return tables, err

@@ -124,7 +124,7 @@ func startVitess() error {
 		Database: "customer@master",
 	}
 
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
+	// exponential backoff-Retry, because the application in the container might not be ready to accept connections yet
 	time.Sleep(1 * time.Second)
 	if err := pool.Retry(func() error {
 		var err error
@@ -195,7 +195,7 @@ func startTidb() error {
 		Database: "mysql",
 	}
 
-	// exponential backoff-retry, because the application in the container might not be ready to accept connections yet
+	// exponential backoff-Retry, because the application in the container might not be ready to accept connections yet
 	if err := pool.Retry(func() error {
 		var err error
 		db, err := config.DB()

@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
 	"io"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 )
 
@@ -141,14 +141,12 @@ func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 	return next, nil
 }
 
-func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err error) {
-	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), p.retries), ctx)
-	err = backoff.Retry(func() error {
-		ctx, cancel := context.WithTimeout(ctx, p.timeout)
-		defer cancel()
+func (p *pagingStreamer) loadPage(ctx context.Context) ([]int64, error) {
+	var result []int64
+	err := Retry(ctx, p.retries, p.timeout, func(ctx context.Context) error {
+		var err error
 
 		result = make([]int64, 0, p.pageSize)
-		var err error
 		var rows *sql.Rows
 		if p.first {
 			p.first = false
@@ -181,9 +179,9 @@ func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err erro
 			result = append(result, id)
 		}
 		return err
-	}, b)
+	})
 
-	return
+	return result, err
 }
 
 func streamIds(conn DBReader, table *Table, timeout time.Duration, pageSize int, retries uint64) PeekingIdStreamer {

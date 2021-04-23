@@ -112,7 +112,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 				return nil
 			}
 
-			return errors.Wrapf(err, "failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
+			return errors.Wrapf(err, "failed write batch after %d times: %+v", cmd.WriteRetries, err)
 		}
 		return nil
 	})
@@ -199,8 +199,7 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	b := backoff.WithContext(backoff.WithMaxRetries(InfiniteExponentialBackOff(), cmd.WriteRetryCount), ctx)
-	err = backoff.Retry(func() (err error) {
+	err = Retry(ctx, cmd.WriteRetries, cmd.WriteTimeout, func(ctx context.Context) error {
 		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
 		token, ok := writerLimiter.Acquire(ctx)
 		if !ok {
@@ -219,8 +218,6 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 				}
 			}
 		}()
-		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
-		defer cancel()
 		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 			timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
 			defer timer.ObserveDuration()
@@ -264,13 +261,9 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 
 		return nil
 
-	}, b)
+	})
 
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return nil
+	return errors.WithStack(err)
 }
 
 func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {

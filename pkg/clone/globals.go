@@ -36,7 +36,7 @@ type ReaderConfig struct {
 	ReaderCount       int           `help:"Number of reader connections" default:"20"`
 	ReaderParallelism int64         `help:"Number of reader goroutines" default:"200"`
 	ReadTimeout       time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
-	ReadRetries       uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
+	ReadRetries       uint64        `help:"How many times to Retry reading a single chunk (with backoff)" default:"10"`
 
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 

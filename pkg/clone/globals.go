@@ -19,6 +19,7 @@ type TableConfig struct {
 	TargetHint    string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
 	SourceWhere   string   `toml:"source_where" help:"Extra where clause that is added on the source"`
 	SourceHint    string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
+	ChunkSize     int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
 }
 
 type Config struct {

@@ -81,7 +81,7 @@ func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
 	if !p.hasPeeked {
 		// first time round load the first entry
 		p.peeked, err = p.wrapped.Next(ctx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return p.peeked, false, err
 		} else {
 			if err != nil {
@@ -95,7 +95,7 @@ func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
 	hasNext := true
 
 	p.peeked, err = p.wrapped.Next(ctx)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		hasNext = false
 	} else {
 		if err != nil {
@@ -124,7 +124,7 @@ func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 	if p.currentIndex == len(p.currentPage) {
 		var err error
 		p.currentPage, err = p.loadPage(ctx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			// Race condition, the table was emptied
 			return 0, io.EOF
 		}
@@ -220,7 +220,7 @@ func GenerateTableChunks(
 	hasNext := true
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

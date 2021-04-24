@@ -257,13 +257,17 @@ func GenerateTableChunks(
 			startId = 0
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		chunks <- Chunk{
+		select {
+		case chunks <- Chunk{
 			Table: table,
 			Start: startId,
 			End:   id,
 			First: first,
 			Last:  true,
 			Size:  currentChunkSize,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	return nil

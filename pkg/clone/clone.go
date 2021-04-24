@@ -13,6 +13,27 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+var (
+	tablesTotalMetric = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tables",
+			Help: "How many total tables to do.",
+		},
+	)
+	tablesDoneMetric = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "tables_done",
+			Help: "How many tables done.",
+		},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(tablesTotalMetric)
+	prometheus.MustRegister(tablesDoneMetric)
+}
+
+
 type Clone struct {
 	ReaderConfig
 
@@ -122,8 +143,11 @@ func (cmd *Clone) Run() error {
 
 	logger.Infof("starting clone %s -> %s", cmd.Source.String(), cmd.Target.String())
 
+	tablesTotalMetric.Add(float64(len(tables)))
+
 	// Chunk, diff table and generate batches to write
 	tableLimiter := semaphore.NewWeighted(int64(cmd.TableParallelism))
+	var tablesDone []string
 	for _, t := range tables {
 		table := t
 		g.Go(func() error {
@@ -133,7 +157,23 @@ func (cmd *Clone) Run() error {
 			}
 			defer tableLimiter.Release(1)
 			err = processTable(ctx, limitedSourceReader, limitedTargetReader, table, cmd, writer, writerLimiter)
-			return errors.WithStack(err)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			tablesDoneMetric.Inc()
+			tablesDone = append(tablesDone, t.Name)
+			var tablesToDo []string
+			for _, t := range tables {
+				if !contains(tablesDone, t.Name) {
+					tablesToDo = append(tablesToDo, t.Name)
+				}
+			}
+			logger.Infof("table done %v", t.Name)
+			logger.Infof("tables done %v", tablesDone)
+			logger.Infof("tables left to do %v", tablesToDo)
+
+			return nil
 		})
 	}
 

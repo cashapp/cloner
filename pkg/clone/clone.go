@@ -20,6 +20,13 @@ var (
 			Help: "How many total tables to do.",
 		},
 	)
+	rowCountMetric = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "estimated_rows",
+			Help: "How many total tables to do.",
+		},
+		[]string{"table"},
+	)
 	tablesDoneMetric = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "tables_done",
@@ -30,9 +37,9 @@ var (
 
 func init() {
 	prometheus.MustRegister(tablesTotalMetric)
+	prometheus.MustRegister(rowCountMetric)
 	prometheus.MustRegister(tablesDoneMetric)
 }
-
 
 type Clone struct {
 	ReaderConfig
@@ -144,6 +151,9 @@ func (cmd *Clone) Run() error {
 	logger.Infof("starting clone %s -> %s", cmd.Source.String(), cmd.Target.String())
 
 	tablesTotalMetric.Add(float64(len(tables)))
+	for _, table := range tables {
+		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
+	}
 
 	// Chunk, diff table and generate batches to write
 	tableLimiter := semaphore.NewWeighted(int64(cmd.TableParallelism))

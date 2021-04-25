@@ -25,6 +25,7 @@ type Table struct {
 	ColumnsQuoted []string
 	CRC32Columns  []string
 	ColumnList    string
+	EstimatedRows int64
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
@@ -50,14 +51,20 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	var tables []*Table
 	err = Retry(ctx, config.ReadRetries, config.ReadTimeout, func(ctx context.Context) error {
 		tables, err = loadTables(ctx, config, dbConfig, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 		if len(tables) == 0 {
 			return errors.Errorf("no tables found")
 		}
 		return err
 	})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	// Shuffle the tables so they are processed in random order (which spreads out load)
 	rand.Shuffle(len(tables), func(i, j int) { tables[i], tables[j] = tables[j], tables[i] })
-	return tables, err
+	return tables, nil
 }
 
 func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
@@ -193,7 +200,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	// Close explicitly to check for close errors
 	err = rows.Close()
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	// Yep, hardcoded, maybe we should fix that at some point...
 	idColumn := "id"
@@ -203,6 +210,12 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 			idColumnIndex = i
 		}
 	}
+
+	estimatedRows, err := estimatedRows(ctx, databaseType, conn, schema, tableName)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	return &Table{
 		Name:          tableName,
 		IDColumn:      idColumn,
@@ -211,6 +224,40 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		ColumnsQuoted: columnNamesQuoted,
 		CRC32Columns:  columnNamesCRC32,
 		ColumnList:    strings.Join(columnNamesQuoted, ","),
+		EstimatedRows: estimatedRows,
 		Config:        tableConfig,
 	}, nil
+}
+
+func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBReader, schema string, tableName string) (int64, error) {
+	var err error
+	var rows *sql.Rows
+	if databaseType == MySQL {
+		rows, err = conn.QueryContext(ctx,
+			"select data_length/avg_row_length from information_schema.tables where table_schema = ? and table_name = ?",
+			schema, tableName)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else if databaseType == Vitess {
+		rows, err = conn.QueryContext(ctx,
+			"select data_length/avg_row_length from information_schema.tables where table_name = ? and table_schema like ?",
+			tableName, fmt.Sprintf("vt_%s%%", schema))
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else {
+		return 0, errors.Errorf("not supported: %v", databaseType)
+	}
+	for rows.Next() {
+		var estimatedRows int64
+		err := rows.Scan(&estimatedRows)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		return estimatedRows, nil
+	}
+	return 0, errors.Errorf("could not estimate number of rows of table %v.%v", schema, tableName)
 }

@@ -234,7 +234,7 @@ func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBRead
 	var rows *sql.Rows
 	if databaseType == MySQL {
 		rows, err = conn.QueryContext(ctx,
-			"select data_length/avg_row_length from information_schema.tables where table_schema = ? and table_name = ?",
+			"select round(data_length/avg_row_length) from information_schema.tables where table_schema = ? and table_name = ?",
 			schema, tableName)
 		if err != nil {
 			return 0, errors.WithStack(err)
@@ -242,7 +242,7 @@ func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBRead
 		defer rows.Close()
 	} else if databaseType == Vitess {
 		rows, err = conn.QueryContext(ctx,
-			"select data_length/avg_row_length from information_schema.tables where table_name = ? and table_schema like ?",
+			"select round(data_length/avg_row_length) from information_schema.tables where table_name = ? and table_schema like ?",
 			tableName, fmt.Sprintf("vt_%s%%", schema))
 		if err != nil {
 			return 0, errors.WithStack(err)
@@ -251,13 +251,18 @@ func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBRead
 	} else {
 		return 0, errors.Errorf("not supported: %v", databaseType)
 	}
-	for rows.Next() {
-		var estimatedRows int64
-		err := rows.Scan(&estimatedRows)
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		return estimatedRows, nil
+	if !rows.Next() {
+		return 0, errors.Errorf("could not estimate number of rows of table %v.%v", schema, tableName)
 	}
-	return 0, errors.Errorf("could not estimate number of rows of table %v.%v", schema, tableName)
+
+	var estimatedRows *int64
+	err = rows.Scan(&estimatedRows)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	if estimatedRows == nil {
+		// Empty table most likely
+		return 0, nil
+	}
+	return *estimatedRows, nil
 }

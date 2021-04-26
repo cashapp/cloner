@@ -216,6 +216,13 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		return nil, errors.WithStack(err)
 	}
 
+	if tableConfig.ChunkSize == 0 {
+		tableConfig.ChunkSize = config.ChunkSize
+	}
+	if tableConfig.WriteBatchSize == 0 {
+		tableConfig.WriteBatchSize = config.WriteBatchSize
+	}
+
 	return &Table{
 		Name:          tableName,
 		IDColumn:      idColumn,

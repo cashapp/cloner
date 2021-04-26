@@ -122,14 +122,14 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 			Tables: map[string]TableConfig{
 				"customers": {
 					// equivalent to -80
-					TargetWhere: "(vitess_hash(id) >> 56) < 128",
+					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 				},
 			},
 		},
 	}
 	clone := &Clone{
 		ReaderConfig:            readerConfig,
-		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
@@ -189,9 +189,9 @@ func TestUnshardedClone(t *testing.T) {
 				Source: source,
 				Target: target,
 			},
-			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+			ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
+			WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 		},
-		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 	}
 	err = kong.ApplyDefaults(clone)
@@ -247,14 +247,14 @@ func TestCloneNoDiff(t *testing.T) {
 			Tables: map[string]TableConfig{
 				"customers": {
 					// equivalent to -80
-					TargetWhere: "(vitess_hash(id) >> 56) < 128",
+					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
 				},
 			},
 		},
 	}
 	clone := &Clone{
 		ReaderConfig:            readerConfig,
-		WriteBatchSize:          5, // Smaller batch size to make sure we're exercising batching
 		WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		NoDiff:                  true,
 	}

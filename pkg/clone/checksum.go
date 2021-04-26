@@ -96,8 +96,8 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	chunks := make(chan Chunk, cmd.ChunkSize)
-	diffs := make(chan Diff, cmd.ChunkSize)
+	chunks := make(chan Chunk)
+	diffs := make(chan Diff)
 	g, ctx := errgroup.WithContext(ctx)
 
 	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time

@@ -50,6 +50,7 @@ func TestChunker(t *testing.T) {
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
+	assert.Equal(t, 10, tables[0].Config.ChunkSize)
 	err = GenerateTableChunks(ctx, config, db, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)

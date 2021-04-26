@@ -15,7 +15,7 @@ import (
 func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter) error {
 	logger := log.WithField("table", table.Name)
 	start := time.Now()
-	logger.WithTime(start).Infof("start")
+	logger.WithTime(start).Infof("start %v", table.Name)
 
 	var chunkingDuration time.Duration
 
@@ -73,7 +73,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Batch up the diffs
 	batches := make(chan Batch)
 	g.Go(func() error {
-		err := BatchTableWrites(ctx, cmd.WriteBatchSize, diffs, batches)
+		err := BatchTableWrites(ctx, diffs, batches)
 		close(batches)
 		if err != nil {
 			return errors.WithStack(err)
@@ -123,7 +123,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 		return errors.WithStack(err)
 	}
 
-	logger.Infof("success")
+	logger.Infof("success %v", table.Name)
 
 	return nil
 }

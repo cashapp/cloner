@@ -14,12 +14,13 @@ type SourceTargetConfig struct {
 }
 
 type TableConfig struct {
-	IgnoreColumns []string `toml:"ignore_columns" help:"Ignore columns in table"`
-	TargetWhere   string   `toml:"target_where" help:"Extra where clause that is added on the target"`
-	TargetHint    string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
-	SourceWhere   string   `toml:"source_where" help:"Extra where clause that is added on the source"`
-	SourceHint    string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
-	ChunkSize     int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
+	IgnoreColumns  []string `toml:"ignore_columns" help:"Ignore columns in table"`
+	TargetWhere    string   `toml:"target_where" help:"Extra where clause that is added on the target"`
+	TargetHint     string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
+	SourceWhere    string   `toml:"source_where" help:"Extra where clause that is added on the source"`
+	SourceHint     string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
+	ChunkSize      int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
+	WriteBatchSize int      `toml:"write_batch_size" help:"Global chunk size if chunk size not specified on the table"`
 }
 
 type Config struct {
@@ -30,7 +31,7 @@ type Config struct {
 type ReaderConfig struct {
 	SourceTargetConfig
 
-	ChunkSize int `help:"Size of the chunks to diff" default:"5000"`
+	ChunkSize int `help:"Default size of the chunks to diff (can also be overridden per table)" default:"5000"`
 
 	TableParallelism  int           `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount       int           `help:"Number of reader connections" default:"20"`
@@ -41,6 +42,10 @@ type ReaderConfig struct {
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
+
+	// WriteBatchSize doesn't belong to ReaderConfig but we put that in the TableConfig when we load the table which is
+	// code reused by both checksum and clone so it's easier to put this here for now
+	WriteBatchSize int `help:"Default size of the write batch per transaction (can also be overridden per table)" default:"100"`
 
 	Config Config `kong:"-"`
 }

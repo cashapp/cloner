@@ -48,7 +48,6 @@ type Clone struct {
 
 	NoDiff bool `help:"Clone without diffing using INSERT IGNORE can be faster as a first pass" default:"false"`
 
-	WriteBatchSize          int           `help:"Size of the write batch per transaction" default:"100"`
 	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`
 	WriterParallelism       int64         `help:"Number of writer goroutines" default:"200"`
 	WriterCount             int           `help:"Number of writer connections" default:"10"`

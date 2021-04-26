@@ -207,9 +207,7 @@ func GenerateTableChunks(
 	chunks chan Chunk,
 ) error {
 	chunkSize := table.Config.ChunkSize
-	if chunkSize == 0 {
-		chunkSize = config.ChunkSize
-	}
+
 	ids := streamIds(conn, table, config.ReadTimeout, chunkSize, config.ReadRetries)
 
 	var err error

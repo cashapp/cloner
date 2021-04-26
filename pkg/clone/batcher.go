@@ -64,7 +64,7 @@ readChannel:
 }
 
 // BatchTableWrites consumes diffs for a single table and batches them up into batches by type
-func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
+func BatchTableWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
 	batchesByType := make(map[DiffType]Batch)
 
 	for {
@@ -90,7 +90,7 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 			}
 			batch.Rows = append(batch.Rows, diff.Row)
 
-			if len(batch.Rows) >= batchSize {
+			if len(batch.Rows) >= diff.Row.Table.Config.WriteBatchSize {
 				select {
 				case batches <- batch:
 				case <-ctx.Done():

@@ -61,8 +61,12 @@ func (cmd *Clone) run() error {
 		return errors.WithStack(err)
 	}
 
-	reader := NewReader(cmd.ReaderConfig)
+	reader, err := NewReader(cmd.ReaderConfig)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	defer reader.Close()
+
 	if cmd.NoDiff {
 		err = reader.Read(ctx, g, diffs)
 		if err != nil {

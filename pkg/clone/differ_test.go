@@ -243,8 +243,6 @@ func TestDiffWithChecksum(t *testing.T) {
 	sourceDB, err := source.DB()
 	assert.NoError(t, err)
 	target := tidbContainer.Config()
-	targetDB, err := target.DB()
-	assert.NoError(t, err)
 
 	config := &ReaderConfig{
 		SourceTargetConfig: SourceTargetConfig{
@@ -254,6 +252,10 @@ func TestDiffWithChecksum(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(config)
 	config.UseCRC32Checksum = true
+
+	r, err := NewReader(*config)
+	assert.NoError(t, err)
+	defer r.Close()
 
 	type row struct {
 		id   int64
@@ -298,12 +300,12 @@ func TestDiffWithChecksum(t *testing.T) {
 			}()
 
 			ctx := context.Background()
-			tables, err := loadTables(ctx, *config, source, sourceDB)
+			tables, err := r.loadTables(ctx, source, sourceDB)
 			assert.NoError(t, err)
 			chunk := Chunk{
 				Table: tables[0],
 			}
-			err = diffChunk(ctx, *config, sourceDB, targetDB, chunk, diffsChan)
+			err = r.diffChunk(ctx, chunk, diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()

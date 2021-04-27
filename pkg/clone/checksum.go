@@ -62,9 +62,13 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		return nil
 	})
 
-	reader := NewReader(cmd.ReaderConfig)
+	reader, err := NewReader(cmd.ReaderConfig)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	defer reader.Close()
-	err := reader.Diff(ctx, g, diffs)
+
+	err = reader.Diff(ctx, g, diffs)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

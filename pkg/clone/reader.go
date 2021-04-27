@@ -58,7 +58,7 @@ func init() {
 //	// Chunk up the table
 //	chunks := make(chan Chunk)
 //	g.Go(func() error {
-//		err := GenerateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
+//		err := generateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
 //		chunkingDuration = time.Since(start)
 //		close(chunks)
 //		if err != nil {
@@ -160,8 +160,13 @@ func init() {
 type Reader struct {
 	config ReaderConfig
 
-	source *sql.DB
-	target *sql.DB
+	source                *sql.DB
+	sourceRetry           RetryOptions
+	sourceReaderCollector *sqlstats.StatsCollector
+
+	target                *sql.DB
+	targetRetry           RetryOptions
+	targetReaderCollector *sqlstats.StatsCollector
 }
 
 func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
@@ -178,46 +183,10 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 		return errors.Errorf("need more parallelism")
 	}
 
-	sourceReader, err := r.config.Source.ReaderDB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	r.source = sourceReader
-	// Refresh connections regularly so they don't go stale
-	sourceReader.SetConnMaxLifetime(time.Minute)
-	sourceReader.SetMaxOpenConns(r.config.ReaderCount)
-	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
-	prometheus.MustRegister(sourceReaderCollector)
-	defer prometheus.Unregister(sourceReaderCollector)
-	limitedSourceReader := Limit(
-		sourceReader,
-		makeLimiter("source_reader_limiter"),
-		readLimiterDelay.WithLabelValues("source"))
-
-	// TODO we only have to open the target DB if diff is set to true
-	// Target reader
-	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
-	// other writers to the target during the clone
-	targetReader, err := r.config.Target.DB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	r.target = targetReader
-	// Refresh connections regularly so they don't go stale
-	targetReader.SetConnMaxLifetime(time.Minute)
-	targetReader.SetMaxOpenConns(r.config.ReaderCount)
-	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
-	prometheus.MustRegister(targetReaderCollector)
-	defer prometheus.Unregister(targetReaderCollector)
-	limitedTargetReader := Limit(
-		targetReader,
-		makeLimiter("target_reader_limiter"),
-		readLimiterDelay.WithLabelValues("target"))
-
 	// Load tables
 	// TODO in consistent clone we should diff the schema of the source with the target,
 	//      for now we just use the target schema
-	tables, err := LoadTables(ctx, r.config)
+	tables, err := r.LoadTables(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -235,8 +204,6 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 
 	chunks := make(chan Chunk)
 
-	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time
-
 	// Generate chunks of all source tables
 	g.Go(func() error {
 		var tablesDone []string
@@ -245,7 +212,7 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 		for _, t := range tables {
 			table := t
 			g.Go(func() error {
-				err := GenerateTableChunks(ctx, r.config, limitedSourceReader, table, chunks)
+				err := r.generateTableChunks(ctx, table, chunks)
 
 				tablesDoneMetric.Inc()
 				tablesDone = append(tablesDone, t.Name)
@@ -283,9 +250,9 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 			g.Go(func() (err error) {
 				defer readerParallelism.Release(1)
 				if diff {
-					err = diffChunk(ctx, r.config, limitedSourceReader, limitedTargetReader, chunk, diffs)
+					err = r.diffChunk(ctx, chunk, diffs)
 				} else {
-					err = readChunk(ctx, r.config, limitedSourceReader, chunk, diffs)
+					err = r.readChunk(ctx, chunk, diffs)
 				}
 				return errors.WithStack(err)
 			})
@@ -304,15 +271,71 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 }
 
 func (r *Reader) Close() (err error) {
+	if r.targetReaderCollector != nil {
+		prometheus.Unregister(r.targetReaderCollector)
+	}
+	if r.sourceReaderCollector != nil {
+		prometheus.Unregister(r.sourceReaderCollector)
+	}
+
 	err = r.source.Close()
 	if err != nil {
-		_ = r.target.Close()
+		if r.target != nil {
+			_ = r.target.Close()
+		}
 		return err
 	}
-	err = r.target.Close()
+	if r.target != nil {
+		err = r.target.Close()
+	}
+
 	return
 }
 
-func NewReader(config ReaderConfig) *Reader {
-	return &Reader{config: config}
+func NewReader(config ReaderConfig) (*Reader, error) {
+	r := &Reader{config: config}
+
+	r.sourceRetry = RetryOptions{
+		Limiter:       makeLimiter("source_reader_limiter"),
+		AcquireMetric: readLimiterDelay.WithLabelValues("source"),
+		MaxRetries:    r.config.ReadRetries,
+		Timeout:       r.config.ReadTimeout,
+	}
+	sourceReader, err := r.config.Source.ReaderDB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	r.source = sourceReader
+	// Refresh connections regularly so they don't go stale
+	sourceReader.SetConnMaxLifetime(time.Minute)
+	sourceReader.SetMaxOpenConns(r.config.ReaderCount)
+	r.sourceReaderCollector = sqlstats.NewStatsCollector("source_reader", sourceReader)
+	prometheus.MustRegister(r.sourceReaderCollector)
+
+	r.targetRetry = RetryOptions{
+		Limiter:       makeLimiter("target_reader_limiter"),
+		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
+		MaxRetries:    r.config.ReadRetries,
+		Timeout:       r.config.ReadTimeout,
+	}
+
+	// TODO we only have to open the target DB if diff is set to true
+	// Target reader
+	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
+	// other writers to the target during the clone
+	if r.config.Target.Type != "" {
+		targetReader, err := r.config.Target.DB()
+		if err != nil {
+			_ = r.source.Close()
+			return nil, errors.WithStack(err)
+		}
+		r.target = targetReader
+		// Refresh connections regularly so they don't go stale
+		targetReader.SetConnMaxLifetime(time.Minute)
+		targetReader.SetMaxOpenConns(r.config.ReaderCount)
+		r.targetReaderCollector = sqlstats.NewStatsCollector("target_reader", targetReader)
+		prometheus.MustRegister(r.targetReaderCollector)
+	}
+
+	return r, nil
 }

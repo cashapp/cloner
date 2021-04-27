@@ -28,18 +28,20 @@ type Table struct {
 	EstimatedRows int64
 }
 
-func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
+func (r *Reader) LoadTables(ctx context.Context) ([]*Table, error) {
 	var err error
 
 	// If the source has keyspace use that, otherwise use the target schema
-	dbConfig := config.Target
-	sourceSchema, err := config.Source.Schema()
+	var dbConfig DBConfig
+	sourceSchema, err := r.config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	if sourceSchema != "" {
 		// TODO if using the source filter the tables with the target schema unless we're doing a consistent clone
-		dbConfig = config.Source
+		dbConfig = r.config.Source
+	} else {
+		dbConfig = r.config.Target
 	}
 
 	db, err := dbConfig.ReaderDB()
@@ -49,8 +51,8 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	defer db.Close()
 
 	var tables []*Table
-	err = Retry(ctx, config.ReadRetries, config.ReadTimeout, func(ctx context.Context) error {
-		tables, err = loadTables(ctx, config, dbConfig, db)
+	err = Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
+		tables, err = r.loadTables(ctx, dbConfig, db)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -67,7 +69,7 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	return tables, nil
 }
 
-func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
+func (r *Reader) loadTables(ctx context.Context, dbConfig DBConfig, db DBReader) ([]*Table, error) {
 	schema, err := dbConfig.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -75,7 +77,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 
 	var tableNames []string
 
-	if len(config.Config.Tables) == 0 {
+	if len(r.config.Config.Tables) == 0 {
 		var err error
 		var rows *sql.Rows
 		if dbConfig.Type == MySQL {
@@ -112,8 +114,8 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 			return nil, err
 		}
 	} else {
-		tableNames = make([]string, 0, len(config.Config.Tables))
-		for t := range config.Config.Tables {
+		tableNames = make([]string, 0, len(r.config.Config.Tables))
+		for t := range r.config.Config.Tables {
 			tableNames = append(tableNames, t)
 		}
 	}
@@ -133,7 +135,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 		if tableName == "schema_version" {
 			continue
 		}
-		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])
+		table, err := loadTable(ctx, r.config, dbConfig.Type, db, schema, tableName, r.config.Config.Tables[tableName])
 		if err != nil {
 			return nil, err
 		}

@@ -45,13 +45,15 @@ func TestChunker(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	db, err := source.DB()
-	assert.NoError(t, err)
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
-	tables, err := LoadTables(ctx, config)
+	r, err := NewReader(config)
+	assert.NoError(t, err)
+	defer r.Close()
+
+	tables, err := r.LoadTables(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, tables[0].Config.ChunkSize)
-	err = GenerateTableChunks(ctx, config, db, tables[0], chunks)
+	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)
 	wg.Wait()
@@ -113,7 +115,11 @@ func TestPeekingIdStreamer(t *testing.T) {
 
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
-	tables, err := LoadTables(ctx, config)
+	r, err := NewReader(config)
+	assert.NoError(t, err)
+	defer r.Close()
+
+	tables, err := r.LoadTables(ctx)
 	assert.NoError(t, err)
 
 	queriedIds := make([]int64, 0, rowCount)
@@ -126,7 +132,7 @@ func TestPeekingIdStreamer(t *testing.T) {
 		queriedIds = append(queriedIds, id)
 	}
 
-	ids := streamIds(db, tables[0], 1*time.Second, 9, 1)
+	ids := streamIds(db, tables[0], 1, RetryOptions{Timeout: 1 * time.Second, MaxRetries: 9})
 	pagedIds := make([]int64, 0, rowCount)
 	var next int64
 	hasNext := true
@@ -149,7 +155,21 @@ func TestChunkerEmptyTable(t *testing.T) {
 
 	source.Database = "customer/-80@replica"
 
+	config := ReaderConfig{ReadTimeout: time.Second,
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {},
+			},
+		},
+		ChunkSize:          10,
+		SourceTargetConfig: SourceTargetConfig{Source: source}}
+
+	r, err := NewReader(config)
+	assert.NoError(t, err)
+	defer r.Close()
+
 	chunks := make(chan Chunk)
+
 	var result []testChunk
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -161,22 +181,10 @@ func TestChunkerEmptyTable(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	db, err := source.DB()
-	assert.NoError(t, err)
-	conns, err := OpenConnections(ctx, db, 1)
-	assert.NoError(t, err)
-	config := ReaderConfig{ReadTimeout: time.Second,
-		Config: Config{
-			Tables: map[string]TableConfig{
-				"customers": {},
-			},
-		},
-		ChunkSize:          10,
-		SourceTargetConfig: SourceTargetConfig{Source: source}}
-	tables, err := LoadTables(ctx, config)
+	tables, err := r.LoadTables(ctx)
 	assert.NoError(t, err)
 
-	err = GenerateTableChunks(ctx, config, conns[0], tables[0], chunks)
+	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)
 	wg.Wait()
@@ -210,10 +218,6 @@ func TestChunkerSingleRow(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	db, err := source.DB()
-	assert.NoError(t, err)
-	conns, err := OpenConnections(ctx, db, 1)
-	assert.NoError(t, err)
 	config := ReaderConfig{ReadTimeout: time.Second,
 		Config: Config{
 			Tables: map[string]TableConfig{
@@ -222,10 +226,14 @@ func TestChunkerSingleRow(t *testing.T) {
 		},
 		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
-	tables, err := LoadTables(ctx, config)
+	r, err := NewReader(config)
+	assert.NoError(t, err)
+	defer r.Close()
+
+	tables, err := r.LoadTables(ctx)
 	assert.NoError(t, err)
 
-	err = GenerateTableChunks(ctx, config, conns[0], tables[0], chunks)
+	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)
 	wg.Wait()

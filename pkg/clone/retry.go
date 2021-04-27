@@ -4,16 +4,25 @@ import (
 	"context"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"runtime/debug"
 	"time"
 )
 
+type RetryOptions struct {
+	Limiter       core.Limiter
+	AcquireMetric prometheus.Observer
+	MaxRetries    uint64
+	Timeout       time.Duration
+}
+
 // Retry retries with back off
-func Retry(ctx context.Context, maxRetries uint64, timeout time.Duration, f func(context.Context) error) error {
+func Retry(ctx context.Context, options RetryOptions, f func(context.Context) error) error {
 	start := time.Now()
 	retries := 0
-	b := backoff.WithContext(backoff.WithMaxRetries(IndefiniteExponentialBackOff(), maxRetries), ctx)
+	b := backoff.WithContext(backoff.WithMaxRetries(IndefiniteExponentialBackOff(), options.MaxRetries), ctx)
 	err := backoff.RetryNotify(func() (err error) {
 		debug.SetPanicOnFault(true)
 		defer func() {
@@ -23,7 +32,31 @@ func Retry(ctx context.Context, maxRetries uint64, timeout time.Duration, f func
 			}
 		}()
 
-		ctx, cancel := context.WithTimeout(ctx, timeout)
+		if options.Limiter != nil {
+			acquireTimer := prometheus.NewTimer(options.AcquireMetric)
+			token, ok := options.Limiter.Acquire(ctx)
+			if !ok {
+				if token != nil {
+					token.OnDropped()
+				}
+				if ctx.Err() != nil {
+					return errors.Wrap(ctx.Err(), "context deadline exceeded")
+				} else {
+					return errors.New("context deadline exceeded")
+				}
+			}
+			acquireTimer.ObserveDuration()
+
+			defer func() {
+				if err == nil {
+					token.OnSuccess()
+				} else {
+					token.OnDropped()
+				}
+			}()
+		}
+
+		ctx, cancel := context.WithTimeout(ctx, options.Timeout)
 		defer cancel()
 
 		err = f(ctx)

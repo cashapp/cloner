@@ -191,7 +191,7 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 	defer prometheus.Unregister(sourceReaderCollector)
 	limitedSourceReader := Limit(
 		sourceReader,
-		makeLimiter("source_reader_limiter", r.config.ReadTimeout),
+		makeLimiter("source_reader_limiter"),
 		readLimiterDelay.WithLabelValues("source"))
 
 	// TODO we only have to open the target DB if diff is set to true
@@ -211,7 +211,7 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 	defer prometheus.Unregister(targetReaderCollector)
 	limitedTargetReader := Limit(
 		targetReader,
-		makeLimiter("target_reader_limiter", r.config.ReadTimeout),
+		makeLimiter("target_reader_limiter"),
 		readLimiterDelay.WithLabelValues("target"))
 
 	// Load tables

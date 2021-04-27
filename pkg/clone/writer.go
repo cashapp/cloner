@@ -479,7 +479,7 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 
 	// Write every batch
 	g.Go(func() error {
-		writerLimiter := makeLimiter("write_limiter", w.config.WriteTimeout)
+		writerLimiter := makeLimiter("write_limiter")
 
 		writerParallelism := semaphore.NewWeighted(w.config.WriterParallelism)
 		g, ctx := errgroup.WithContext(ctx)

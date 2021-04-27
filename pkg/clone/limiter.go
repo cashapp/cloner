@@ -5,7 +5,6 @@ import (
 	"github.com/platinummonkey/go-concurrency-limits/limiter"
 	"github.com/platinummonkey/go-concurrency-limits/strategy"
 	"github.com/sirupsen/logrus"
-	"time"
 )
 
 type limitLogger struct {
@@ -19,7 +18,7 @@ func (l limitLogger) IsDebugEnabled() bool {
 	return logrus.IsLevelEnabled(logrus.DebugLevel)
 }
 
-func makeLimiter(name string, timeout time.Duration) core.Limiter {
+func makeLimiter(name string) core.Limiter {
 	limitStrategy := strategy.NewSimpleStrategy(10)
 	logger := limitLogger{}
 	defaultLimiter, err := limiter.NewDefaultLimiterWithDefaults(
@@ -31,5 +30,5 @@ func makeLimiter(name string, timeout time.Duration) core.Limiter {
 	if err != nil {
 		logrus.Panicf("failed to create limiter: %s", err)
 	}
-	return limiter.NewBlockingLimiter(defaultLimiter, timeout, logger)
+	return limiter.NewBlockingLimiter(defaultLimiter, 0, logger)
 }

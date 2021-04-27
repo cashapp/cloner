@@ -460,8 +460,7 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 	// Batch up the diffs
 	batches := make(chan Batch)
 	g.Go(func() error {
-		err := BatchTableWrites(ctx, diffs, batches)
-		close(batches)
+		err := BatchWrites(ctx, diffs, batches)
 		if err != nil {
 			return errors.WithStack(err)
 		}

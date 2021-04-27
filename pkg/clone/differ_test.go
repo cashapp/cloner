@@ -15,9 +15,9 @@ type testRow struct {
 	data  string
 }
 
-func (testRow testRow) toRow() *Row {
+func (testRow testRow) toRow(batchSize int) *Row {
 	return &Row{
-		Table: &Table{Name: testRow.table},
+		Table: &Table{Name: testRow.table, Config: TableConfig{WriteBatchSize: batchSize}},
 		ID:    testRow.id,
 		Data:  []interface{}{testRow.data},
 	}
@@ -28,8 +28,8 @@ type testDiff struct {
 	row      testRow
 }
 
-func (d testDiff) toDiff() Diff {
-	return Diff{d.diffType, d.row.toRow(), nil}
+func (d testDiff) toDiff(batchSize int) Diff {
+	return Diff{d.diffType, d.row.toRow(batchSize), nil}
 }
 
 func toTestDiff(diff Diff) testDiff {
@@ -184,7 +184,10 @@ func TestStreamDiff(t *testing.T) {
 					result = append(result, toTestDiff(diff))
 				}
 			}()
-			err := StreamDiff(context.Background(), table, streamTestRows(test.source), streamTestRows(test.target), diffsChan)
+			err := StreamDiff(context.Background(), table,
+				streamTestRows(test.source, 5),
+				streamTestRows(test.target, 5),
+				diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()
@@ -195,6 +198,7 @@ func TestStreamDiff(t *testing.T) {
 
 type testRowStreamer struct {
 	rows []testRow
+	batchSize int
 }
 
 func (t *testRowStreamer) Close() error {
@@ -208,11 +212,11 @@ func (t *testRowStreamer) Next() (*Row, error) {
 	testRow := t.rows[0]
 	// chop head
 	t.rows = t.rows[1:]
-	return testRow.toRow(), nil
+	return testRow.toRow(t.batchSize), nil
 }
 
-func streamTestRows(rows []testRow) RowStream {
-	return &testRowStreamer{rows}
+func streamTestRows(rows []testRow, batchSize int) RowStream {
+	return &testRowStreamer{rows, batchSize}
 }
 
 func TestRowsEqual(t *testing.T) {

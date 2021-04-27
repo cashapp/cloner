@@ -11,7 +11,7 @@ type Batch struct {
 }
 
 // BatchWrites consumes diffs and batches them up into batches by type and table
-func BatchWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
+func BatchWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
 	batchesByType := make(map[DiffType]map[string]Batch)
 
 readChannel:
@@ -30,7 +30,7 @@ readChannel:
 				}
 				batch.Rows = append(batch.Rows, diff.Row)
 
-				if len(batch.Rows) >= batchSize {
+				if len(batch.Rows) >= diff.Row.Table.Config.WriteBatchSize {
 					// Batch is full send it
 					batches <- batch
 					// and clear it
@@ -47,6 +47,8 @@ readChannel:
 	}
 
 	// Write the final unfilled batches
+	// TODO this means we will always write the final unfilled batch of _every_ table after we've processed all
+	//      other tables, I wonder if we should flush all the unfilled batches "regularly"
 	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {

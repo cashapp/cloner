@@ -27,7 +27,10 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 		debug.SetPanicOnFault(true)
 		defer func() {
 			if r := recover(); r != nil {
-				logrus.WithContext(ctx).Warnf("panic in query, retrying: %v", r)
+				logrus.WithField("stack", string(debug.Stack())).
+					WithField("panic", r).
+					WithContext(ctx).
+					Warnf("panic in query, retrying: %v", r)
 				err = errors.Errorf("panic in query, retrying: %v", r)
 			}
 		}()

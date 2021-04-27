@@ -215,15 +215,15 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 				err := r.generateTableChunks(ctx, table, chunks)
 
 				tablesDoneMetric.Inc()
-				tablesDone = append(tablesDone, t.Name)
+				tablesDone = append(tablesDone, table.Name)
 				var tablesToDo []string
 				for _, t := range tables {
-					if !contains(tablesDone, t.Name) {
+					if !contains(tablesDone, table.Name) {
 						tablesToDo = append(tablesToDo, t.Name)
 					}
 				}
 
-				logrus.Infof("table done: %v", t.Name)
+				logrus.Infof("table done: %v", table.Name)
 				logrus.Infof("tables done: %v", tablesDone)
 				logrus.Infof("tables left to do: %v", tablesToDo)
 				return err

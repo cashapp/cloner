@@ -47,7 +47,21 @@ type ReaderConfig struct {
 	// code reused by both checksum and clone so it's easier to put this here for now
 	WriteBatchSize int `help:"Default size of the write batch per transaction (can also be overridden per table)" default:"100"`
 
+	NoDiff bool `help:"Clone without diffing using INSERT IGNORE can be faster as a first pass" default:"false"`
+
 	Config Config `kong:"-"`
+}
+
+type WriterConfig struct {
+	ReaderConfig
+
+	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
+
+	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`
+	WriterParallelism       int64         `help:"Number of writer goroutines" default:"200"`
+	WriterCount             int           `help:"Number of writer connections" default:"10"`
+	WriteRetries            uint64        `help:"Number of retries" default:"5"`
+	WriteTimeout            time.Duration `help:"Timeout for each write" default:"30s"`
 }
 
 // LoadConfig loads the ConfigFile if specified

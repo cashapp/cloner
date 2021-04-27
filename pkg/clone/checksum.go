@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	_ "net/http/pprof"
 	"time"
 
@@ -24,7 +25,7 @@ func (cmd *Checksum) Run() error {
 		return errors.WithStack(err)
 	}
 
-	log.WithField("config", cmd).Infof("using config")
+	log.Infof("using config: %v", cmd)
 
 	diffs, err := cmd.run()
 
@@ -49,18 +50,24 @@ func (cmd *Checksum) Run() error {
 func (cmd *Checksum) run() ([]Diff, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
 
 	diffs := make(chan Diff)
 	// Reporter
 	var foundDiffs []Diff
-	go func() {
+	g.Go(func() error {
 		for diff := range diffs {
 			foundDiffs = append(foundDiffs, diff)
 		}
-	}()
+		return nil
+	})
 
 	reader := NewReader(cmd.ReaderConfig)
-	err := reader.Diff(ctx, diffs)
+	defer reader.Close()
+	err := reader.Diff(ctx, g, diffs)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
-	return foundDiffs, err
+	return foundDiffs, g.Wait()
 }

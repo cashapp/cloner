@@ -42,7 +42,7 @@ func init() {
 }
 
 // processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, cmd *Clone, writer *sql.DB, writerLimiter core.Limiter) error {
+func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, config WriterConfig, writer *sql.DB, writerLimiter core.Limiter) error {
 	logger := logrus.WithField("table", table.Name)
 	start := time.Now()
 	logger.WithTime(start).Infof("start %v", table.Name)
@@ -59,7 +59,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Chunk up the table
 	chunks := make(chan Chunk)
 	g.Go(func() error {
-		err := GenerateTableChunks(ctx, cmd.ReaderConfig, source, table, chunks)
+		err := GenerateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
 		chunkingDuration = time.Since(start)
 		close(chunks)
 		if err != nil {
@@ -71,7 +71,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 	// Diff each chunk as they are produced
 	diffs := make(chan Diff)
 	g.Go(func() error {
-		readerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
+		readerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for c := range chunks {
 			chunk := c
@@ -81,10 +81,10 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			}
 			g.Go(func() (err error) {
 				defer readerParallelism.Release(1)
-				if cmd.NoDiff {
-					err = readChunk(ctx, cmd.ReaderConfig, source, chunk, diffs)
+				if config.NoDiff {
+					err = readChunk(ctx, config.ReaderConfig, source, chunk, diffs)
 				} else {
-					err = diffChunk(ctx, cmd.ReaderConfig, source, target, chunk, diffs)
+					err = diffChunk(ctx, config.ReaderConfig, source, target, chunk, diffs)
 				}
 				return errors.WithStack(err)
 			})
@@ -113,7 +113,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 
 	// Write every batch
 	g.Go(func() error {
-		writerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
+		writerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
 		for batch := range batches {
 			size := len(batch.Rows)
@@ -125,7 +125,7 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 			case Insert:
 				inserts += size
 			}
-			err := scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch)
+			err := scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -160,9 +160,12 @@ func processTable(ctx context.Context, source DBReader, target DBReader, table *
 
 type Reader struct {
 	config ReaderConfig
+
+	source *sql.DB
+	target *sql.DB
 }
 
-func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
+func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
 	if r.config.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")
 	}
@@ -171,6 +174,7 @@ func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	r.source = sourceReader
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
 	sourceReader.SetMaxOpenConns(r.config.ReaderCount)
@@ -189,6 +193,7 @@ func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	r.target = targetReader
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
 	targetReader.SetMaxOpenConns(r.config.ReaderCount)
@@ -220,7 +225,6 @@ func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
 	}
 
 	chunks := make(chan Chunk)
-	g, ctx := errgroup.WithContext(ctx)
 
 	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time
 
@@ -269,7 +273,11 @@ func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
 			}
 			g.Go(func() (err error) {
 				defer readerParallelism.Release(1)
-				err = diffChunk(ctx, r.config, limitedSourceReader, limitedTargetReader, chunk, diffs)
+				if r.config.NoDiff {
+					err = readChunk(ctx, r.config, limitedSourceReader, chunk, diffs)
+				} else {
+					err = diffChunk(ctx, r.config, limitedSourceReader, limitedTargetReader, chunk, diffs)
+				}
 				return errors.WithStack(err)
 			})
 		}
@@ -283,7 +291,13 @@ func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
 		return nil
 	})
 
-	return g.Wait()
+	return nil
+}
+
+func (r *Reader) Close() (err error) {
+	err = r.source.Close()
+	err = r.target.Close()
+	return
 }
 
 func NewReader(config ReaderConfig) *Reader {

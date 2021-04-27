@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/dlmiddlecote/sqlstats"
 	"github.com/go-sql-driver/mysql"
 	"golang.org/x/sync/semaphore"
 	"strings"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
@@ -72,7 +74,7 @@ func init() {
 	prometheus.MustRegister(writeLimiterDelay)
 }
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *semaphore.Weighted, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
+func scheduleWriteBatch(ctx context.Context, config WriterConfig, writerParallelism *semaphore.Weighted, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
 	err = writerParallelism.Acquire(ctx, 1)
 	if err != nil {
 		return errors.WithStack(err)
@@ -80,7 +82,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 	g.Go(func() (err error) {
 		defer writerParallelism.Release(1)
-		err = Write(ctx, cmd, writerLimiter, writer, batch)
+		err = Write(ctx, config, writerLimiter, writer, batch)
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -93,18 +95,18 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 			// In either case splitting the rows are better
 			if len(batch.Rows) > 1 {
 				batch1, batch2 := splitBatch(batch)
-				err = scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch1)
+				err = scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch1)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				err := scheduleWriteBatch(ctx, cmd, writerParallelism, writerLimiter, g, writer, batch2)
+				err := scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch2)
 				if err != nil {
 					return errors.WithStack(err)
 				}
 				return nil
 			}
 
-			if !cmd.Consistent {
+			if !config.Consistent {
 				logger := log.WithField("table", batch.Table.Name).WithError(err)
 				// If we're doing a best effort clone we just give up on this batch
 				logger.Warnf("failed write batch after retries and backoff, "+
@@ -112,7 +114,7 @@ func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerParallelism *sema
 				return nil
 			}
 
-			return errors.Wrapf(err, "failed write batch after %d times: %+v", cmd.WriteRetries, err)
+			return errors.Wrapf(err, "failed write batch after %d times: %+v", config.WriteRetries, err)
 		}
 		return nil
 	})
@@ -196,10 +198,10 @@ func splitBatch(batch Batch) (Batch, Batch) {
 }
 
 // Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
+func Write(ctx context.Context, config WriterConfig, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	err = Retry(ctx, cmd.WriteRetries, cmd.WriteTimeout, func(ctx context.Context) error {
+	err = Retry(ctx, config.WriteRetries, config.WriteTimeout, func(ctx context.Context) error {
 		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
 		token, ok := writerLimiter.Acquire(ctx)
 		if !ok {
@@ -229,16 +231,16 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 				}
 			}()
 
-			if cmd.NoDiff {
-				return replaceBatch(ctx, cmd, logger, tx, batch)
+			if config.NoDiff {
+				return replaceBatch(ctx, config, logger, tx, batch)
 			} else {
 				switch batch.Type {
 				case Insert:
-					return insertBatch(ctx, cmd, logger, tx, batch)
+					return insertBatch(ctx, config, logger, tx, batch)
 				case Delete:
-					return deleteBatch(ctx, cmd, logger, tx, batch)
+					return deleteBatch(ctx, config, logger, tx, batch)
 				case Update:
-					return updateBatch(ctx, cmd, logger, tx, batch)
+					return updateBatch(ctx, config, logger, tx, batch)
 				default:
 					logger.Panicf("Unknown batch type %s", batch.Type)
 					return nil
@@ -266,7 +268,7 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 	return errors.WithStack(err)
 }
 
-func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func deleteBatch(ctx context.Context, config WriterConfig, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
 	logger.Debugf("deleting %d rows", len(rows))
@@ -295,7 +297,7 @@ func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	return nil
 }
 
-func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func replaceBatch(ctx context.Context, config WriterConfig, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	if batch.Type != Insert {
 		return fmt.Errorf("this method only handles inserts")
 	}
@@ -310,7 +312,7 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	statementBatches := batches(batch.Rows, config.WriteBatchStatementSize)
 	for _, statementBatch := range statementBatches {
 		valueStrings := make([]string, 0, len(statementBatch))
 		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
@@ -328,6 +330,7 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
+		fmt.Println("INSERT IGNORE!!")
 		rowsAffected, err := result.RowsAffected()
 		// If we get an error we'll just ignore that...
 		if err != nil {
@@ -354,7 +357,7 @@ func min(a, b int) int {
 	return b
 }
 
-func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func insertBatch(ctx context.Context, config WriterConfig, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
@@ -366,7 +369,7 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	statementBatches := batches(batch.Rows, config.WriteBatchStatementSize)
 	for _, statementBatch := range statementBatches {
 		valueStrings := make([]string, 0, len(statementBatch))
 		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
@@ -391,7 +394,7 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	return nil
 }
 
-func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func updateBatch(ctx context.Context, config WriterConfig, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "update")
 	rows := batch.Rows
 	logger.Debugf("updating %d rows", len(rows))
@@ -438,4 +441,64 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 		}
 	}
 	return nil
+}
+
+type Writer struct {
+	config WriterConfig
+
+	db *sql.DB
+}
+
+func NewWriter(config WriterConfig) *Writer {
+	return &Writer{config: config}
+}
+
+func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+	writer, err := w.config.Target.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	w.db = writer
+	// Refresh connections regularly so they don't go stale
+	writer.SetConnMaxLifetime(time.Minute)
+	writer.SetMaxOpenConns(w.config.WriterCount)
+	writerCollector := sqlstats.NewStatsCollector("target_writer", writer)
+	prometheus.MustRegister(writerCollector)
+	defer prometheus.Unregister(writerCollector)
+
+	// Batch up the diffs
+	batches := make(chan Batch)
+	g.Go(func() error {
+		err := BatchTableWrites(ctx, diffs, batches)
+		close(batches)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
+	// Write every batch
+	g.Go(func() error {
+		writerLimiter := makeLimiter("write_limiter", w.config.WriteTimeout)
+
+		writerParallelism := semaphore.NewWeighted(w.config.WriterParallelism)
+		g, ctx := errgroup.WithContext(ctx)
+		for batch := range batches {
+			err := scheduleWriteBatch(ctx, w.config, writerParallelism, writerLimiter, g, writer, batch)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
+	return nil
+}
+
+func (w *Writer) Close() error {
+	return w.db.Close()
 }

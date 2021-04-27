@@ -13,34 +13,6 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-var (
-	tablesTotalMetric = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "tables",
-			Help: "How many total tables to do.",
-		},
-	)
-	rowCountMetric = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "estimated_rows",
-			Help: "How many total tables to do.",
-		},
-		[]string{"table"},
-	)
-	tablesDoneMetric = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: "tables_done",
-			Help: "How many tables done.",
-		},
-	)
-)
-
-func init() {
-	prometheus.MustRegister(tablesTotalMetric)
-	prometheus.MustRegister(rowCountMetric)
-	prometheus.MustRegister(tablesDoneMetric)
-}
-
 type Clone struct {
 	ReaderConfig
 

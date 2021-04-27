@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
-	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -41,122 +40,122 @@ func init() {
 	prometheus.MustRegister(tablesDoneMetric)
 }
 
-// processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, config WriterConfig, writer *sql.DB, writerLimiter core.Limiter) error {
-	logger := logrus.WithField("table", table.Name)
-	start := time.Now()
-	logger.WithTime(start).Infof("start %v", table.Name)
-
-	var chunkingDuration time.Duration
-
-	updates := 0
-	deletes := 0
-	inserts := 0
-	chunkCount := 0
-
-	g, ctx := errgroup.WithContext(ctx)
-
-	// Chunk up the table
-	chunks := make(chan Chunk)
-	g.Go(func() error {
-		err := GenerateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
-		chunkingDuration = time.Since(start)
-		close(chunks)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
-	})
-
-	// Diff each chunk as they are produced
-	diffs := make(chan Diff)
-	g.Go(func() error {
-		readerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
-		g, ctx := errgroup.WithContext(ctx)
-		for c := range chunks {
-			chunk := c
-			err := readerParallelism.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			g.Go(func() (err error) {
-				defer readerParallelism.Release(1)
-				if config.NoDiff {
-					err = readChunk(ctx, config.ReaderConfig, source, chunk, diffs)
-				} else {
-					err = diffChunk(ctx, config.ReaderConfig, source, target, chunk, diffs)
-				}
-				return errors.WithStack(err)
-			})
-			chunkCount++
-		}
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		// All diffing done, close the diffs channel
-		close(diffs)
-		return nil
-	})
-
-	// Batch up the diffs
-	batches := make(chan Batch)
-	g.Go(func() error {
-		err := BatchTableWrites(ctx, diffs, batches)
-		close(batches)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
-	})
-
-	// Write every batch
-	g.Go(func() error {
-		writerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
-		g, ctx := errgroup.WithContext(ctx)
-		for batch := range batches {
-			size := len(batch.Rows)
-			switch batch.Type {
-			case Update:
-				updates += size
-			case Delete:
-				deletes += size
-			case Insert:
-				inserts += size
-			}
-			err := scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-		}
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
-	})
-
-	err := g.Wait()
-
-	elapsed := time.Since(start)
-
-	logger = logger.
-		WithField("duration", elapsed).
-		WithField("chunking", chunkingDuration).
-		WithField("chunks", chunkCount).
-		WithField("inserts", inserts).
-		WithField("deletes", deletes).
-		WithField("updates", updates)
-
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	logger.Infof("success %v", table.Name)
-
-	return nil
-}
+//// processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
+//func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, config WriterConfig, writer *sql.DB, writerLimiter core.Limiter) error {
+//	logger := logrus.WithField("table", table.Name)
+//	start := time.Now()
+//	logger.WithTime(start).Infof("start %v", table.Name)
+//
+//	var chunkingDuration time.Duration
+//
+//	updates := 0
+//	deletes := 0
+//	inserts := 0
+//	chunkCount := 0
+//
+//	g, ctx := errgroup.WithContext(ctx)
+//
+//	// Chunk up the table
+//	chunks := make(chan Chunk)
+//	g.Go(func() error {
+//		err := GenerateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
+//		chunkingDuration = time.Since(start)
+//		close(chunks)
+//		if err != nil {
+//			return errors.WithStack(err)
+//		}
+//		return nil
+//	})
+//
+//	// Diff each chunk as they are produced
+//	diffs := make(chan Diff)
+//	g.Go(func() error {
+//		readerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
+//		g, ctx := errgroup.WithContext(ctx)
+//		for c := range chunks {
+//			chunk := c
+//			err := readerParallelism.Acquire(ctx, 1)
+//			if err != nil {
+//				return errors.WithStack(err)
+//			}
+//			g.Go(func() (err error) {
+//				defer readerParallelism.Release(1)
+//				if config.NoDiff {
+//					err = readChunk(ctx, config.ReaderConfig, source, chunk, diffs)
+//				} else {
+//					err = diffChunk(ctx, config.ReaderConfig, source, target, chunk, diffs)
+//				}
+//				return errors.WithStack(err)
+//			})
+//			chunkCount++
+//		}
+//		err := g.Wait()
+//		if err != nil {
+//			return errors.WithStack(err)
+//		}
+//
+//		// All diffing done, close the diffs channel
+//		close(diffs)
+//		return nil
+//	})
+//
+//	// Batch up the diffs
+//	batches := make(chan Batch)
+//	g.Go(func() error {
+//		err := BatchTableWrites(ctx, diffs, batches)
+//		close(batches)
+//		if err != nil {
+//			return errors.WithStack(err)
+//		}
+//		return nil
+//	})
+//
+//	// Write every batch
+//	g.Go(func() error {
+//		writerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
+//		g, ctx := errgroup.WithContext(ctx)
+//		for batch := range batches {
+//			size := len(batch.Rows)
+//			switch batch.Type {
+//			case Update:
+//				updates += size
+//			case Delete:
+//				deletes += size
+//			case Insert:
+//				inserts += size
+//			}
+//			err := scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch)
+//			if err != nil {
+//				return errors.WithStack(err)
+//			}
+//		}
+//		err := g.Wait()
+//		if err != nil {
+//			return errors.WithStack(err)
+//		}
+//		return nil
+//	})
+//
+//	err := g.Wait()
+//
+//	elapsed := time.Since(start)
+//
+//	logger = logger.
+//		WithField("duration", elapsed).
+//		WithField("chunking", chunkingDuration).
+//		WithField("chunks", chunkCount).
+//		WithField("inserts", inserts).
+//		WithField("deletes", deletes).
+//		WithField("updates", updates)
+//
+//	if err != nil {
+//		return errors.WithStack(err)
+//	}
+//
+//	logger.Infof("success %v", table.Name)
+//
+//	return nil
+//}
 
 type Reader struct {
 	config ReaderConfig
@@ -166,6 +165,15 @@ type Reader struct {
 }
 
 func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+	return r.read(ctx, g, diffs, true)
+}
+
+func (r *Reader) Read(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+	// TODO this can be refactored to a separate method
+	return r.read(ctx, g, diffs, false)
+}
+
+func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, diff bool) error {
 	if r.config.TableParallelism == 0 {
 		return errors.Errorf("need more parallelism")
 	}
@@ -186,6 +194,7 @@ func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) e
 		makeLimiter("source_reader_limiter", r.config.ReadTimeout),
 		readLimiterDelay.WithLabelValues("source"))
 
+	// TODO we only have to open the target DB if diff is set to true
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
 	// other writers to the target during the clone
@@ -273,10 +282,10 @@ func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) e
 			}
 			g.Go(func() (err error) {
 				defer readerParallelism.Release(1)
-				if r.config.NoDiff {
-					err = readChunk(ctx, r.config, limitedSourceReader, chunk, diffs)
-				} else {
+				if diff {
 					err = diffChunk(ctx, r.config, limitedSourceReader, limitedTargetReader, chunk, diffs)
+				} else {
+					err = readChunk(ctx, r.config, limitedSourceReader, chunk, diffs)
 				}
 				return errors.WithStack(err)
 			})
@@ -296,6 +305,10 @@ func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) e
 
 func (r *Reader) Close() (err error) {
 	err = r.source.Close()
+	if err != nil {
+		_ = r.target.Close()
+		return err
+	}
 	err = r.target.Close()
 	return
 }

@@ -246,7 +246,6 @@ func TestCloneNoDiff(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		NoDiff:    true,
 		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
@@ -262,6 +261,7 @@ func TestCloneNoDiff(t *testing.T) {
 		WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+			NoDiff:                  true,
 		},
 	}
 	err = kong.ApplyDefaults(clone)

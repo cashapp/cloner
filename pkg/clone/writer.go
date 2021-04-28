@@ -91,7 +91,7 @@ func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batc
 			// If we fail to write we'll split the batch
 			// * It could be because of a conflict violation in which case we want to write all the non-conflicting rows
 			// * It could be because some rows in the batch are too big in which case we want to decrease the batch size
-			// In either case splitting the rows are better
+			// In either case splitting the batch is better
 			if len(batch.Rows) > 1 {
 				batch1, batch2 := splitBatch(batch)
 				err = w.scheduleWriteBatch(ctx, g, batch1)
@@ -178,6 +178,9 @@ func isSchemaError(err error) bool {
 func splitBatch(batch Batch) (Batch, Batch) {
 	rows := batch.Rows
 	size := len(rows)
+	if size == 0 {
+		log.Fatalf("can't split empty batch: %v", batch)
+	}
 	if size == 1 {
 		log.Fatalf("can't split batch of one: %v", batch)
 	}
@@ -192,6 +195,12 @@ func splitBatch(batch Batch) (Batch, Batch) {
 		Type:  batch.Type,
 		Table: batch.Table,
 		Rows:  rows2,
+	}
+	if len(batch1.Rows) >= size {
+		log.Fatalf("splitBatch didn't shrink batch: %v", batch1)
+	}
+	if len(batch2.Rows) >= size {
+		log.Fatalf("splitBatch didn't shrink batch: %v", batch1)
 	}
 	return batch1, batch2
 }

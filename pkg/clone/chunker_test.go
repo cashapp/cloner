@@ -46,13 +46,15 @@ func TestChunker(t *testing.T) {
 
 	ctx := context.Background()
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
-	r, err := NewReader(config)
-	assert.NoError(t, err)
-	defer r.Close()
 
-	tables, err := r.LoadTables(ctx)
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, tables[0].Config.ChunkSize)
+
+	db, err := config.Source.DB()
+	assert.NoError(t, err)
+	defer db.Close()
+	r := NewReader(config, tables[0], db, nil, nil, nil)
 	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)
@@ -115,11 +117,8 @@ func TestPeekingIdStreamer(t *testing.T) {
 
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
-	r, err := NewReader(config)
-	assert.NoError(t, err)
-	defer r.Close()
 
-	tables, err := r.LoadTables(ctx)
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
 	queriedIds := make([]int64, 0, rowCount)
@@ -164,10 +163,6 @@ func TestChunkerEmptyTable(t *testing.T) {
 		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
 
-	r, err := NewReader(config)
-	assert.NoError(t, err)
-	defer r.Close()
-
 	chunks := make(chan Chunk)
 
 	var result []testChunk
@@ -181,9 +176,13 @@ func TestChunkerEmptyTable(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	tables, err := r.LoadTables(ctx)
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
+	db, err := config.Source.DB()
+	assert.NoError(t, err)
+	defer db.Close()
+	r := NewReader(config, tables[0], db, nil, nil, nil)
 	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)
@@ -226,13 +225,14 @@ func TestChunkerSingleRow(t *testing.T) {
 		},
 		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
-	r, err := NewReader(config)
-	assert.NoError(t, err)
-	defer r.Close()
 
-	tables, err := r.LoadTables(ctx)
+	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 
+	db, err := config.Source.DB()
+	assert.NoError(t, err)
+	defer db.Close()
+	r := NewReader(config, tables[0], db, nil, nil, nil)
 	err = r.generateTableChunks(ctx, tables[0], chunks)
 	assert.NoError(t, err)
 	close(chunks)

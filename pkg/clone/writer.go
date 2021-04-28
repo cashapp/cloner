@@ -4,18 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/dlmiddlecote/sqlstats"
-	"github.com/go-sql-driver/mysql"
-	"golang.org/x/sync/semaphore"
-	"strings"
-	"time"
-
 	"github.com/cenkalti/backoff/v4"
+	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+	"strings"
 )
 
 var (
@@ -434,6 +432,7 @@ func (w *Writer) updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx,
 
 type Writer struct {
 	config WriterConfig
+	table  *Table
 
 	db    *sql.DB
 	retry RetryOptions
@@ -441,35 +440,27 @@ type Writer struct {
 	writerParallelism *semaphore.Weighted
 }
 
-func NewWriter(config WriterConfig) *Writer {
-	w := &Writer{config: config}
-	w.retry = RetryOptions{
-		Limiter:       makeLimiter("writer_limiter"),
-		AcquireMetric: writeLimiterDelay,
-		MaxRetries:    w.config.WriteRetries,
-		Timeout:       w.config.WriteTimeout,
+func NewWriter(config WriterConfig, table *Table, writer *sql.DB, limiter core.Limiter) *Writer {
+	return &Writer{
+		config: config,
+		table:  table,
+		db:     writer,
+		retry: RetryOptions{
+			Limiter:       limiter,
+			AcquireMetric: writeLimiterDelay,
+			MaxRetries:    config.WriteRetries,
+			Timeout:       config.WriteTimeout,
+		},
+		writerParallelism: semaphore.NewWeighted(config.WriterParallelism),
 	}
-	w.writerParallelism = semaphore.NewWeighted(w.config.WriterParallelism)
-	return w
 }
 
 func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
-	writer, err := w.config.Target.DB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	w.db = writer
-	// Refresh connections regularly so they don't go stale
-	writer.SetConnMaxLifetime(time.Minute)
-	writer.SetMaxOpenConns(w.config.WriterCount)
-	writerCollector := sqlstats.NewStatsCollector("target_writer", writer)
-	prometheus.MustRegister(writerCollector)
-	defer prometheus.Unregister(writerCollector)
-
 	// Batch up the diffs
 	batches := make(chan Batch)
 	g.Go(func() error {
-		err := BatchWrites(ctx, diffs, batches)
+		err := BatchTableWrites(ctx, diffs, batches)
+		close(batches)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -493,8 +484,4 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 	})
 
 	return nil
-}
-
-func (w *Writer) Close() error {
-	return w.db.Close()
 }

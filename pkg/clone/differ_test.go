@@ -197,7 +197,7 @@ func TestStreamDiff(t *testing.T) {
 }
 
 type testRowStreamer struct {
-	rows []testRow
+	rows      []testRow
 	batchSize int
 }
 
@@ -244,8 +244,6 @@ func TestDiffWithChecksum(t *testing.T) {
 
 	source := vitessContainer.Config()
 	source.Database = "customer/-80@replica"
-	sourceDB, err := source.DB()
-	assert.NoError(t, err)
 	target := tidbContainer.Config()
 
 	config := &ReaderConfig{
@@ -257,9 +255,16 @@ func TestDiffWithChecksum(t *testing.T) {
 	err = kong.ApplyDefaults(config)
 	config.UseCRC32Checksum = true
 
-	r, err := NewReader(*config)
+	tables, err := LoadTables(context.Background(), *config)
 	assert.NoError(t, err)
-	defer r.Close()
+
+	sourceReader, err := config.Source.DB()
+	assert.NoError(t, err)
+	defer sourceReader.Close()
+	targetReader, err := config.Target.DB()
+	assert.NoError(t, err)
+	defer targetReader.Close()
+	r := NewReader(*config, tables[0], sourceReader, nil, targetReader, nil)
 
 	type row struct {
 		id   int64
@@ -304,8 +309,6 @@ func TestDiffWithChecksum(t *testing.T) {
 			}()
 
 			ctx := context.Background()
-			tables, err := r.loadTables(ctx, source, sourceDB)
-			assert.NoError(t, err)
 			chunk := Chunk{
 				Table: tables[0],
 			}

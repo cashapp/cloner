@@ -3,13 +3,11 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"time"
 )
 
 var (
@@ -159,14 +157,12 @@ func init() {
 
 type Reader struct {
 	config ReaderConfig
+	table  *Table
+	source *sql.DB
+	target *sql.DB
 
-	source                *sql.DB
-	sourceRetry           RetryOptions
-	sourceReaderCollector *sqlstats.StatsCollector
-
-	target                *sql.DB
-	targetRetry           RetryOptions
-	targetReaderCollector *sqlstats.StatsCollector
+	sourceRetry RetryOptions
+	targetRetry RetryOptions
 }
 
 func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
@@ -179,62 +175,17 @@ func (r *Reader) Read(ctx context.Context, g *errgroup.Group, diffs chan Diff) e
 }
 
 func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, diff bool) error {
-	if r.config.TableParallelism == 0 {
-		return errors.Errorf("need more parallelism")
-	}
-
-	// Load tables
-	// TODO in consistent clone we should diff the schema of the source with the target,
-	//      for now we just use the target schema
-	tables, err := r.LoadTables(ctx)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	var tablesToDo []string
-	for _, t := range tables {
-		tablesToDo = append(tablesToDo, t.Name)
-	}
-	logrus.Infof("starting to diff tables: %v", tablesToDo)
-
-	tablesTotalMetric.Add(float64(len(tables)))
-	for _, table := range tables {
-		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
-	}
 
 	chunks := make(chan Chunk)
 
 	// Generate chunks of all source tables
 	g.Go(func() error {
-		var tablesDone []string
-
-		g, ctx := errgroup.WithContext(ctx)
-		for _, t := range tables {
-			table := t
-			g.Go(func() error {
-				err := r.generateTableChunks(ctx, table, chunks)
-
-				tablesDoneMetric.Inc()
-				tablesDone = append(tablesDone, table.Name)
-				var tablesToDo []string
-				for _, t := range tables {
-					if !contains(tablesDone, table.Name) {
-						tablesToDo = append(tablesToDo, t.Name)
-					}
-				}
-
-				logrus.Infof("table done: %v", table.Name)
-				logrus.Infof("tables done: %v", tablesDone)
-				logrus.Infof("tables left to do: %v", tablesToDo)
-				return err
-			})
-		}
-		err := g.Wait()
+		err := r.generateTableChunks(ctx, r.table, chunks)
+		close(chunks)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		close(chunks)
-		return nil
+		return err
 	})
 
 	// Generate diffs from all chunks
@@ -270,72 +221,30 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 	return nil
 }
 
-func (r *Reader) Close() (err error) {
-	if r.targetReaderCollector != nil {
-		prometheus.Unregister(r.targetReaderCollector)
+func NewReader(
+	config ReaderConfig,
+	table *Table,
+	source *sql.DB,
+	sourceLimiter core.Limiter,
+	target *sql.DB,
+	targetLimiter core.Limiter,
+) *Reader {
+	return &Reader{
+		config: config,
+		table:  table,
+		source: source,
+		sourceRetry: RetryOptions{
+			Limiter:       sourceLimiter,
+			AcquireMetric: readLimiterDelay.WithLabelValues("source"),
+			MaxRetries:    config.ReadRetries,
+			Timeout:       config.ReadTimeout,
+		},
+		target: target,
+		targetRetry: RetryOptions{
+			Limiter:       targetLimiter,
+			AcquireMetric: readLimiterDelay.WithLabelValues("target"),
+			MaxRetries:    config.ReadRetries,
+			Timeout:       config.ReadTimeout,
+		},
 	}
-	if r.sourceReaderCollector != nil {
-		prometheus.Unregister(r.sourceReaderCollector)
-	}
-
-	err = r.source.Close()
-	if err != nil {
-		if r.target != nil {
-			_ = r.target.Close()
-		}
-		return err
-	}
-	if r.target != nil {
-		err = r.target.Close()
-	}
-
-	return
-}
-
-func NewReader(config ReaderConfig) (*Reader, error) {
-	r := &Reader{config: config}
-
-	r.sourceRetry = RetryOptions{
-		Limiter:       makeLimiter("source_reader_limiter"),
-		AcquireMetric: readLimiterDelay.WithLabelValues("source"),
-		MaxRetries:    r.config.ReadRetries,
-		Timeout:       r.config.ReadTimeout,
-	}
-	sourceReader, err := r.config.Source.ReaderDB()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	r.source = sourceReader
-	// Refresh connections regularly so they don't go stale
-	sourceReader.SetConnMaxLifetime(time.Minute)
-	sourceReader.SetMaxOpenConns(r.config.ReaderCount)
-	r.sourceReaderCollector = sqlstats.NewStatsCollector("source_reader", sourceReader)
-	prometheus.MustRegister(r.sourceReaderCollector)
-
-	r.targetRetry = RetryOptions{
-		Limiter:       makeLimiter("target_reader_limiter"),
-		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
-		MaxRetries:    r.config.ReadRetries,
-		Timeout:       r.config.ReadTimeout,
-	}
-
-	// TODO we only have to open the target DB if diff is set to true
-	// Target reader
-	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
-	// other writers to the target during the clone
-	if r.config.Target.Type != "" {
-		targetReader, err := r.config.Target.DB()
-		if err != nil {
-			_ = r.source.Close()
-			return nil, errors.WithStack(err)
-		}
-		r.target = targetReader
-		// Refresh connections regularly so they don't go stale
-		targetReader.SetConnMaxLifetime(time.Minute)
-		targetReader.SetMaxOpenConns(r.config.ReaderCount)
-		r.targetReaderCollector = sqlstats.NewStatsCollector("target_reader", targetReader)
-		prometheus.MustRegister(r.targetReaderCollector)
-	}
-
-	return r, nil
 }

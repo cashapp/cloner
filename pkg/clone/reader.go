@@ -192,22 +192,25 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 	g.Go(func() error {
 		readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
 		g, ctx := errgroup.WithContext(ctx)
-		for c := range chunks {
-			chunk := c
-			err := readerParallelism.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			g.Go(func() (err error) {
-				defer readerParallelism.Release(1)
-				if diff {
-					err = r.diffChunk(ctx, chunk, diffs)
-				} else {
-					err = r.readChunk(ctx, chunk, diffs)
+		g.Go(func() error {
+			for c := range chunks {
+				chunk := c
+				err := readerParallelism.Acquire(ctx, 1)
+				if err != nil {
+					return errors.WithStack(err)
 				}
-				return errors.WithStack(err)
-			})
-		}
+				g.Go(func() (err error) {
+					defer readerParallelism.Release(1)
+					if diff {
+						err = r.diffChunk(ctx, chunk, diffs)
+					} else {
+						err = r.readChunk(ctx, chunk, diffs)
+					}
+					return errors.WithStack(err)
+				})
+			}
+			return nil
+		})
 		err := g.Wait()
 		if err != nil {
 			return errors.WithStack(err)

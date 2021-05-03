@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"github.com/dlmiddlecote/sqlstats"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
@@ -122,9 +123,14 @@ func (cmd *Clone) run() error {
 		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
-	sourceLimiter := makeLimiter("source_reader_limiter")
-	targetLimiter := makeLimiter("target_reader_limiter")
-	writerLimiter := makeLimiter("writer_limiter")
+	var sourceLimiter core.Limiter
+	var targetLimiter core.Limiter
+	var writerLimiter core.Limiter
+	if cmd.UseConcurrencyLimits {
+		sourceLimiter = makeLimiter("source_reader_limiter")
+		targetLimiter = makeLimiter("target_reader_limiter")
+		writerLimiter = makeLimiter("writer_limiter")
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 

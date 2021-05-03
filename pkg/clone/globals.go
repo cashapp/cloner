@@ -41,6 +41,8 @@ type ReaderConfig struct {
 
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 
+	UseConcurrencyLimits bool `help:"Use concurrency limits to automatically find the throughput of the underlying databases" default:"false"`
+
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 
 	// WriteBatchSize doesn't belong to ReaderConfig but we put that in the TableConfig when we load the table which is

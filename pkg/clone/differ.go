@@ -438,12 +438,14 @@ func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from 
 		}
 		stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
 		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk of %s from %s", chunk.Table.Name, from)
+			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+				chunk.Start, chunk.End, chunk.Table.Name, from)
 		}
 		defer stream.Close()
 		result, err = buffer(stream)
 		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk of %s from %s", chunk.Table.Name, from)
+			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+				chunk.Start, chunk.End, chunk.Table.Name, from)
 		}
 		return nil
 	})

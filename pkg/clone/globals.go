@@ -44,6 +44,8 @@ type ReaderConfig struct {
 
 	UseConcurrencyLimits bool `help:"Use concurrency limits to automatically find the throughput of the underlying databases" default:"false"`
 
+	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
+
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 
 	// WriteBatchSize doesn't belong to ReaderConfig but we put that in the TableConfig when we load the table which is
@@ -55,8 +57,6 @@ type ReaderConfig struct {
 
 type WriterConfig struct {
 	ReaderConfig
-
-	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
 	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`
 	WriterParallelism       int64         `help:"Number of writer goroutines" default:"200"`

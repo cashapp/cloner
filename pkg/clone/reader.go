@@ -6,6 +6,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -206,6 +207,16 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 					} else {
 						err = r.readChunk(ctx, chunk, diffs)
 					}
+
+					if !r.config.Consistent {
+						log.WithField("table", chunk.Table.Name).
+							WithError(err).
+							WithContext(ctx).
+							Warnf("failed to read chunk after retries and backoff, "+
+								"since this is a best effort clone we just give up: %+v", err)
+						return nil
+					}
+
 					return errors.WithStack(err)
 				})
 			}

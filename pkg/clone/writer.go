@@ -206,7 +206,12 @@ func splitBatch(batch Batch) (Batch, Batch) {
 func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	err = Retry(ctx, w.retry, func(ctx context.Context) error {
+	retry := w.retry
+	timout := batch.Table.Config.WriteTimout.Duration
+	if timout != 0 {
+		retry.Timeout = timout
+	}
+	err = Retry(ctx, retry, func(ctx context.Context) error {
 		err = autotx.Transact(ctx, w.db, func(tx *sql.Tx) error {
 			timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
 			defer timer.ObserveDuration()

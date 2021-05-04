@@ -21,6 +21,7 @@ type TableConfig struct {
 	SourceHint     string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
 	ChunkSize      int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
 	WriteBatchSize int      `toml:"write_batch_size" help:"Global chunk size if chunk size not specified on the table"`
+	WriteTimout    duration `toml:"write_timeout" help:"Global chunk size if chunk size not specified on the table"`
 }
 
 type Config struct {
@@ -76,4 +77,14 @@ func (c *ReaderConfig) LoadConfig() error {
 		}
 	}
 	return nil
+}
+
+type duration struct {
+	time.Duration
+}
+
+func (d *duration) UnmarshalText(text []byte) error {
+	var err error
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }

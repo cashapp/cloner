@@ -74,7 +74,7 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 
 func IndefiniteExponentialBackOff() *backoff.ExponentialBackOff {
 	exponentialBackOff := backoff.NewExponentialBackOff()
-	exponentialBackOff.MaxInterval = 5 * time.Minute
+	exponentialBackOff.MaxInterval = 1 * time.Minute
 	exponentialBackOff.MaxElapsedTime = 0
 	return exponentialBackOff
 }

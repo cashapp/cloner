@@ -92,14 +92,23 @@ func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batc
 			// In either case splitting the batch is better
 			if len(batch.Rows) > 1 {
 				batch1, batch2 := splitBatch(batch)
-				err = w.scheduleWriteBatch(ctx, g, batch1)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				err := w.scheduleWriteBatch(ctx, g, batch2)
-				if err != nil {
-					return errors.WithStack(err)
-				}
+				// Schedule in separate go routines so that we release the semaphore, otherwise we can get into a
+				// deadlock where we're waiting for the currently held semaphore to be released in order for these two
+				// scheduleWriteBatch calls to return which means we deadlock here
+				g.Go(func() error {
+					err = w.scheduleWriteBatch(ctx, g, batch1)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+					return nil
+				})
+				g.Go(func() error {
+					err := w.scheduleWriteBatch(ctx, g, batch2)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+					return nil
+				})
 				return nil
 			}
 

@@ -165,8 +165,8 @@ func isSchemaError(err error) bool {
 	}
 	switch me.Number {
 	// Error 1146: Table does not exist
-	// TODO we should also check for unknown column
-	case 1146:
+	// Error 1054: Unknown column
+	case 1146, 1054:
 		return true
 	default:
 		return false

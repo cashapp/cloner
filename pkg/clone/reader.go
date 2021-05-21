@@ -208,16 +208,21 @@ func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, d
 						err = r.readChunk(ctx, chunk, diffs)
 					}
 
-					if !r.config.Consistent {
+					if err != nil {
+						if r.config.Consistent {
+							return errors.WithStack(err)
+						}
+
 						log.WithField("table", chunk.Table.Name).
 							WithError(err).
 							WithContext(ctx).
-							Warnf("failed to read chunk after retries and backoff, "+
-								"since this is a best effort clone we just give up: %+v", err)
+							Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
+								"since this is a best effort clone we just give up: %+v",
+								chunk.Table.Name, chunk.Start, chunk.End, err)
 						return nil
 					}
 
-					return errors.WithStack(err)
+					return nil
 				})
 			}
 			return nil

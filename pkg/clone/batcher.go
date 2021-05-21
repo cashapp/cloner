@@ -11,7 +11,7 @@ type Batch struct {
 }
 
 // BatchWrites consumes diffs and batches them up into batches by type and table
-func BatchWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
+func BatchWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
 	batchesByType := make(map[DiffType]map[string]Batch)
 
 readChannel:
@@ -30,7 +30,7 @@ readChannel:
 				}
 				batch.Rows = append(batch.Rows, diff.Row)
 
-				if len(batch.Rows) >= batchSize {
+				if len(batch.Rows) >= diff.Row.Table.Config.WriteBatchSize {
 					// Batch is full send it
 					batches <- batch
 					// and clear it
@@ -42,15 +42,21 @@ readChannel:
 				break readChannel
 			}
 		case <-ctx.Done():
-			break readChannel
+			return ctx.Err()
 		}
 	}
 
 	// Write the final unfilled batches
+	// TODO this means we will always write the final unfilled batch of _every_ table after we've processed all
+	//      other tables, I wonder if we should flush all the unfilled batches "regularly"
 	for _, batchesByTable := range batchesByType {
 		for _, batch := range batchesByTable {
 			if len(batch.Rows) > 0 {
-				batches <- batch
+				select {
+				case batches <- batch:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}
@@ -60,7 +66,7 @@ readChannel:
 }
 
 // BatchTableWrites consumes diffs for a single table and batches them up into batches by type
-func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batches chan Batch) error {
+func BatchTableWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
 	batchesByType := make(map[DiffType]Batch)
 
 	for {
@@ -70,7 +76,11 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 				// Write the final unfilled batches
 				for _, batch := range batchesByType {
 					if len(batch.Rows) > 0 {
-						batches <- batch
+						select {
+						case batches <- batch:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
 					}
 				}
 				return nil
@@ -82,15 +92,20 @@ func BatchTableWrites(ctx context.Context, batchSize int, diffs chan Diff, batch
 			}
 			batch.Rows = append(batch.Rows, diff.Row)
 
-			if len(batch.Rows) >= batchSize {
-				batches <- batch
+			if len(batch.Rows) >= diff.Row.Table.Config.WriteBatchSize {
+				select {
+				case batches <- batch:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
 				// and clear it
 				batch.Rows = nil
 			}
 
 			batchesByType[diff.Type] = batch
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		}
 	}
 }

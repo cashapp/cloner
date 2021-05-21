@@ -4,16 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/go-sql-driver/mysql"
-	"strings"
-
 	"github.com/cenkalti/backoff/v4"
+	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+	"strings"
 )
 
 var (
@@ -49,7 +49,7 @@ var (
 	writeDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "write_duration",
-			Help:       "Total duration of writes (including retries and backoff).",
+			Help:       "Duration of writes (does not include retries and backoff).",
 			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
 		},
 		[]string{"table", "type"},
@@ -71,44 +71,55 @@ func init() {
 	prometheus.MustRegister(writeLimiterDelay)
 }
 
-func scheduleWriteBatch(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, g *errgroup.Group, writer *sql.DB, batch Batch) (err error) {
+func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batch Batch) (err error) {
+	err = w.writerParallelism.Acquire(ctx, 1)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	writesRequested.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 	g.Go(func() (err error) {
-		err = Write(ctx, cmd, writerLimiter, writer, batch)
+		defer w.writerParallelism.Release(1)
+		err = w.writeBatch(ctx, batch)
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return errors.WithStack(err)
 			}
 
-			logger := log.WithField("table", batch.Table.Name).WithError(err)
-
-			// If we fail to write due to a uniqueness constraint violation
-			// we'll split the batch so that we can write all the rows in the batch
-			// that are not conflicting
-			if isConstraintViolation(err) {
-				if len(batch.Rows) > 1 {
-					batch1, batch2 := splitBatch(batch)
-					err = scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch1)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-					err := scheduleWriteBatch(ctx, cmd, writerLimiter, g, writer, batch2)
+			// If we fail to write we'll split the batch
+			// * It could be because of a conflict violation in which case we want to write all the non-conflicting rows
+			// * It could be because some rows in the batch are too big in which case we want to decrease the batch size
+			// In either case splitting the batch is better
+			if len(batch.Rows) > 1 {
+				batch1, batch2 := splitBatch(batch)
+				// Schedule in separate go routines so that we release the semaphore, otherwise we can get into a
+				// deadlock where we're waiting for the currently held semaphore to be released in order for these two
+				// scheduleWriteBatch calls to return which means we deadlock here
+				g.Go(func() error {
+					err = w.scheduleWriteBatch(ctx, g, batch1)
 					if err != nil {
 						return errors.WithStack(err)
 					}
 					return nil
-				}
+				})
+				g.Go(func() error {
+					err := w.scheduleWriteBatch(ctx, g, batch2)
+					if err != nil {
+						return errors.WithStack(err)
+					}
+					return nil
+				})
+				return nil
 			}
 
-			if !cmd.Consistent {
+			if !w.config.Consistent {
+				logger := log.WithField("table", batch.Table.Name).WithError(err)
 				// If we're doing a best effort clone we just give up on this batch
 				logger.Warnf("failed write batch after retries and backoff, "+
 					"since this is a best effort clone we just give up: %+v", err)
 				return nil
 			}
 
-			logger.Errorf("failed write batch after %d times: %+v", cmd.WriteRetryCount, err)
 			return errors.WithStack(err)
 		}
 		return nil
@@ -137,6 +148,7 @@ func mysqlError(err error) *mysql.MySQLError {
 // isConstraintViolation are errors caused by a single row in a batch, for these errors we break down the batch
 // into smaller parts until we find the erroneous row, uniqueness constraints can also be fixed by clone jobs for other
 // shards removing the row if the row has been copied from one shard to the other
+//nolint:deadcode,unused
 func isConstraintViolation(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
@@ -162,8 +174,8 @@ func isSchemaError(err error) bool {
 	}
 	switch me.Number {
 	// Error 1146: Table does not exist
-	// TODO we should also check for unknown column
-	case 1146:
+	// Error 1054: Unknown column
+	case 1146, 1054:
 		return true
 	default:
 		return false
@@ -173,6 +185,9 @@ func isSchemaError(err error) bool {
 func splitBatch(batch Batch) (Batch, Batch) {
 	rows := batch.Rows
 	size := len(rows)
+	if size == 0 {
+		log.Fatalf("can't split empty batch: %v", batch)
+	}
 	if size == 1 {
 		log.Fatalf("can't split batch of one: %v", batch)
 	}
@@ -188,56 +203,45 @@ func splitBatch(batch Batch) (Batch, Batch) {
 		Table: batch.Table,
 		Rows:  rows2,
 	}
+	if len(batch1.Rows) >= size {
+		log.Fatalf("splitBatch didn't shrink batch: %v", batch1)
+	}
+	if len(batch2.Rows) >= size {
+		log.Fatalf("splitBatch didn't shrink batch: %v", batch1)
+	}
 	return batch1, batch2
 }
 
-// Write directly writes a batch with retries and backoff
-func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.DB, batch Batch) (err error) {
+func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 	logger := log.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
-	defer timer.ObserveDuration()
-	defer func() {
-		if err == nil {
-			writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-		} else {
-			writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-		}
-	}()
-
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), cmd.WriteRetryCount), ctx)
-	err = backoff.Retry(func() (err error) {
-		acquireTimer := prometheus.NewTimer(writeLimiterDelay)
-		token, ok := writerLimiter.Acquire(ctx)
-		if !ok {
-			if token != nil {
-				token.OnDropped()
-			}
-			return errors.Errorf("write limiter short circuited")
-		}
-		acquireTimer.ObserveDuration()
-		defer func() {
-			if token != nil {
+	retry := w.retry
+	timout := batch.Table.Config.WriteTimout.Duration
+	if timout != 0 {
+		retry.Timeout = timout
+	}
+	err = Retry(ctx, retry, func(ctx context.Context) error {
+		err = autotx.Transact(ctx, w.db, func(tx *sql.Tx) error {
+			timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
+			defer timer.ObserveDuration()
+			defer func() {
 				if err == nil {
-					token.OnSuccess()
+					writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 				} else {
-					token.OnDropped()
+					writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 				}
-			}
-		}()
-		ctx, cancel := context.WithTimeout(ctx, cmd.WriteTimeout)
-		defer cancel()
-		err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
-			if cmd.NoDiff {
-				return replaceBatch(ctx, cmd, logger, tx, batch)
+			}()
+
+			if w.config.NoDiff {
+				return w.replaceBatch(ctx, logger, tx, batch)
 			} else {
 				switch batch.Type {
 				case Insert:
-					return insertBatch(ctx, cmd, logger, tx, batch)
+					return w.insertBatch(ctx, logger, tx, batch)
 				case Delete:
-					return deleteBatch(ctx, cmd, logger, tx, batch)
+					return w.deleteBatch(ctx, logger, tx, batch)
 				case Update:
-					return updateBatch(ctx, cmd, logger, tx, batch)
+					return w.updateBatch(ctx, logger, tx, batch)
 				default:
 					logger.Panicf("Unknown batch type %s", batch.Type)
 					return nil
@@ -249,9 +253,8 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 		if isSchemaError(err) {
 			return backoff.Permanent(err)
 		}
-		// We immediately fail constraint violation of non-single row batches,
-		// the caller will do binary chop to find the violating row
-		if isConstraintViolation(err) && len(batch.Rows) > 1 {
+		// We immediately fail non-single row batches, the caller will do binary chop to find the violating row
+		if len(batch.Rows) > 1 {
 			return backoff.Permanent(err)
 		}
 
@@ -261,16 +264,12 @@ func Write(ctx context.Context, cmd *Clone, writerLimiter core.Limiter, db *sql.
 
 		return nil
 
-	}, b)
+	})
 
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return nil
+	return errors.WithStack(err)
 }
 
-func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func (w *Writer) deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
 	logger.Debugf("deleting %d rows", len(rows))
@@ -299,7 +298,7 @@ func deleteBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	return nil
 }
 
-func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func (w *Writer) replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	if batch.Type != Insert {
 		return fmt.Errorf("this method only handles inserts")
 	}
@@ -314,7 +313,7 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	statementBatches := batches(batch.Rows, w.config.WriteBatchStatementSize)
 	for _, statementBatch := range statementBatches {
 		valueStrings := make([]string, 0, len(statementBatch))
 		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
@@ -332,6 +331,7 @@ func replaceBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
+		fmt.Println("INSERT IGNORE!!")
 		rowsAffected, err := result.RowsAffected()
 		// If we get an error we'll just ignore that...
 		if err != nil {
@@ -358,7 +358,7 @@ func min(a, b int) int {
 	return b
 }
 
-func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func (w *Writer) insertBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
@@ -370,7 +370,7 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	}
 	values := fmt.Sprintf("(%s)", strings.Join(questionMarks, ","))
 
-	statementBatches := batches(batch.Rows, cmd.WriteBatchStatementSize)
+	statementBatches := batches(batch.Rows, w.config.WriteBatchStatementSize)
 	for _, statementBatch := range statementBatches {
 		valueStrings := make([]string, 0, len(statementBatch))
 		valueArgs := make([]interface{}, 0, len(statementBatch)*len(columns))
@@ -395,7 +395,7 @@ func insertBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 	return nil
 }
 
-func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx, batch Batch) error {
+func (w *Writer) updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "update")
 	rows := batch.Rows
 	logger.Debugf("updating %d rows", len(rows))
@@ -441,5 +441,61 @@ func updateBatch(ctx context.Context, cmd *Clone, logger *log.Entry, tx *sql.Tx,
 			writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
 		}
 	}
+	return nil
+}
+
+type Writer struct {
+	config WriterConfig
+	table  *Table
+
+	db    *sql.DB
+	retry RetryOptions
+
+	writerParallelism *semaphore.Weighted
+}
+
+func NewWriter(config WriterConfig, table *Table, writer *sql.DB, limiter core.Limiter) *Writer {
+	return &Writer{
+		config: config,
+		table:  table,
+		db:     writer,
+		retry: RetryOptions{
+			Limiter:       limiter,
+			AcquireMetric: writeLimiterDelay,
+			MaxRetries:    config.WriteRetries,
+			Timeout:       config.WriteTimeout,
+		},
+		writerParallelism: semaphore.NewWeighted(config.WriterParallelism),
+	}
+}
+
+func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+	// Batch up the diffs
+	batches := make(chan Batch)
+	g.Go(func() error {
+		err := BatchTableWrites(ctx, diffs, batches)
+		close(batches)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
+	// Write every batch
+	g.Go(func() error {
+		g, ctx := errgroup.WithContext(ctx)
+		for batch := range batches {
+			err := w.scheduleWriteBatch(ctx, g, batch)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
 	return nil
 }

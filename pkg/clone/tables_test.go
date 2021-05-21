@@ -21,6 +21,7 @@ func TestLoadTables(t *testing.T) {
 			},
 		},
 		SourceTargetConfig: SourceTargetConfig{Source: vitessContainer.Config()}}
+
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
@@ -52,6 +53,7 @@ func TestLoadTablesTiDB(t *testing.T) {
 			},
 		},
 		SourceTargetConfig: SourceTargetConfig{Source: tidbContainer.Config()}}
+
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{

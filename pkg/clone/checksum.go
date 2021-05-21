@@ -2,133 +2,117 @@ package clone
 
 import (
 	"context"
-	log "github.com/sirupsen/logrus"
+	"github.com/dlmiddlecote/sqlstats"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"time"
 
-	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sync/errgroup"
 )
 
 type Checksum struct {
 	ReaderConfig
 }
 
-// Run applies the necessary changes to target to make it look like source
+// Run finds any differences between source and target
 func (cmd *Checksum) Run() error {
 	var err error
+
+	start := time.Now()
 
 	err = cmd.ReaderConfig.LoadConfig()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	log.WithField("config", cmd).Infof("using config")
+	logrus.Infof("using config: %v", cmd)
 
 	diffs, err := cmd.run()
+
+	elapsed := time.Since(start)
+	logger := logrus.WithField("duration", elapsed)
 	if err != nil {
-		return errors.WithStack(err)
+		if stackErr, ok := err.(stackTracer); ok {
+			logger = logger.WithField("stacktrace", stackErr.StackTrace())
+		}
+		logger.WithError(err).Errorf("error: %+v", err)
+	} else {
+		logger.Infof("full checksum success")
 	}
+
 	if len(diffs) > 0 {
-		return errors.Errorf("Found diffs")
+		// TODO log a more detailed diff report
+		return errors.Errorf("found diffs")
 	}
-	return nil
+	return errors.WithStack(err)
 }
 
 func (cmd *Checksum) run() ([]Diff, error) {
-	var err error
-
-	// TODO timeout?
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if cmd.TableParallelism == 0 {
+		return nil, errors.Errorf("need more parallelism")
+	}
+
+	// Load tables
+	// TODO in consistent clone we should diff the schema of the source with the target,
+	//      for now we just use the target schema
+	tables, err := LoadTables(ctx, cmd.ReaderConfig)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	sourceReader, err := cmd.Source.ReaderDB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	defer sourceReader.Close()
 	// Refresh connections regularly so they don't go stale
 	sourceReader.SetConnMaxLifetime(time.Minute)
 	sourceReader.SetMaxOpenConns(cmd.ReaderCount)
 	sourceReaderCollector := sqlstats.NewStatsCollector("source_reader", sourceReader)
 	prometheus.MustRegister(sourceReaderCollector)
 	defer prometheus.Unregister(sourceReaderCollector)
-	limitedSourceReader := Limit(
-		sourceReader, makeLimiter("source_reader_limiter"), readLimiterDelay.WithLabelValues("source"))
 
 	// Target reader
 	// We can use a connection pool of unsynced connections for the target because the assumption is there are no
 	// other writers to the target during the clone
-	targetReader, err := cmd.Target.DB()
+	// TODO we only have to open the target DB if NoDiff is set to false
+	targetReader, err := cmd.Target.ReaderDB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	defer targetReader.Close()
 	// Refresh connections regularly so they don't go stale
 	targetReader.SetConnMaxLifetime(time.Minute)
 	targetReader.SetMaxOpenConns(cmd.ReaderCount)
 	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
-	limitedTargetReader := Limit(
-		targetReader, makeLimiter("target_reader_limiter"), readLimiterDelay.WithLabelValues("target"))
 
-	// Load tables
-	tables, err := LoadTables(ctx, cmd.ReaderConfig)
-	if err != nil {
-		return nil, errors.WithStack(err)
+	var tablesToDo []string
+	for _, t := range tables {
+		tablesToDo = append(tablesToDo, t.Name)
+	}
+	logrus.Infof("starting to diff tables: %v", tablesToDo)
+
+	tablesTotalMetric.Add(float64(len(tables)))
+	for _, table := range tables {
+		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
-	chunks := make(chan Chunk, cmd.ChunkSize)
-	diffs := make(chan Diff, cmd.ChunkSize)
+	sourceLimiter := makeLimiter("source_reader_limiter")
+	targetLimiter := makeLimiter("target_reader_limiter")
+
 	g, ctx := errgroup.WithContext(ctx)
 
-	// TODO the parallelism here could be refactored, we should do like we do in processTable, one table at the time
+	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
 
-	// Generate chunks of all source tables
-	g.Go(func() error {
-		g, ctx := errgroup.WithContext(ctx)
-		for _, t := range tables {
-			table := t
-			g.Go(func() error {
-				return GenerateTableChunks(ctx, cmd.ReaderConfig, limitedSourceReader, table, chunks)
-			})
-		}
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		close(chunks)
-		return nil
-	})
-
-	// Forward chunks to differs
-	g.Go(func() error {
-		readerParallelism := semaphore.NewWeighted(cmd.ReaderParallelism)
-		g, ctx := errgroup.WithContext(ctx)
-		for c := range chunks {
-			chunk := c
-			err := readerParallelism.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			g.Go(func() (err error) {
-				defer readerParallelism.Release(1)
-				err = diffChunk(ctx, cmd.ReaderConfig, limitedSourceReader, limitedTargetReader, chunk, diffs)
-				return errors.WithStack(err)
-			})
-		}
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		// All diffing done, close the diffs channel
-		close(diffs)
-		return nil
-	})
-
+	diffs := make(chan Diff)
 	// Reporter
 	var foundDiffs []Diff
 	g.Go(func() error {
@@ -137,6 +121,35 @@ func (cmd *Checksum) run() ([]Diff, error) {
 		}
 		return nil
 	})
+
+	for _, table := range tables {
+		err = tableParallelism.Acquire(ctx, 1)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		g.Go(func() error {
+			defer tableParallelism.Release(1)
+
+			reader := NewReader(
+				cmd.ReaderConfig,
+				table,
+				sourceReader,
+				sourceLimiter,
+				targetReader,
+				targetLimiter,
+			)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			err = reader.Diff(ctx, g, diffs)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			return nil
+		})
+	}
 
 	return foundDiffs, g.Wait()
 }

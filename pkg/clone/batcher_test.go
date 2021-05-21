@@ -49,7 +49,7 @@ func TestBatcher(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			diffChan := make(chan Diff, len(test.diffs))
 			for _, diff := range test.diffs {
-				diffChan <- diff.toDiff()
+				diffChan <- diff.toDiff(test.batchSize)
 			}
 			close(diffChan)
 			var result []testBatch
@@ -62,7 +62,7 @@ func TestBatcher(t *testing.T) {
 					result = append(result, toTestBatch(batch))
 				}
 			}()
-			err := BatchWrites(context.Background(), test.batchSize, diffChan, batchChan)
+			err := BatchWrites(context.Background(), diffChan, batchChan)
 			assert.NoError(t, err)
 			wg.Wait()
 			assert.Equal(t, test.batches, result)

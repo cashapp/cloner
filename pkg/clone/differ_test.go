@@ -15,9 +15,9 @@ type testRow struct {
 	data  string
 }
 
-func (testRow testRow) toRow() *Row {
+func (testRow testRow) toRow(batchSize int) *Row {
 	return &Row{
-		Table: &Table{Name: testRow.table},
+		Table: &Table{Name: testRow.table, Config: TableConfig{WriteBatchSize: batchSize}},
 		ID:    testRow.id,
 		Data:  []interface{}{testRow.data},
 	}
@@ -28,8 +28,8 @@ type testDiff struct {
 	row      testRow
 }
 
-func (d testDiff) toDiff() Diff {
-	return Diff{d.diffType, d.row.toRow(), nil}
+func (d testDiff) toDiff(batchSize int) Diff {
+	return Diff{d.diffType, d.row.toRow(batchSize), nil}
 }
 
 func toTestDiff(diff Diff) testDiff {
@@ -184,7 +184,10 @@ func TestStreamDiff(t *testing.T) {
 					result = append(result, toTestDiff(diff))
 				}
 			}()
-			err := StreamDiff(context.Background(), table, streamTestRows(test.source), streamTestRows(test.target), diffsChan)
+			err := StreamDiff(context.Background(), table,
+				streamTestRows(test.source, 5),
+				streamTestRows(test.target, 5),
+				diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()
@@ -194,7 +197,8 @@ func TestStreamDiff(t *testing.T) {
 }
 
 type testRowStreamer struct {
-	rows []testRow
+	rows      []testRow
+	batchSize int
 }
 
 func (t *testRowStreamer) Close() error {
@@ -208,11 +212,11 @@ func (t *testRowStreamer) Next() (*Row, error) {
 	testRow := t.rows[0]
 	// chop head
 	t.rows = t.rows[1:]
-	return testRow.toRow(), nil
+	return testRow.toRow(t.batchSize), nil
 }
 
-func streamTestRows(rows []testRow) RowStream {
-	return &testRowStreamer{rows}
+func streamTestRows(rows []testRow, batchSize int) RowStream {
+	return &testRowStreamer{rows, batchSize}
 }
 
 func TestRowsEqual(t *testing.T) {
@@ -240,11 +244,7 @@ func TestDiffWithChecksum(t *testing.T) {
 
 	source := vitessContainer.Config()
 	source.Database = "customer/-80@replica"
-	sourceDB, err := source.DB()
-	assert.NoError(t, err)
 	target := tidbContainer.Config()
-	targetDB, err := target.DB()
-	assert.NoError(t, err)
 
 	config := &ReaderConfig{
 		SourceTargetConfig: SourceTargetConfig{
@@ -254,6 +254,17 @@ func TestDiffWithChecksum(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(config)
 	config.UseCRC32Checksum = true
+
+	tables, err := LoadTables(context.Background(), *config)
+	assert.NoError(t, err)
+
+	sourceReader, err := config.Source.DB()
+	assert.NoError(t, err)
+	defer sourceReader.Close()
+	targetReader, err := config.Target.DB()
+	assert.NoError(t, err)
+	defer targetReader.Close()
+	r := NewReader(*config, tables[0], sourceReader, nil, targetReader, nil)
 
 	type row struct {
 		id   int64
@@ -298,12 +309,10 @@ func TestDiffWithChecksum(t *testing.T) {
 			}()
 
 			ctx := context.Background()
-			tables, err := loadTables(ctx, *config, source, sourceDB)
-			assert.NoError(t, err)
 			chunk := Chunk{
 				Table: tables[0],
 			}
-			err = diffChunk(ctx, *config, sourceDB, targetDB, chunk, diffsChan)
+			err = r.diffChunk(ctx, chunk, diffsChan)
 			assert.NoError(t, err)
 			close(diffsChan)
 			wg.Wait()

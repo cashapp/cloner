@@ -14,11 +14,14 @@ type SourceTargetConfig struct {
 }
 
 type TableConfig struct {
-	IgnoreColumns []string `toml:"ignore_columns" help:"Ignore columns in table"`
-	TargetWhere   string   `toml:"target_where" help:"Extra where clause that is added on the target"`
-	TargetHint    string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
-	SourceWhere   string   `toml:"source_where" help:"Extra where clause that is added on the source"`
-	SourceHint    string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
+	IgnoreColumns  []string `toml:"ignore_columns" help:"Ignore columns in table"`
+	TargetWhere    string   `toml:"target_where" help:"Extra where clause that is added on the target"`
+	TargetHint     string   `toml:"target_hint" help:"Hint placed after the SELECT on target reads"`
+	SourceWhere    string   `toml:"source_where" help:"Extra where clause that is added on the source"`
+	SourceHint     string   `toml:"source_hint" help:"Hint placed after the SELECT on target reads"`
+	ChunkSize      int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
+	WriteBatchSize int      `toml:"write_batch_size" help:"Global chunk size if chunk size not specified on the table"`
+	WriteTimout    duration `toml:"write_timeout" help:"Global chunk size if chunk size not specified on the table"`
 }
 
 type Config struct {
@@ -29,9 +32,9 @@ type Config struct {
 type ReaderConfig struct {
 	SourceTargetConfig
 
-	ChunkSize int `help:"Size of the chunks to diff" default:"5000"`
+	ChunkSize int `help:"Default size of the chunks to diff (can also be overridden per table)" default:"5000"`
 
-	TableParallelism  int           `help:"Number of tables to process concurrently" default:"10"`
+	TableParallelism  int64         `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount       int           `help:"Number of reader connections" default:"20"`
 	ReaderParallelism int64         `help:"Number of reader goroutines" default:"200"`
 	ReadTimeout       time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
@@ -39,9 +42,29 @@ type ReaderConfig struct {
 
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 
+	UseConcurrencyLimits bool `help:"Use concurrency limits to automatically find the throughput of the underlying databases" default:"false"`
+
+	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
+
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 
+	// WriteBatchSize doesn't belong to ReaderConfig but we put that in the TableConfig when we load the table which is
+	// code reused by both checksum and clone so it's easier to put this here for now
+	WriteBatchSize int `help:"Default size of the write batch per transaction (can also be overridden per table)" default:"100"`
+
 	Config Config `kong:"-"`
+}
+
+type WriterConfig struct {
+	ReaderConfig
+
+	WriteBatchStatementSize int           `help:"Size of the write batch per statement" default:"100"`
+	WriterParallelism       int64         `help:"Number of writer goroutines" default:"200"`
+	WriterCount             int           `help:"Number of writer connections" default:"10"`
+	WriteRetries            uint64        `help:"Number of retries" default:"5"`
+	WriteTimeout            time.Duration `help:"Timeout for each write" default:"30s"`
+
+	NoDiff bool `help:"Clone without diffing using INSERT IGNORE can be faster as a first pass" default:"false"`
 }
 
 // LoadConfig loads the ConfigFile if specified
@@ -54,4 +77,14 @@ func (c *ReaderConfig) LoadConfig() error {
 		}
 	}
 	return nil
+}
+
+type duration struct {
+	time.Duration
+}
+
+func (d *duration) UnmarshalText(text []byte) error {
+	var err error
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }

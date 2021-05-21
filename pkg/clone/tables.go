@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"strings"
 
-	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
 )
@@ -26,13 +25,14 @@ type Table struct {
 	ColumnsQuoted []string
 	CRC32Columns  []string
 	ColumnList    string
+	EstimatedRows int64
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	var err error
 
 	// If the source has keyspace use that, otherwise use the target schema
-	dbConfig := config.Target
+	var dbConfig DBConfig
 	sourceSchema, err := config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -40,6 +40,8 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	if sourceSchema != "" {
 		// TODO if using the source filter the tables with the target schema unless we're doing a consistent clone
 		dbConfig = config.Source
+	} else {
+		dbConfig = config.Target
 	}
 
 	db, err := dbConfig.ReaderDB()
@@ -48,21 +50,27 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	}
 	defer db.Close()
 
+	retry := RetryOptions{
+		MaxRetries: config.ReadRetries,
+		Timeout:    config.ReadTimeout,
+	}
 	var tables []*Table
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), config.ReadRetries), ctx)
-	err = backoff.Retry(func() error {
-		ctx, cancel := context.WithTimeout(ctx, config.ReadTimeout)
-		defer cancel()
-
+	err = Retry(ctx, retry, func(ctx context.Context) error {
 		tables, err = loadTables(ctx, config, dbConfig, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 		if len(tables) == 0 {
 			return errors.Errorf("no tables found")
 		}
 		return err
-	}, b)
+	})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	// Shuffle the tables so they are processed in random order (which spreads out load)
 	rand.Shuffle(len(tables), func(i, j int) { tables[i], tables[j] = tables[j], tables[i] })
-	return tables, err
+	return tables, nil
 }
 
 func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
@@ -198,7 +206,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	// Close explicitly to check for close errors
 	err = rows.Close()
 	if err != nil {
-		return nil, err
+		return nil, errors.WithStack(err)
 	}
 	// Yep, hardcoded, maybe we should fix that at some point...
 	idColumn := "id"
@@ -208,6 +216,19 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 			idColumnIndex = i
 		}
 	}
+
+	estimatedRows, err := estimatedRows(ctx, databaseType, conn, schema, tableName)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if tableConfig.ChunkSize == 0 {
+		tableConfig.ChunkSize = config.ChunkSize
+	}
+	if tableConfig.WriteBatchSize == 0 {
+		tableConfig.WriteBatchSize = config.WriteBatchSize
+	}
+
 	return &Table{
 		Name:          tableName,
 		IDColumn:      idColumn,
@@ -216,6 +237,45 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		ColumnsQuoted: columnNamesQuoted,
 		CRC32Columns:  columnNamesCRC32,
 		ColumnList:    strings.Join(columnNamesQuoted, ","),
+		EstimatedRows: estimatedRows,
 		Config:        tableConfig,
 	}, nil
+}
+
+func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBReader, schema string, tableName string) (int64, error) {
+	var err error
+	var rows *sql.Rows
+	if databaseType == MySQL {
+		rows, err = conn.QueryContext(ctx,
+			"select round(data_length/avg_row_length) from information_schema.tables where table_schema = ? and table_name = ?",
+			schema, tableName)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else if databaseType == Vitess {
+		rows, err = conn.QueryContext(ctx,
+			"select round(data_length/avg_row_length) from information_schema.tables where table_name = ? and table_schema like ?",
+			tableName, fmt.Sprintf("vt_%s%%", schema))
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else {
+		return 0, errors.Errorf("not supported: %v", databaseType)
+	}
+	if !rows.Next() {
+		return 0, errors.Errorf("could not estimate number of rows of table %v.%v", schema, tableName)
+	}
+
+	var estimatedRows *int64
+	err = rows.Scan(&estimatedRows)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	if estimatedRows == nil {
+		// Empty table most likely
+		return 0, nil
+	}
+	return *estimatedRows, nil
 }

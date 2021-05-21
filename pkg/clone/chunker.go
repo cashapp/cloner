@@ -4,11 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
-	"time"
-
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
+	"io"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)
@@ -27,44 +25,6 @@ type Chunk struct {
 	Size int
 }
 
-//func GenerateTableChunks(ctx context.Context, conn *sql.Conn, table *Table, chunkSize int, chunks chan Chunk) error {
-//	log.Infof("Generating chunks for %v", table.Name)
-//	sql := fmt.Sprintf(`
-//		select
-//			  min(tmp.id) as start_rowid,
-//			  max(tmp.id) as end_rowid,
-//			  count(*) as page_size
-//		from (
-//		  select
-//			id,
-//			row_number() over (order by id) as row_num
-//		  from %s
-//		) tmp
-//		group by floor((tmp.row_num - 1) / ?)
-//		order by start_rowid
-//	`, table.Name)
-//	rows, err := conn.QueryContext(ctx, sql, chunkSize)
-//	if err != nil {
-//		return errors.WithStack(err)
-//	}
-//	defer rows.Close()
-//	for rows.Next() {
-//		var startId int64
-//		var endId int64
-//		var pageSize int64
-//		err := rows.Scan(&startId, &endId, &pageSize)
-//		if err != nil {
-//			return errors.WithStack(err)
-//		}
-//		chunks <- Chunk{
-//			Table: table,
-//			Start: startId,
-//			End:   endId,
-//		}
-//	}
-//	return nil
-//}
-
 type PeekingIdStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) (int64, bool, error)
@@ -81,7 +41,7 @@ func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
 	if !p.hasPeeked {
 		// first time round load the first entry
 		p.peeked, err = p.wrapped.Next(ctx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return p.peeked, false, err
 		} else {
 			if err != nil {
@@ -95,7 +55,7 @@ func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
 	hasNext := true
 
 	p.peeked, err = p.wrapped.Next(ctx)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		hasNext = false
 	} else {
 		if err != nil {
@@ -111,19 +71,22 @@ type IdStreamer interface {
 
 type pagingStreamer struct {
 	conn         DBReader
-	timeout      time.Duration
 	first        bool
 	currentPage  []int64
 	currentIndex int
 	table        *Table
 	pageSize     int
-	retries      uint64
+	retry        RetryOptions
 }
 
 func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 	if p.currentIndex == len(p.currentPage) {
 		var err error
 		p.currentPage, err = p.loadPage(ctx)
+		if errors.Is(err, io.EOF) {
+			// Race condition, the table was emptied
+			return 0, io.EOF
+		}
 		if err != nil {
 			return 0, errors.WithStack(err)
 		}
@@ -137,14 +100,12 @@ func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
 	return next, nil
 }
 
-func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err error) {
-	b := backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), p.retries), ctx)
-	err = backoff.Retry(func() error {
-		ctx, cancel := context.WithTimeout(ctx, p.timeout)
-		defer cancel()
+func (p *pagingStreamer) loadPage(ctx context.Context) ([]int64, error) {
+	var result []int64
+	err := Retry(ctx, p.retry, func(ctx context.Context) error {
+		var err error
 
 		result = make([]int64, 0, p.pageSize)
-		var err error
 		var rows *sql.Rows
 		if p.first {
 			p.first = false
@@ -155,6 +116,11 @@ func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err erro
 			}
 			defer rows.Close()
 		} else {
+			result = nil
+			if len(p.currentPage) == 0 {
+				// Race condition, the table was emptied
+				return backoff.Permanent(io.EOF)
+			}
 			lastId := p.currentPage[len(p.currentPage)-1]
 			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s > %d order by %s asc limit %d",
 				p.table.IDColumn, p.table.Name, p.table.IDColumn, lastId, p.table.IDColumn, p.pageSize))
@@ -172,17 +138,16 @@ func (p *pagingStreamer) loadPage(ctx context.Context) (result []int64, err erro
 			result = append(result, id)
 		}
 		return err
-	}, b)
+	})
 
-	return
+	return result, err
 }
 
-func streamIds(conn DBReader, table *Table, timeout time.Duration, pageSize int, retries uint64) PeekingIdStreamer {
+func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) PeekingIdStreamer {
 	return &peekingIdStreamer{
 		wrapped: &pagingStreamer{
 			conn:         conn,
-			timeout:      timeout,
-			retries:      retries,
+			retry:        retry,
 			first:        true,
 			pageSize:     pageSize,
 			currentPage:  nil,
@@ -192,15 +157,14 @@ func streamIds(conn DBReader, table *Table, timeout time.Duration, pageSize int,
 	}
 }
 
-func GenerateTableChunks(
+func (r *Reader) generateTableChunks(
 	ctx context.Context,
-	config ReaderConfig,
-	conn DBReader,
 	table *Table,
 	chunks chan Chunk,
 ) error {
-	chunkSize := config.ChunkSize
-	ids := streamIds(conn, table, config.ReadTimeout, chunkSize, config.ReadRetries)
+	chunkSize := table.Config.ChunkSize
+
+	ids := streamIds(r.source, table, chunkSize, r.sourceRetry)
 
 	var err error
 	currentChunkSize := 0
@@ -210,7 +174,7 @@ func GenerateTableChunks(
 	hasNext := true
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -220,13 +184,17 @@ func GenerateTableChunks(
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			chunks <- Chunk{
+			select {
+			case chunks <- Chunk{
 				Table: table,
 				Start: startId,
 				End:   id,
 				First: first,
 				Last:  !hasNext,
 				Size:  currentChunkSize,
+			}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			// Next id should be the next start id
 			startId = id
@@ -243,13 +211,17 @@ func GenerateTableChunks(
 			startId = 0
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		chunks <- Chunk{
+		select {
+		case chunks <- Chunk{
 			Table: table,
 			Start: startId,
 			End:   id,
 			First: first,
 			Last:  true,
 			Size:  currentChunkSize,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	return nil

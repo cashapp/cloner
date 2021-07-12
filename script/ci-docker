@@ -40,8 +40,7 @@ elif [[ "$(uname)" == "Darwin" ]]; then
   DOCKER_TAG=$(echo ${APP_NAME} | tr -cd [:alnum:])
 elif [[ -n "${KOCHIKU_CANARY_BUILD:-}" ]]; then
   DOCKER_TAG="$APP_NAME:$GIT_COMMIT"
-  # TODO DO NOT MERGE!!!
-  PUSH="-s -p"
+  PUSH="-s"
 else
   DOCKER_TAG="$APP_NAME:$GIT_COMMIT"
   PUSH="-s -p"

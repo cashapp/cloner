@@ -1,18 +1,22 @@
 package clone
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/replication"
+	"io"
 	"io/ioutil"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/pavel-v-chernykh/keystore-go"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -261,27 +265,65 @@ func (c DBConfig) BinlogSyncerConfig() (replication.BinlogSyncerConfig, error) {
 		return replication.BinlogSyncerConfig{},
 			errors.Errorf("can't stream binlogs from Vitess, you need to connect directly to underlying database")
 	}
+	if c.MiskDatasource != "" {
+		endpoint, err := c.miskEndpoint()
+		if err != nil {
+			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+		}
+
+		var tlsConfig *tls.Config
+		tlsConfig, err = miskTLSConfig(endpoint)
+		if err != nil {
+			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+		}
+		port := endpoint.Port
+		if port == 0 {
+			port = 3306
+		}
+		return replication.BinlogSyncerConfig{
+			ServerID:  100, // TODO what's this?!
+			Flavor:    "mysql",
+			Host:      endpoint.Host,
+			Port:      port,
+			User:      endpoint.Username,
+			Password:  endpoint.Password,
+			TLSConfig: tlsConfig,
+		}, nil
+	} else {
+		host, port, err := hostAndPort(c)
+		if err != nil {
+			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+		}
+		return replication.BinlogSyncerConfig{
+			ServerID: 100, // TODO what's this?!
+			Flavor:   "mysql",
+			Host:     host,
+			Port:     port,
+			User:     c.Username,
+			Password: c.Password,
+			// TODO TLS!
+		}, nil
+	}
+}
+
+func hostAndPort(c DBConfig) (string, uint16, error) {
 	hostAndPort := strings.Split(c.Host, ":")
+	if len(hostAndPort) == 1 {
+		return hostAndPort[0], 3306, nil
+	}
 	host := hostAndPort[0]
 	port, err := strconv.Atoi(hostAndPort[1])
 	if err != nil {
-		return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+		return "", 0, errors.WithStack(err)
 	}
-	return replication.BinlogSyncerConfig{
-		ServerID: 100, // TODO what's this?!
-		Flavor:   "mysql",
-		Host:     host,
-		Port:     uint16(port),
-		User:     c.Username,
-		Password: c.Password,
-		// TODO TLS!
-	}, nil
+	return host, uint16(port), nil
 }
 
 type miskDataSourceConfig struct {
 	Database                          string
 	Type                              string
 	Host                              string
+	Port                              uint16
 	Username                          string
 	Password                          string
 	TrustCertificateKeyStoreURL       string `yaml:"trust_certificate_key_store_url"`
@@ -313,6 +355,28 @@ func parseMiskDatasource(path string) (*miskDataSourceClustersConfig, error) {
 }
 
 func openMisk(c miskDataSourceConfig) (*sql.DB, error) {
+	tlsConfig, err := miskTLSConfig(c)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	err = mysql.RegisterTLSConfig("cloner", tlsConfig)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	port := 3306
+	if c.Type == "TIDB" {
+		port = 4000
+	}
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?collation=utf8mb4_unicode_ci&parseTime=true&tls=cloner",
+		c.Username, c.Password, c.Host, port, c.Database)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return db, err
+}
+
+func miskTLSConfig(c miskDataSourceConfig) (*tls.Config, error) {
 	rootCAs := x509.NewCertPool()
 	{
 		if !strings.HasPrefix(c.TrustCertificateKeyStoreURL, "file://") {
@@ -322,9 +386,17 @@ func openMisk(c miskDataSourceConfig) (*sql.DB, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "couldn't read trust store from %q", c.TrustCertificateKeyStoreURL)
 		}
-		certificates, err := pkcs12.DecodeTrustStore(data, c.TrustCertificateKeyStorePassword)
-		if err != nil {
-			return nil, errors.Wrapf(err, "couldn't read trust store from %q", c.TrustCertificateKeyStoreURL)
+		var certificates []*x509.Certificate
+		if strings.HasSuffix(c.TrustCertificateKeyStoreURL, ".jks") {
+			certificates, err = loadCertsJKS(bytes.NewReader(data), []byte(c.TrustCertificateKeyStorePassword))
+			if err != nil {
+				return nil, errors.Wrapf(err, "couldn't read trust store from %q", c.TrustCertificateKeyStoreURL)
+			}
+		} else {
+			certificates, err = pkcs12.DecodeTrustStore(data, c.TrustCertificateKeyStorePassword)
+			if err != nil {
+				return nil, errors.Wrapf(err, "couldn't read trust store from %q", c.TrustCertificateKeyStoreURL)
+			}
 		}
 		for _, certificate := range certificates {
 			rootCAs.AddCert(certificate)
@@ -332,7 +404,9 @@ func openMisk(c miskDataSourceConfig) (*sql.DB, error) {
 	}
 	clientCerts := make([]tls.Certificate, 0, 1)
 	{
-		if strings.HasSuffix(c.ClientCertificateKeyStoreURL, ".p12") {
+		if c.ClientCertificateKeyStoreURL == "" {
+			// No client cert
+		} else if strings.HasSuffix(c.ClientCertificateKeyStoreURL, ".p12") {
 			if !strings.HasPrefix(c.ClientCertificateKeyStoreURL, "file://") {
 				return nil, errors.Errorf("client_certificate_key_store_url must be a file:// but is %q", c.ClientCertificateKeyStoreURL)
 			}
@@ -355,22 +429,48 @@ func openMisk(c miskDataSourceConfig) (*sql.DB, error) {
 		}
 	}
 
-	err := mysql.RegisterTLSConfig("cloner", &tls.Config{
+	tlsConfig := &tls.Config{
 		RootCAs:      rootCAs,
 		Certificates: clientCerts,
-	})
+		ServerName:   c.Host,
+	}
+	return tlsConfig, nil
+}
+
+func loadCertsJKS(r io.Reader, password []byte) ([]*x509.Certificate, error) {
+	result := make([]*x509.Certificate, 0)
+	ks, err := keystore.Decode(r, password)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "failed to decode keystore")
 	}
-	port := 3306
-	if c.Type == "TIDB" {
-		port = 4000
+
+	keys := make([]string, 0, len(ks))
+
+	for key := range ks {
+		keys = append(keys, key)
 	}
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?collation=utf8mb4_unicode_ci&parseTime=true&tls=cloner",
-		c.Username, c.Password, c.Host, port, c.Database)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, errors.WithStack(err)
+
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		store := ks[key]
+
+		entry, ok := store.(*keystore.TrustedCertificateEntry)
+
+		if !ok {
+			return nil, errors.Errorf("cannot convert the store under %s to TrustedCertificateEntry", key)
+		}
+
+		if entry.Certificate.Type != "X.509" {
+			return nil, errors.Errorf("expected an X.509 block but got %s", entry.Certificate.Type)
+		}
+
+		certificate, err := x509.ParseCertificate(entry.Certificate.Content)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		result = append(result, certificate)
 	}
-	return db, err
+
+	return result, nil
 }

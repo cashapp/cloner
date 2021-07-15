@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,9 @@ func TestReplicate(t *testing.T) {
 		return
 	}
 	if err.Error() == "dial tcp: operation was canceled" {
+		return
+	}
+	if strings.Contains(err.Error(), "context canceled") {
 		return
 	}
 	assert.NoError(t, err)

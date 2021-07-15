@@ -105,6 +105,9 @@ github.com/ory/dockertest/v3/docker/types/network
 github.com/ory/dockertest/v3/docker/types/registry
 github.com/ory/dockertest/v3/docker/types/strslice
 github.com/ory/dockertest/v3/docker/types/versions
+# github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
+## explicit
+github.com/pavel-v-chernykh/keystore-go
 # github.com/philhofer/fwd v1.0.0
 github.com/philhofer/fwd
 # github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3

@@ -11,6 +11,7 @@ require (
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/ory/dockertest/v3 v3.6.1
+	github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/platinummonkey/go-concurrency-limits v0.5.4
 	github.com/prometheus/client_golang v1.4.1

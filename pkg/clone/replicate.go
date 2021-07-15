@@ -7,12 +7,34 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	_ "net/http/pprof"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
+)
+
+var (
+	eventsReceived = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "replication_events_received",
+			Help: "How many events we've received",
+		},
+	)
+	eventsProcessed = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "replication_events_processed",
+			Help: "How many events we've processed",
+		},
+	)
+	eventsIgnored = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "replication_events_ignored",
+			Help: "How many events we've ignored",
+		},
+	)
 )
 
 type Replicate struct {
@@ -121,6 +143,9 @@ func (r *Replicator) run(ctx context.Context) error {
 			return errors.WithStack(err)
 		}
 
+		eventsReceived.Inc()
+
+		ignored := false
 		switch event := e.Event.(type) {
 		case *replication.QueryEvent:
 			if string(event.Query) == "BEGIN" {
@@ -134,26 +159,32 @@ func (r *Replicator) run(ctx context.Context) error {
 				continue
 			}
 			if r.isDelete(e) {
-				err := r.deleteRows(ctx, event)
+				err := r.deleteRows(ctx, e.Header, event)
 				if err != nil {
 					return errors.WithStack(err)
 				}
 			} else {
-				err := r.replaceRows(ctx, event)
+				err := r.replaceRows(ctx, e.Header, event)
 				if err != nil {
 					return errors.WithStack(err)
 				}
 			}
 		case *replication.XIDEvent:
-			// TODO save the GTID or file:position if we don't have GTID for recovery
+			// TODO save the GTID (or file:position if we don't have GTID) for recovery
 			err := r.tx.Commit()
 			if err != nil {
 				return errors.WithStack(err)
 			}
 			r.tx = nil
+		default:
+			ignored = true
 		}
 
-		// TODO
+		if ignored {
+			eventsIgnored.Inc()
+		} else {
+			eventsProcessed.Inc()
+		}
 	}
 }
 
@@ -161,7 +192,7 @@ func (r *Replicator) isDelete(e *replication.BinlogEvent) bool {
 	return e.Header.EventType == replication.DELETE_ROWS_EVENTv0 || e.Header.EventType == replication.DELETE_ROWS_EVENTv1 || e.Header.EventType == replication.DELETE_ROWS_EVENTv2
 }
 
-func (r *Replicator) replaceRows(ctx context.Context, event *replication.RowsEvent) error {
+func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventHeader, event *replication.RowsEvent) error {
 	if r.tx == nil {
 		return errors.Errorf("transaction was not started with BEGIN")
 	}
@@ -169,6 +200,17 @@ func (r *Replicator) replaceRows(ctx context.Context, event *replication.RowsEve
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	tableName := tableSchema.Name
+	writeType := writeTypeOfEvent(header)
+	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
+	defer timer.ObserveDuration()
+	defer func() {
+		if err == nil {
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+		} else {
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+		}
+	}()
 	var questionMarks strings.Builder
 	var columnListBuilder strings.Builder
 	for i, column := range tableSchema.Columns {
@@ -202,6 +244,20 @@ func (r *Replicator) replaceRows(ctx context.Context, event *replication.RowsEve
 	return nil
 }
 
+func writeTypeOfEvent(header *replication.EventHeader) string {
+	switch header.EventType {
+	case replication.WRITE_ROWS_EVENTv0, replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
+		return "insert"
+	case replication.UPDATE_ROWS_EVENTv0, replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
+		return "update"
+	case replication.DELETE_ROWS_EVENTv0, replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
+		return "delete"
+	default:
+		logrus.Fatalf("unknown event type: %d", header.EventType)
+		panic("unknown event type")
+	}
+}
+
 func (r *Replicator) shouldReplicate(table string) bool {
 	if len(r.config.Config.Tables) == 0 {
 		// No tables configged, we replicate everything
@@ -211,14 +267,26 @@ func (r *Replicator) shouldReplicate(table string) bool {
 	return exists
 }
 
-func (r *Replicator) deleteRows(ctx context.Context, event *replication.RowsEvent) error {
+func (r *Replicator) deleteRows(ctx context.Context, header *replication.EventHeader, event *replication.RowsEvent) (err error) {
 	if r.tx == nil {
 		return errors.Errorf("transaction was not started with BEGIN")
 	}
+
 	tableSchema, err := r.getTableSchema(event.Table)
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	tableName := tableSchema.Name
+	writeType := writeTypeOfEvent(header)
+	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
+	defer timer.ObserveDuration()
+	defer func() {
+		if err == nil {
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+		} else {
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+		}
+	}()
 	var stmt strings.Builder
 	args := make([]interface{}, 0, len(event.Rows))
 	stmt.WriteString("DELETE FROM `")

@@ -17,6 +17,7 @@ require (
 	github.com/prometheus/client_golang v1.4.1
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
+	go.uber.org/atomic v1.7.0
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
 	google.golang.org/grpc v1.32.0

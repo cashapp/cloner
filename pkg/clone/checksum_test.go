@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"context"
 	"testing"
 
 	"github.com/alecthomas/kong"
@@ -50,7 +51,7 @@ func TestChecksum(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
-	diffs, err := checksum.run()
+	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, shardRowCount, len(diffs))
 }

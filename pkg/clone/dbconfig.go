@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"github.com/go-mysql-org/go-mysql/replication"
 	"io/ioutil"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -252,6 +254,28 @@ func (c DBConfig) VitessTarget() (*query.Target, error) {
 		return target, nil
 	}
 	return nil, nil
+}
+
+func (c DBConfig) BinlogSyncerConfig() (replication.BinlogSyncerConfig, error) {
+	if c.Type == Vitess {
+		return replication.BinlogSyncerConfig{},
+			errors.Errorf("can't stream binlogs from Vitess, you need to connect directly to underlying database")
+	}
+	hostAndPort := strings.Split(c.Host, ":")
+	host := hostAndPort[0]
+	port, err := strconv.Atoi(hostAndPort[1])
+	if err != nil {
+		return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+	}
+	return replication.BinlogSyncerConfig{
+		ServerID: 100, // TODO what's this?!
+		Flavor:   "mysql",
+		Host:     host,
+		Port:     uint16(port),
+		User:     c.Username,
+		Password: c.Password,
+		// TODO TLS!
+	}, nil
 }
 
 type miskDataSourceConfig struct {

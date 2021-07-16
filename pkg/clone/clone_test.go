@@ -161,7 +161,7 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
 	clone.UseCRC32Checksum = true
 	assert.NoError(t, err)
-	diffs, err := checksum.run()
+	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }
@@ -214,7 +214,7 @@ func TestUnshardedClone(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
-	diffs, err := checksum.run()
+	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }
@@ -287,7 +287,7 @@ func TestCloneNoDiff(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
-	diffs, err := checksum.run()
+	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
 	assert.Equal(t, 27, len(diffs))

@@ -343,6 +343,46 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk, diffs chan Diff) er
 }
 
 func (r *Reader) diffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) error {
+	// TODO what we should actually do here is do a single pass through all of the successful chunks,
+	//      then keep retrying with the failed chunks until they all succeed,
+	//      but that will require larger code restructurings so let's wait with that for a bit
+	if r.config.FailedChunkRetryCount == 0 {
+		err := r.doDiffChunk(ctx, chunk, diffs)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	} else {
+		// Buffer diffs for the chunk locally and retry if diffs were found
+		var foundChunkDiffs []Diff
+		chunkDiffs := make(chan Diff)
+		go func() {
+			for diff := range chunkDiffs {
+				foundChunkDiffs = append(foundChunkDiffs, diff)
+			}
+		}()
+		for i := 0; i < r.config.FailedChunkRetryCount; i++ {
+			foundChunkDiffs = nil
+			err := r.doDiffChunk(ctx, chunk, diffs)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			if len(foundChunkDiffs) == 0 {
+				// Yay! Chunk had no diffs!!
+				return nil
+			}
+
+		}
+		close(chunkDiffs)
+
+		// Drain any diffs if we found them
+		for _, diff := range foundChunkDiffs {
+			diffs <- diff
+		}
+	}
+	return nil
+}
+
+func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()

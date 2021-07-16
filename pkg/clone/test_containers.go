@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -127,22 +128,27 @@ func startVitess() error {
 	// exponential backoff-Retry, because the application in the container might not be ready to accept connections yet
 	time.Sleep(1 * time.Second)
 	if err := pool.Retry(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
 		var err error
 		db, err := config.DB()
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		err = db.Ping()
+		err = db.PingContext(ctx)
 		if err != nil {
+			fmt.Printf("%+v\n", err)
 			return errors.WithStack(err)
 		}
-		ctx := context.Background()
 		conn, err := db.Conn(ctx)
 		if err != nil {
+			fmt.Printf("%+v\n", err)
 			return errors.WithStack(err)
 		}
 		rows, err := conn.QueryContext(ctx, "SELECT * FROM customers")
 		if err != nil {
+			fmt.Printf("%+v\n", err)
 			return errors.WithStack(err)
 		}
 		defer rows.Close()
@@ -151,6 +157,26 @@ func startVitess() error {
 	}); err != nil {
 		_ = pool.Purge(resource)
 		return errors.WithStack(err)
+	}
+
+	// Allow external access to the underlying mysql database
+	exitCode, err := resource.Exec(
+		[]string{
+			"mysql",
+			"-S", "/vt/vtdataroot/vt_0000000001/mysql.sock",
+			"-u", "root",
+			"mysql",
+			"-e",
+			"grant all on *.* to 'vt_dba'@'%'; grant REPLICATION CLIENT, REPLICATION SLAVE on *.* to 'vt_app'@'%'",
+		},
+		dockertest.ExecOptions{StdOut: os.Stdout, StdErr: os.Stderr},
+	)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if exitCode != 0 {
+		_ = pool.Purge(resource)
+		return errors.Errorf("non-zero exit code: %d", exitCode)
 	}
 
 	err = insertBaseData(config)

@@ -185,8 +185,9 @@ func chunkWhere(chunk Chunk, extraWhereClause string) string {
 		} else if chunk.Last {
 			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
 		} else {
-			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
-			clauses = append(clauses, fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
+			clauses = append(clauses,
+				fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
+				fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 		}
 	}
 	if len(clauses) == 0 {

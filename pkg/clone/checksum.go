@@ -30,7 +30,9 @@ func (cmd *Checksum) Run() error {
 
 	logrus.Infof("using config: %v", cmd)
 
-	diffs, err := cmd.run()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	diffs, err := cmd.run(ctx)
 
 	elapsed := time.Since(start)
 	logger := logrus.WithField("duration", elapsed)
@@ -50,10 +52,7 @@ func (cmd *Checksum) Run() error {
 	return errors.WithStack(err)
 }
 
-func (cmd *Checksum) run() ([]Diff, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	if cmd.TableParallelism == 0 {
 		return nil, errors.Errorf("need more parallelism")
 	}

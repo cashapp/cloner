@@ -16,9 +16,10 @@ import (
 const TimestampFormat = `2006-01-02T15:04:05.000`
 
 var cli struct {
-	Clone    clone.Clone    `cmd:"" help:"Clone database."`
-	Checksum clone.Checksum `cmd:"" help:"Work In Progress! Checksum database."`
-	Ping     clone.Ping     `cmd:"" help:"Ping the databases"`
+	Clone     clone.Clone     `cmd:"" help:"Clone database."`
+	Checksum  clone.Checksum  `cmd:"" help:"Work In Progress! Checksum database."`
+	Replicate clone.Replicate `cmd:"" help:"Work In Progress! Checksum database."`
+	Ping      clone.Ping      `cmd:"" help:"Ping the databases"`
 }
 
 func inKubernetes() bool {

@@ -52,6 +52,8 @@ type ReaderConfig struct {
 	// code reused by both checksum and clone so it's easier to put this here for now
 	WriteBatchSize int `help:"Default size of the write batch per transaction (can also be overridden per table)" default:"100"`
 
+	FailedChunkRetryCount int `help:"Retry a chunk if it fails the checksum, this can be used to checksum across a replica with a master" default:"0"`
+
 	Config Config `kong:"-"`
 }
 

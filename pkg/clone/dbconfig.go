@@ -260,7 +260,7 @@ func (c DBConfig) VitessTarget() (*query.Target, error) {
 	return nil, nil
 }
 
-func (c DBConfig) BinlogSyncerConfig() (replication.BinlogSyncerConfig, error) {
+func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerConfig, error) {
 	if c.Type == Vitess {
 		return replication.BinlogSyncerConfig{},
 			errors.Errorf("can't stream binlogs from Vitess, you need to connect directly to underlying database")
@@ -281,7 +281,7 @@ func (c DBConfig) BinlogSyncerConfig() (replication.BinlogSyncerConfig, error) {
 			port = 3306
 		}
 		return replication.BinlogSyncerConfig{
-			ServerID:  100, // TODO what's this?!
+			ServerID:  serverID,
 			Flavor:    "mysql",
 			Host:      endpoint.Host,
 			Port:      port,
@@ -295,7 +295,7 @@ func (c DBConfig) BinlogSyncerConfig() (replication.BinlogSyncerConfig, error) {
 			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
 		}
 		return replication.BinlogSyncerConfig{
-			ServerID: 100, // TODO what's this?!
+			ServerID: serverID,
 			Flavor:   "mysql",
 			Host:     host,
 			Port:     port,
@@ -363,9 +363,12 @@ func openMisk(c miskDataSourceConfig) (*sql.DB, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	port := 3306
-	if c.Type == "TIDB" {
-		port = 4000
+	port := c.Port
+	if port == 0 {
+		port = 3306
+		if c.Type == "TIDB" {
+			port = 4000
+		}
 	}
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?collation=utf8mb4_unicode_ci&parseTime=true&tls=cloner",
 		c.Username, c.Password, c.Host, port, c.Database)

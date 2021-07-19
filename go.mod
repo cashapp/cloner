@@ -11,11 +11,13 @@ require (
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/ory/dockertest/v3 v3.6.1
+	github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/platinummonkey/go-concurrency-limits v0.5.4
 	github.com/prometheus/client_golang v1.4.1
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.6.1
+	go.uber.org/atomic v1.7.0
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
 	google.golang.org/grpc v1.32.0

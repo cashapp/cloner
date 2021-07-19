@@ -183,6 +183,14 @@ func chunkWhere(chunk Chunk, extraWhereClause string) string {
 		if chunk.First {
 			clauses = append(clauses, fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 		} else if chunk.Last {
+			// TODO This means the tail chunk is "infinite" which could cause issues with the retrying checksummer
+			//      since it's very likely we add new rows to the tail chunk. There might be very few moments when the
+			//      tail chunk is fully in sync with the replication source.
+			//      A better option would be to keep the tail chunk "fixed size" from the moment of time of chunking
+			//      but our chunks extend from the Start row until just before the End row so we don't get "gaps" in
+			//      the non-tail chunks. Since this is a tail chunk we don't know the End row. So we would need to
+			//      rethink this whole thing.
+			//      Let's see how we go, maybe it's fine.
 			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
 		} else {
 			clauses = append(clauses,

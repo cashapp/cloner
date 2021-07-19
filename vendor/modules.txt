@@ -105,6 +105,9 @@ github.com/ory/dockertest/v3/docker/types/network
 github.com/ory/dockertest/v3/docker/types/registry
 github.com/ory/dockertest/v3/docker/types/strslice
 github.com/ory/dockertest/v3/docker/types/versions
+# github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
+## explicit
+github.com/pavel-v-chernykh/keystore-go
 # github.com/philhofer/fwd v1.0.0
 github.com/philhofer/fwd
 # github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3
@@ -128,6 +131,7 @@ github.com/pmezard/go-difflib/difflib
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 github.com/prometheus/client_golang/prometheus/promhttp
+github.com/prometheus/client_golang/prometheus/testutil
 # github.com/prometheus/client_model v0.2.0
 github.com/prometheus/client_model/go
 # github.com/prometheus/common v0.9.1
@@ -176,6 +180,7 @@ github.com/uber/jaeger-client-go/utils
 # github.com/uber/jaeger-lib v2.0.0+incompatible
 github.com/uber/jaeger-lib/metrics
 # go.uber.org/atomic v1.7.0
+## explicit
 go.uber.org/atomic
 # golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 golang.org/x/crypto/pbkdf2

@@ -2,14 +2,21 @@ package clone
 
 import (
 	"context"
+	"database/sql"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/stretchr/testify/assert"
 )
+
+const heartbeatFrequency = 100 * time.Millisecond
 
 func TestReplicate(t *testing.T) {
 	err := startAll()
@@ -51,10 +58,13 @@ func TestReplicate(t *testing.T) {
 		},
 	}
 	replicate := &Replicate{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
+		HeartbeatTable:       "heartbeat",
+		HeartbeatFrequency:   heartbeatFrequency,
+		HeartbeatCreateTable: true,
 	}
 	err = kong.ApplyDefaults(replicate)
 	assert.NoError(t, err)
@@ -72,6 +82,8 @@ func TestReplicate(t *testing.T) {
 		return err
 	})
 
+	doWrite := atomic.NewBool(true)
+
 	// Write rows in a separate thread
 	g.Go(func() error {
 		db, err := source.DB()
@@ -79,34 +91,8 @@ func TestReplicate(t *testing.T) {
 			return errors.WithStack(err)
 		}
 		for i := 0; ; i++ {
-			// Insert a new row
-			_, err = db.ExecContext(ctx, `
-				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
-			`)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			// Randomly update a row
-			var randomCustomerId int64
-			row := db.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-			err := row.Scan(&randomCustomerId)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			// Every five iterations randomly delete a row
-			if i%5 == 0 {
-				_, err = db.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-			} else {
-				// Otherwise update it
-				_, err = db.ExecContext(ctx, ` 
-					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
-					WHERE id = ?
-				`, randomCustomerId)
+			if doWrite.Load() {
+				err := write(ctx, db, i%5 == 0)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -127,7 +113,15 @@ func TestReplicate(t *testing.T) {
 	// Wait for a little bit to let the replicator exercise
 	time.Sleep(10 * time.Second)
 
-	// Do a full checksum
+	// Stop writing and make sure replication lag drops to heartbeat frequency
+	err = waitFor(ctx, someReplicationLag)
+	assert.NoError(t, err)
+	doWrite.Store(false)
+	err = waitFor(ctx, littleReplicationLag)
+	assert.NoError(t, err)
+
+	// Do a full checksum while replication is running
+	doWrite.Store(true)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
 	}
@@ -148,5 +142,77 @@ func TestReplicate(t *testing.T) {
 	if err.Error() == "dial tcp: operation was canceled" {
 		return
 	}
+	if strings.Contains(err.Error(), "context canceled") {
+		return
+	}
 	assert.NoError(t, err)
+}
+
+func someReplicationLag() error {
+	reads := testutil.ToFloat64(heartbeatsRead)
+	if reads == 0 {
+		return errors.Errorf("we haven't read any heartbeats yet")
+	}
+	toFloat64 := testutil.ToFloat64(replicationLag)
+	lag := time.Duration(toFloat64) * time.Millisecond
+	if lag > 0 {
+		return errors.Errorf("no replication lag")
+	}
+	return nil
+}
+
+func littleReplicationLag() error {
+	expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
+	reads := testutil.ToFloat64(heartbeatsRead)
+	if reads == 0 {
+		return errors.Errorf("we haven't read any heartbeats yet")
+	}
+	toFloat64 := testutil.ToFloat64(replicationLag)
+	lag := time.Duration(toFloat64) * time.Millisecond
+	if lag > expectedLag {
+		return errors.Errorf("replication lag did not drop yet")
+	}
+	return nil
+}
+
+func waitFor(ctx context.Context, condition func() error) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
+}
+
+func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
+	// Insert a new row
+	_, err = db.ExecContext(ctx, `
+				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
+			`)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Randomly update a row
+	var randomCustomerId int64
+	row := db.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
+	err = row.Scan(&randomCustomerId)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Every five iterations randomly delete a row
+	if delete {
+		_, err = db.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	} else {
+		// Otherwise update it
+		_, err = db.ExecContext(ctx, ` 
+					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
+					WHERE id = ?
+				`, randomCustomerId)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
 }

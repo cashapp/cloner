@@ -62,9 +62,10 @@ func TestReplicate(t *testing.T) {
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
-		HeartbeatTable:       "heartbeat",
-		HeartbeatFrequency:   heartbeatFrequency,
-		HeartbeatCreateTable: true,
+		TaskName:           "customer/-80",
+		HeartbeatTable:     "heartbeat",
+		HeartbeatFrequency: heartbeatFrequency,
+		CreateTables:       true,
 	}
 	err = kong.ApplyDefaults(replicate)
 	assert.NoError(t, err)
@@ -77,8 +78,13 @@ func TestReplicate(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Run replication in separate thread
+	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
+	defer cancelFirstReplication()
 	g.Go(func() error {
-		err := replicate.run(ctx)
+		err := replicate.run(firstReplicationCtx)
+		if isCancelledError(err) {
+			return nil
+		}
 		return err
 	})
 
@@ -111,7 +117,7 @@ func TestReplicate(t *testing.T) {
 	})
 
 	// Wait for a little bit to let the replicator exercise
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
 	err = waitFor(ctx, someReplicationLag)
@@ -120,8 +126,25 @@ func TestReplicate(t *testing.T) {
 	err = waitFor(ctx, littleReplicationLag)
 	assert.NoError(t, err)
 
-	// Do a full checksum while replication is running
+	// Restart the writes
 	doWrite.Store(true)
+
+	// "Forcefully" kill the replicator
+	cancelFirstReplication()
+
+	// Wait for a little bit to let some replication lag build up then restart the replicator
+	time.Sleep(5 * time.Second)
+	g.Go(func() error {
+		err := replicate.run(ctx)
+		return err
+	})
+	err = waitFor(ctx, someReplicationLag)
+	assert.NoError(t, err)
+
+	// Let replication catch up and then do a full checksum while replication is running
+	time.Sleep(5 * time.Second)
+	err = waitFor(ctx, littleReplicationLag)
+	assert.NoError(t, err)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
 	}
@@ -132,20 +155,20 @@ func TestReplicate(t *testing.T) {
 	assert.NoError(t, err)
 	diffs, err := checksum.run(ctx)
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(diffs))
 
 	cancel()
 	err = g.Wait()
-	if errors.Is(err, context.Canceled) {
-		return
+	if !isCancelledError(err) {
+		assert.NoError(t, err)
 	}
-	if err.Error() == "dial tcp: operation was canceled" {
-		return
-	}
-	if strings.Contains(err.Error(), "context canceled") {
-		return
-	}
-	assert.NoError(t, err)
+
+	assert.Equal(t, 0, len(diffs))
+}
+
+func isCancelledError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		err.Error() == "dial tcp: operation was canceled" ||
+		strings.Contains(err.Error(), "context canceled")
 }
 
 func someReplicationLag() error {

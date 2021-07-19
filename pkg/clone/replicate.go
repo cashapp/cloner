@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	"hash/fnv"
 	_ "net/http/pprof"
 	"strings"
 	"time"
@@ -61,9 +62,13 @@ func init() {
 type Replicate struct {
 	WriterConfig
 
-	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:""`
-	HeartbeatFrequency   time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric" default:"30s"`
-	HeartbeatCreateTable bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
+	TaskName string `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" required:""`
+	ServerID uint32 `help:"Unique identifier of this server, defaults to a hash of the TaskName" optional:""`
+
+	CheckpointTable    string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_checkpoint"`
+	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
+	CreateTables       bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
 }
 
 // Run replicates from source to target
@@ -95,12 +100,10 @@ func (cmd *Replicate) Run() error {
 	return errors.WithStack(err)
 }
 
-type MasterStatus struct {
-	File            string
-	Position        uint32
-	BinlogDoDB      string
-	BinlogIgnoreDB  string
-	ExecutedGtidSet string
+type Position struct {
+	File     string
+	Position uint32
+	Gset     mysql.GTIDSet
 }
 
 func (cmd *Replicate) run(ctx context.Context) error {
@@ -114,19 +117,28 @@ func (cmd *Replicate) run(ctx context.Context) error {
 // Replicator replicates from source to target
 type Replicator struct {
 	config       Replicate
-	syncer       *replication.BinlogSyncer
+	syncerCfg    replication.BinlogSyncerConfig
 	source       *sql.DB
 	sourceSchema string
 	target       *sql.DB
 
-	// tx holds the currently executing target transaction
-	tx          *sql.Tx
 	schemaCache map[uint64]*schema.Table
+
+	// tx holds the currently executing target transaction
+	tx       *sql.Tx
 }
 
 func NewReplicator(config Replicate) (*Replicator, error) {
 	var err error
 	r := Replicator{config: config, schemaCache: make(map[uint64]*schema.Table)}
+	if r.config.ServerID == 0 {
+		hasher := fnv.New32()
+		_, err = hasher.Write([]byte(r.config.TaskName))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		r.config.ServerID = hasher.Sum32()
+	}
 	r.sourceSchema, err = r.config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -144,7 +156,7 @@ func (r *Replicator) run(ctx context.Context) error {
 	g.Go(func() error {
 		return r.replicate(ctx)
 	})
-	if r.config.HeartbeatTable != "" {
+	if r.config.HeartbeatFrequency > 0 {
 		g.Go(func() error {
 			return r.heartbeat(ctx)
 		})
@@ -177,42 +189,50 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 	r.target = target
 
-	if r.config.HeartbeatCreateTable {
+	if r.config.CreateTables {
 		err := r.createHeartbeatTable(ctx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		err = r.createCheckpointTable(ctx)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
+
 	return nil
 }
 
 func (r *Replicator) replicate(ctx context.Context) error {
 	// TODO acquire lease, there should only be a single replicator running per source->target pair
-
 	var err error
-	row := r.source.QueryRowContext(ctx, "SHOW MASTER STATUS")
-	masterStatus := MasterStatus{}
-	err = row.Scan(
-		&masterStatus.File,
-		&masterStatus.Position,
-		&masterStatus.BinlogDoDB,
-		&masterStatus.BinlogIgnoreDB,
-		&masterStatus.ExecutedGtidSet,
-	)
+
+	r.syncerCfg, err = r.config.Source.BinlogSyncerConfig(r.config.ServerID)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	syncer := replication.NewBinlogSyncer(r.syncerCfg)
+	defer syncer.Close()
+
+	position, gset, err := r.readStartingPoint(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	syncerCfg, err := r.config.Source.BinlogSyncerConfig()
-	if err != nil {
-		return errors.WithStack(err)
+	var streamer *replication.BinlogStreamer
+	if gset != nil {
+		streamer, err = syncer.StartSyncGTID(*gset)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	} else {
+		streamer, err = syncer.StartSync(position)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
-	r.syncer = replication.NewBinlogSyncer(syncerCfg)
 
-	streamer, err := r.syncer.StartSync(mysql.Position{Name: masterStatus.File, Pos: masterStatus.Position})
-	if err != nil {
-		return errors.WithStack(err)
-	}
+	var nextPos mysql.Position
 
 	for {
 		// TODO restart and retry with back off
@@ -224,8 +244,16 @@ func (r *Replicator) replicate(ctx context.Context) error {
 
 		eventsReceived.Inc()
 
+		if e.Header.LogPos > 0 {
+			// Some events like FormatDescriptionEvent return 0, ignore.
+			nextPos.Pos = e.Header.LogPos
+		}
+
 		ignored := false
 		switch event := e.Event.(type) {
+		case *replication.RotateEvent:
+			nextPos.Name = string(event.NextLogName)
+			nextPos.Pos = uint32(event.Position)
 		case *replication.QueryEvent:
 			if string(event.Query) == "BEGIN" {
 				r.tx, err = r.target.BeginTx(ctx, nil)
@@ -252,8 +280,12 @@ func (r *Replicator) replicate(ctx context.Context) error {
 				}
 			}
 		case *replication.XIDEvent:
-			// TODO save the GTID (or file:position if we don't have GTID) for recovery
-			err := r.tx.Commit()
+			gset := event.GSet
+			err := r.writeCheckpoint(ctx, nextPos, gset)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			err = r.tx.Commit()
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -446,19 +478,40 @@ func (r *Replicator) createHeartbeatTable(ctx context.Context) error {
 	defer cancel()
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-		  id BIGINT(20) NOT NULL,
+		  name VARCHAR(255) NOT NULL,
 		  time TIMESTAMP NOT NULL,
 		  count BIGINT(20) NOT NULL,
-		  PRIMARY KEY (id)
+		  PRIMARY KEY (name)
 		)
 		`, r.config.HeartbeatTable)
 	_, err := r.source.ExecContext(timeoutCtx, stmt)
 	if err != nil {
-		return errors.Wrapf(err, "could not create heartbeat table in source database: %s", stmt)
+		return errors.Wrapf(err, "could not create heartbeat table in source database:\n%s", stmt)
 	}
 	_, err = r.target.ExecContext(timeoutCtx, stmt)
 	if err != nil {
-		return errors.Wrapf(err, "could not create heartbeat table in target database: %s", stmt)
+		return errors.Wrapf(err, "could not create heartbeat table in target database:\n%s", stmt)
+	}
+	return nil
+}
+
+func (r *Replicator) createCheckpointTable(ctx context.Context) error {
+	// TODO retries with backoff?
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
+	defer cancel()
+	stmt := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			name      VARCHAR(255) NOT NULL,
+			file      VARCHAR(255) NOT NULL,
+			position  BIGINT(20)   NOT NULL,
+			gtid_set  TEXT,
+			timestamp TIMESTAMP    NOT NULL,
+			PRIMARY KEY (name)
+		)
+		`, r.config.CheckpointTable)
+	_, err := r.target.ExecContext(timeoutCtx, stmt)
+	if err != nil {
+		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)
 	}
 	return nil
 }
@@ -468,7 +521,7 @@ func (r *Replicator) writeHeartbeat(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
 	defer cancel()
 	row := r.source.QueryRowContext(timeoutCtx,
-		fmt.Sprintf("SELECT count FROM %s WHERE id = 0", r.config.HeartbeatTable))
+		fmt.Sprintf("SELECT count FROM %s WHERE name = ?", r.config.HeartbeatTable), r.config.TaskName)
 	var count int64
 	err := row.Scan(&count)
 	if err != nil {
@@ -480,21 +533,101 @@ func (r *Replicator) writeHeartbeat(ctx context.Context) error {
 		}
 	}
 	_, err = r.source.ExecContext(timeoutCtx,
-		fmt.Sprintf("REPLACE INTO %s (id, time, count) VALUES (0, CURRENT_TIMESTAMP(), ?)",
+		fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, CURRENT_TIMESTAMP(), ?)",
 			r.config.HeartbeatTable),
-		count+1)
+		r.config.TaskName, count+1)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	return nil
 }
 
+func (r *Replicator) writeCheckpoint(ctx context.Context, position mysql.Position, gset mysql.GTIDSet) error {
+	gsetString := ""
+	if gset != nil {
+		gsetString = gset.String()
+	}
+	_, err := r.target.ExecContext(ctx,
+		fmt.Sprintf("REPLACE INTO %s (name, file, position, gtid_set, timestamp) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP())",
+			r.config.CheckpointTable),
+		r.config.TaskName, position.Name, position.Pos, gsetString)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func (r *Replicator) readStartingPoint(ctx context.Context) (mysql.Position, *mysql.GTIDSet, error) {
+	file, position, executedGtidSet, err := r.readCheckpoint(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			file, position, executedGtidSet, err = r.readMasterPosition(ctx)
+			logrus.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
+			if err != nil {
+				return mysql.Position{}, nil, errors.WithStack(err)
+			}
+		} else {
+			return mysql.Position{}, nil, errors.WithStack(err)
+		}
+	} else {
+		masterFile, masterPos, masterGtidSet, err := r.readMasterPosition(ctx)
+		if err != nil {
+			return mysql.Position{}, nil, errors.WithStack(err)
+		}
+		logrus.Infof("re-starting replication from %s:%d gtid=%s (master is currently at %s:%d gtid=%s)",
+			file, position, executedGtidSet, masterFile, masterPos, masterGtidSet)
+	}
+
+	// We always have a position
+	pos := mysql.Position{
+		Name: file,
+		Pos:  position,
+	}
+	// We sometimes have a GTIDSet, if not we return nil
+	var gset *mysql.GTIDSet
+	if executedGtidSet != "" {
+		parsed, err := mysql.ParseGTIDSet(r.syncerCfg.Flavor, executedGtidSet)
+		if err != nil {
+			return mysql.Position{}, nil, errors.WithStack(err)
+		}
+		gset = &parsed
+	}
+	return pos, gset, nil
+}
+
+func (r *Replicator) readMasterPosition(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
+	row := r.source.QueryRowContext(ctx, "SHOW MASTER STATUS")
+	var binlogDoDB string
+	var binlogIgnoreDB string
+	err = row.Scan(
+		&file,
+		&position,
+		&binlogDoDB,
+		&binlogIgnoreDB,
+		&executedGtidSet,
+	)
+	return
+}
+
+func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
+	row := r.target.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT file, position, gtid_set FROM %s WHERE name = ?",
+			r.config.CheckpointTable),
+		r.config.TaskName)
+	err = row.Scan(
+		&file,
+		&position,
+		&executedGtidSet,
+	)
+	return
+}
+
 func (r *Replicator) readHeartbeat(ctx context.Context) error {
 	// TODO retries with backoff?
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
 	defer cancel()
-	stmt := fmt.Sprintf("SELECT CURRENT_TIMESTAMP() - time FROM %s WHERE id = 0", r.config.HeartbeatTable)
-	row := r.target.QueryRowContext(timeoutCtx, stmt)
+	stmt := fmt.Sprintf("SELECT CURRENT_TIMESTAMP() - time FROM %s WHERE name = ?", r.config.HeartbeatTable)
+	row := r.target.QueryRowContext(timeoutCtx, stmt, r.config.TaskName)
 	var lag time.Duration
 	err := row.Scan(&lag)
 	if err != nil {

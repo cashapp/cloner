@@ -469,7 +469,8 @@ func NewWriter(config WriterConfig, table *Table, writer *sql.DB, limiter core.L
 	}
 }
 
-func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+// Write forks off two go routines to batch and write the batches from the diffs channel
+func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) {
 	// Batch up the diffs
 	batches := make(chan Batch)
 	g.Go(func() error {
@@ -496,6 +497,4 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 		}
 		return nil
 	})
-
-	return nil
 }

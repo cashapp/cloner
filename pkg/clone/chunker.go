@@ -12,6 +12,10 @@ import (
 // Chunk is an chunk of rows closed to the left [start,end)
 type Chunk struct {
 	Table *Table
+
+	// Seq is the sequence number of chunks for this table
+	Seq int64
+
 	// Start is the first id of the chunk inclusive
 	Start int64
 	// End is the first id of the next chunk (i.e. the last id of this chunk exclusive)
@@ -23,6 +27,17 @@ type Chunk struct {
 	Last bool
 	// Size is the expected number of rows in the chunk
 	Size int
+}
+
+func (c *Chunk) ContainsRow(row []interface{}) bool {
+	id := c.Table.PkOfRow(row)
+	if c.First {
+		return id < c.End
+	} else if c.Last {
+		return id >= c.Start
+	} else {
+		return id >= c.Start && id < c.End
+	}
 }
 
 type PeekingIdStreamer interface {
@@ -162,14 +177,19 @@ func (r *Reader) generateTableChunks(
 	table *Table,
 	chunks chan Chunk,
 ) error {
+	return generateTableChunks(ctx, table, r.source, r.sourceRetry, chunks)
+}
+
+func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions, chunks chan Chunk) error {
 	chunkSize := table.Config.ChunkSize
 
-	ids := streamIds(r.source, table, chunkSize, r.sourceRetry)
+	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
+	seq := int64(0)
 	var id int64
 	hasNext := true
 	for hasNext {
@@ -187,6 +207,7 @@ func (r *Reader) generateTableChunks(
 			select {
 			case chunks <- Chunk{
 				Table: table,
+				Seq:   seq,
 				Start: startId,
 				End:   id,
 				First: first,
@@ -196,6 +217,7 @@ func (r *Reader) generateTableChunks(
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+			seq++
 			// Next id should be the next start id
 			startId = id
 			// We are no longer the first chunk
@@ -214,6 +236,7 @@ func (r *Reader) generateTableChunks(
 		select {
 		case chunks <- Chunk{
 			Table: table,
+			Seq:   seq,
 			Start: startId,
 			End:   id,
 			First: first,

@@ -22,6 +22,27 @@ type Row struct {
 	Data  []interface{}
 }
 
+// PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
+func (r *Row) PkAfterOrEqual(row []interface{}) bool {
+	return r.ID >= r.Table.PkOfRow(row)
+}
+
+// PkEqual returns true if the pk of the row is equal to the PK of the receiver row
+func (r *Row) PkEqual(row []interface{}) bool {
+	return r.ID == r.Table.PkOfRow(row)
+}
+
+func (r *Row) Updated(row []interface{}) *Row {
+	if r.Table.PkOfRow(row) != r.ID {
+		panic("updating row with another ID")
+	}
+	return &Row{
+		Table: r.Table,
+		ID:    r.ID,
+		Data:  row,
+	}
+}
+
 type limitingDBReader struct {
 	limiter       core.Limiter
 	acquireMetric prometheus.Observer
@@ -83,6 +104,20 @@ func (b *bufferStream) Close() error {
 
 // buffer buffers all of the rows into memory
 func buffer(stream RowStream) (RowStream, error) {
+	rows, err := readAll(stream)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &bufferStream{rows}, nil
+}
+
+// stream converts buffered rows to a stream
+func stream(rows []*Row) RowStream {
+	return &bufferStream{rows}
+}
+
+// buffer buffers all of the rows into memory
+func readAll(stream RowStream) ([]*Row, error) {
 	defer stream.Close()
 	var rows []*Row
 	for {
@@ -95,7 +130,7 @@ func buffer(stream RowStream) (RowStream, error) {
 		}
 		rows = append(rows, row)
 	}
-	return &bufferStream{rows}, nil
+	return rows, nil
 }
 
 type RowStream interface {

@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"strings"
 
+	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/pkg/errors"
 	"vitess.io/vitess/go/vt/proto/query"
 )
@@ -26,6 +27,23 @@ type Table struct {
 	CRC32Columns  []string
 	ColumnList    string
 	EstimatedRows int64
+
+	// MysqlTable is the go-mysql schema, we should probably start using this one as much as possible
+	MysqlTable *mysqlschema.Table
+}
+
+func (t *Table) PkOfRow(row []interface{}) int64 {
+	pks, err := t.MysqlTable.GetPKValues(row)
+	if err != nil {
+		panic(err)
+	}
+	pk := pks[0]
+	i, ok := pk.(int64)
+	if !ok {
+		// we can panic because we should have validated the table already at load time?
+		panic(fmt.Sprintf("non-integer primary keys of table %v not yet supported: %v", t.Name, pk))
+	}
+	return i
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
@@ -73,7 +91,7 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	return tables, nil
 }
 
-func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db DBReader) ([]*Table, error) {
+func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db *sql.DB) ([]*Table, error) {
 	schema, err := dbConfig.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -125,20 +143,6 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 	}
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
-		// Ignore pt-osc tables
-		// TODO implement table include/exclude regexps instead
-		if strings.HasPrefix(tableName, "ptosc_") {
-			continue
-		}
-		if strings.HasSuffix(tableName, "_seq") {
-			continue
-		}
-		if strings.HasSuffix(tableName, "_lookup") {
-			continue
-		}
-		if tableName == "schema_version" {
-			continue
-		}
 		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])
 		if err != nil {
 			return nil, err
@@ -161,9 +165,39 @@ func contains(strings []string, str string) bool {
 	return false
 }
 
-func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn DBReader, schema, tableName string, tableConfig TableConfig) (*Table, error) {
+func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn *sql.DB, schema, tableName string, tableConfig TableConfig) (*Table, error) {
 	var err error
 	var rows *sql.Rows
+	var internalTableSchema string
+	if databaseType == MySQL {
+		rows, err = conn.QueryContext(ctx,
+			"select table_schema from information_schema.tables where table_schema = ? and table_name = ?",
+			schema, tableName)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else if databaseType == Vitess {
+		rows, err = conn.QueryContext(ctx,
+			"select table_schema from information_schema.tables where table_schema = ? and table_name = ?",
+			schema, tableName)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		defer rows.Close()
+	} else {
+		return nil, errors.Errorf("Not supported: %v", databaseType)
+	}
+	if !rows.Next() {
+		return nil, errors.Errorf("table %v not found in information_schema", tableName)
+	}
+	err = rows.Scan(&internalTableSchema)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	mysqlTable, err := mysqlschema.NewTableFromSqlDB(conn, internalTableSchema, tableName)
+
 	if databaseType == MySQL {
 		rows, err = conn.QueryContext(ctx,
 			"select column_name from information_schema.columns where table_schema = ? and table_name = ?",
@@ -229,6 +263,15 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		tableConfig.WriteBatchSize = config.WriteBatchSize
 	}
 
+	// Validate which PK columns we currently support
+	if len(mysqlTable.PKColumns) != 1 {
+		return nil, errors.Errorf("currently only support a single PK column")
+	}
+	column := mysqlTable.GetPKColumn(0)
+	if column.Type != mysqlschema.TYPE_NUMBER {
+		return nil, errors.Errorf("currently only support integer PK column")
+	}
+
 	return &Table{
 		Name:          tableName,
 		IDColumn:      idColumn,
@@ -239,6 +282,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		ColumnList:    strings.Join(columnNamesQuoted, ","),
 		EstimatedRows: estimatedRows,
 		Config:        tableConfig,
+		MysqlTable:    mysqlTable,
 	}, nil
 }
 

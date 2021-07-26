@@ -46,7 +46,8 @@ func TestReplicate(t *testing.T) {
 			Source: sourceDirect,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		ReadRetries: 1,
+		ChunkSize:   5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -59,11 +60,11 @@ func TestReplicate(t *testing.T) {
 	}
 	replicate := &Replicate{
 		WriterConfig: WriterConfig{
+			WriteRetries:            1,
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
 		TaskName:           "customer/-80",
-		HeartbeatTable:     "heartbeat",
 		HeartbeatFrequency: heartbeatFrequency,
 		CreateTables:       true,
 	}
@@ -76,17 +77,6 @@ func TestReplicate(t *testing.T) {
 
 	err = deleteAllData(source)
 	assert.NoError(t, err)
-
-	// Run replication in separate thread
-	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
-	defer cancelFirstReplication()
-	g.Go(func() error {
-		err := replicate.run(firstReplicationCtx)
-		if isCancelledError(err) {
-			return nil
-		}
-		return err
-	})
 
 	doWrite := atomic.NewBool(true)
 
@@ -116,7 +106,29 @@ func TestReplicate(t *testing.T) {
 		}
 	})
 
+	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
+	time.Sleep(5 * time.Second)
+
+	// Run replication in separate thread
+	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
+	defer cancelFirstReplication()
+	g.Go(func() error {
+		err := replicate.run(firstReplicationCtx)
+		if isCancelledError(err) {
+			return nil
+		}
+		return err
+	})
+
 	// Wait for a little bit to let the replicator exercise
+	time.Sleep(5 * time.Second)
+
+	// Now do the snapshot
+	g.Go(func() error {
+		return currentReplicator.snapshot(ctx)
+	})
+
+	// Wait for the snapshot to run
 	time.Sleep(5 * time.Second)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency

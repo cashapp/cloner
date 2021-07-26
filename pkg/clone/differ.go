@@ -278,6 +278,14 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 			if sourceValue != coerced {
 				return false, nil
 			}
+		case string:
+			coerced, err := coerceString(targetValue)
+			if err != nil {
+				return false, errors.WithStack(err)
+			}
+			if sourceValue != coerced {
+				return false, nil
+			}
 		default:
 			return false, errors.Errorf("type combination %v -> %v not supported yet: source=%v target=%v",
 				sourceType, targetType, sourceValue, targetValue)
@@ -301,7 +309,7 @@ func coerceUint64(value interface{}) (uint64, error) {
 	case int64:
 		return uint64(value), nil
 	default:
-		return 0, nil
+		return 0, errors.Errorf("can't (yet?) coerce %v to uint64: %v", reflect.TypeOf(value), value)
 	}
 }
 
@@ -310,7 +318,16 @@ func coerceFloat64(value interface{}) (float64, error) {
 	case float32:
 		return float64(value), nil
 	default:
-		return 0, nil
+		return 0, errors.Errorf("can't (yet?) coerce %v to float64: %v", reflect.TypeOf(value), value)
+	}
+}
+
+func coerceString(value interface{}) (string, error) {
+	switch value := value.(type) {
+	case []byte:
+		return string(value), nil
+	default:
+		return "", errors.Errorf("can't (yet?) coerce %v to string: %v", reflect.TypeOf(value), value)
 	}
 }
 

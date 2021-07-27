@@ -359,8 +359,8 @@ func (r *Replicator) receiveAllOngoingChunks() {
 	}
 }
 
-func isDelete(e *replication.BinlogEvent) bool {
-	return e.Header.EventType == replication.DELETE_ROWS_EVENTv0 || e.Header.EventType == replication.DELETE_ROWS_EVENTv1 || e.Header.EventType == replication.DELETE_ROWS_EVENTv2
+func isDelete(eventType replication.EventType) bool {
+	return eventType == replication.DELETE_ROWS_EVENTv0 || eventType == replication.DELETE_ROWS_EVENTv1 || eventType == replication.DELETE_ROWS_EVENTv2
 }
 
 func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventHeader, event *replication.RowsEvent) error {
@@ -972,40 +972,61 @@ func (r *Replicator) reconcileOngoingChunks(e *replication.BinlogEvent, event *r
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	for _, row := range event.Rows {
-		chunk, err := r.findOngoingChunkForRow(tableSchema, row)
+	for _, chunk := range r.ongoingChunks {
+		err = chunk.reconcileBinlogEvent(e, event, tableSchema)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		if chunk == nil {
-			continue
-		}
-		if !chunk.InsideWatermarks {
-			continue
-		}
-		if isDelete(e) {
+	}
+	return nil
+}
+
+// reconcileBinlogEvent will apply the row
+func (c *OngoingChunk) reconcileBinlogEvent(e *replication.BinlogEvent, event *replication.RowsEvent, tableSchema *schema.Table) error {
+	if !c.InsideWatermarks {
+		return nil
+	}
+	if c.Chunk.Table.MysqlTable.Name != tableSchema.Name {
+		return nil
+	}
+	if c.Chunk.Table.MysqlTable.Schema != tableSchema.Schema {
+		return nil
+	}
+	isDelete := isDelete(e.Header.EventType)
+	if isDelete {
+		for _, row := range event.Rows {
+			if !c.Chunk.ContainsRow(row) {
+				// The row is outside of our range, we can skip it
+				continue
+			}
 			// find the row using binary chop (the chunk rows are sorted)
-			existingRow, i, err := chunk.findRow(row)
+			existingRow, i, err := c.findRow(row)
 			if existingRow == nil {
 				// Row already deleted, this event probably happened after the low watermark but before the chunk read
 			} else {
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				chunk.deleteRow(i)
+				c.deleteRow(i)
 			}
-		} else {
-			existingRow, i, err := chunk.findRow(row)
+		}
+	} else {
+		for _, row := range event.Rows {
+			if !c.Chunk.ContainsRow(row) {
+				// The row is outside of our range, we can skip it
+				continue
+			}
+			existingRow, i, err := c.findRow(row)
 			if err != nil {
 				return errors.WithStack(err)
 			}
 			if existingRow == nil {
 				// This is either an insert or an update of a row that is deleted after the low watermark but before
 				// the chunk read, either way we just insert it and if the delete event comes we take it away again
-				chunk.insertRow(i, row)
+				c.insertRow(i, row)
 			} else {
 				// We found a matching row, it must be an update
-				chunk.updateRow(i, row)
+				c.updateRow(i, row)
 			}
 		}
 	}
@@ -1027,7 +1048,7 @@ func (r *Replicator) handleRowsEvent(ctx context.Context, e *replication.BinlogE
 		return errors.WithStack(err)
 	}
 
-	if isDelete(e) {
+	if isDelete(e.Header.EventType) {
 		err := r.deleteRows(ctx, e.Header, event)
 		if err != nil {
 			return errors.WithStack(err)
@@ -1065,51 +1086,6 @@ func (r *Replicator) findOngoingChunkFromWatermark(event *replication.RowsEvent)
 	return nil, nil
 }
 
-func (r *Replicator) findOngoingChunkForRow(tableSchema *schema.Table, row []interface{}) (*OngoingChunk, error) {
-	for _, chunk := range r.ongoingChunks {
-		if chunk.Chunk.Table.MysqlTable.Name != tableSchema.Name {
-			continue
-		}
-		if chunk.Chunk.Table.MysqlTable.Schema != tableSchema.Schema {
-			continue
-		}
-		if chunk.Chunk.ContainsRow(row) {
-			return chunk, nil
-		}
-	}
-	return nil, nil
-}
-
-func (r *Replicator) isLowWatermark(e *replication.BinlogEvent, event *replication.RowsEvent) (bool, error) {
-	return r.isWatermark(e, event, "low")
-}
-
-func (r *Replicator) isHighWatermark(e *replication.BinlogEvent, event *replication.RowsEvent) (bool, error) {
-	return r.isWatermark(e, event, "high")
-}
-
-func (r *Replicator) isWatermark(e *replication.BinlogEvent, event *replication.RowsEvent, watermarkColumn string) (bool, error) {
-	if isDelete(e) {
-		return false, nil
-	}
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	if tableSchema.Name != r.config.WatermarkTable {
-		return false, nil
-	}
-	if len(event.Rows) != 1 {
-		return false, errors.Errorf("more than a single row was written to the watermark table at the same time")
-	}
-	row := event.Rows[0]
-	value, err := tableSchema.GetColumnValue(watermarkColumn, row)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	return value == 1, nil
-}
-
 func (r *Replicator) removeOngoingChunk(chunk *OngoingChunk) {
 	n := 0
 	for _, x := range r.ongoingChunks {
@@ -1135,7 +1111,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 	if tableSchema.Name != r.config.WatermarkTable {
 		return false, nil
 	}
-	if isDelete(e) {
+	if isDelete(e.Header.EventType) {
 		// Someone is probably just cleaning out the watermark table
 		return true, nil
 	}

@@ -3,7 +3,10 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/atomic"
@@ -57,6 +60,7 @@ func TestReplicate(t *testing.T) {
 				},
 			},
 		},
+		UseConcurrencyLimits: false,
 	}
 	replicate := &Replicate{
 		WriterConfig: WriterConfig{
@@ -174,7 +178,12 @@ func TestReplicate(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	assert.Equal(t, 0, len(diffs))
+	if len(diffs) > 0 {
+		for _, diff := range diffs {
+			fmt.Printf("%v %v\n", diff.Type, diff.Row.ID)
+		}
+		assert.Fail(t, "there were diffs (see above)")
+	}
 }
 
 func isCancelledError(err error) bool {
@@ -250,4 +259,155 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		}
 	}
 	return nil
+}
+
+func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
+	tests := []struct {
+		name         string
+		chunk        testChunk
+		start        int64
+		end          int64
+		eventType    replication.EventType
+		startingRows [][]interface{}
+		eventRows    [][]interface{}
+		resultRows   [][]interface{}
+	}{
+		{
+			name:  "delete outside chunk range",
+			start: 5,  // inclusive
+			end:   11, // exclusive
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{11, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name"},
+			},
+		},
+		{
+			name:  "delete inside chunk range",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			resultRows: [][]interface{}{},
+		},
+		{
+			name:  "insert after",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name"},
+				{6, "other customer name"},
+			},
+		},
+		{
+			name:  "insert before",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{6, "customer name"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{5, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "other customer name"},
+				{6, "customer name"},
+			},
+		},
+		{
+			name:  "update",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{6, "customer name"},
+				{7, "other customer name"},
+			},
+
+			eventType: replication.UPDATE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "updated customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{6, "updated customer name"},
+				{7, "other customer name"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tableName := "customer"
+			tableSchema := &schema.Table{
+				Name:      tableName,
+				PKColumns: []int{0},
+				Columns: []schema.TableColumn{
+					{Name: "id"},
+					{Name: "name"},
+				},
+			}
+			table := &Table{
+				Name:       tableName,
+				MysqlTable: tableSchema,
+			}
+			inputRows := make([]*Row, len(test.startingRows))
+			for i, row := range test.startingRows {
+				inputRows[i] = &Row{
+					Table: table,
+					ID:    int64(row[0].(int)),
+					Data:  row,
+				}
+			}
+			chunk := &OngoingChunk{
+				InsideWatermarks: true,
+				Rows:             inputRows,
+				Chunk: Chunk{
+					Start: test.start,
+					End:   test.end,
+					Table: table,
+					First: false,
+					Last:  false,
+				},
+			}
+			err := chunk.reconcileBinlogEvent(
+				&replication.BinlogEvent{Header: &replication.EventHeader{EventType: test.eventType}},
+				&replication.RowsEvent{Rows: test.eventRows},
+				tableSchema,
+			)
+			assert.NoError(t, err)
+
+			assert.Equal(t, len(test.resultRows), len(chunk.Rows))
+			for i, expectedRow := range test.resultRows {
+				actualRow := chunk.Rows[i]
+				for j, cell := range expectedRow {
+					assert.Equal(t, cell, actualRow.Data[j])
+				}
+			}
+		})
+	}
 }

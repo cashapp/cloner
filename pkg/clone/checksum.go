@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"github.com/dlmiddlecote/sqlstats"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -104,8 +105,12 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
-	sourceLimiter := makeLimiter("source_reader_limiter")
-	targetLimiter := makeLimiter("target_reader_limiter")
+	var sourceLimiter core.Limiter
+	var targetLimiter core.Limiter
+	if cmd.UseConcurrencyLimits {
+		sourceLimiter = makeLimiter("source_reader_limiter")
+		targetLimiter = makeLimiter("target_reader_limiter")
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 

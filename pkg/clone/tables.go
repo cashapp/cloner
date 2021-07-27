@@ -38,10 +38,10 @@ func (t *Table) PkOfRow(row []interface{}) int64 {
 		panic(err)
 	}
 	pk := pks[0]
-	i, ok := pk.(int64)
-	if !ok {
+	i, err := coerceInt64(pk)
+	if err != nil {
 		// we can panic because we should have validated the table already at load time?
-		panic(fmt.Sprintf("non-integer primary keys of table %v not yet supported: %v", t.Name, pk))
+		panic(err.Error())
 	}
 	return i
 }

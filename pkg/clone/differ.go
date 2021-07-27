@@ -296,11 +296,15 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 
 func coerceInt64(value interface{}) (int64, error) {
 	switch value := value.(type) {
+	case int:
+		return int64(value), nil
+	case int64:
+		return value, nil
 	case []byte:
 		// This means it was sent as a unicode encoded string
 		return strconv.ParseInt(string(value), 10, 64)
 	default:
-		return 0, nil
+		return 0, errors.Errorf("can't (yet?) coerce %v to int64: %v", reflect.TypeOf(value), value)
 	}
 }
 

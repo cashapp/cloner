@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/pkg/errors"
-	"github.com/platinummonkey/go-concurrency-limits/core"
-	"github.com/prometheus/client_golang/prometheus"
 	"strings"
 )
 
@@ -40,47 +38,6 @@ func (r *Row) Updated(row []interface{}) *Row {
 		Table: r.Table,
 		ID:    r.ID,
 		Data:  row,
-	}
-}
-
-type limitingDBReader struct {
-	limiter       core.Limiter
-	acquireMetric prometheus.Observer
-	reader        DBReader
-}
-
-func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args ...interface{}) (rows *sql.Rows, err error) {
-	acquireTimer := prometheus.NewTimer(l.acquireMetric)
-	token, ok := l.limiter.Acquire(ctx)
-	if !ok {
-		if token != nil {
-			token.OnDropped()
-		}
-		if ctx.Err() != nil {
-			return nil, errors.Wrap(ctx.Err(), "context deadline exceeded")
-		} else {
-			return nil, errors.New("context deadline exceeded")
-		}
-	}
-	acquireTimer.ObserveDuration()
-
-	defer func() {
-		if err == nil {
-			token.OnSuccess()
-		} else {
-			token.OnDropped()
-		}
-	}()
-
-	rows, err = l.reader.QueryContext(ctx, query, args...)
-	return rows, errors.WithStack(err)
-}
-
-func Limit(db DBReader, limiter core.Limiter, acquireMetric prometheus.Observer) DBReader {
-	return &limitingDBReader{
-		limiter:       limiter,
-		acquireMetric: acquireMetric,
-		reader:        db,
 	}
 }
 

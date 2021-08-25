@@ -95,18 +95,6 @@ func TestChunker2EmptyTable(t *testing.T) {
 		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
 
-	chunks := make(chan Chunk)
-
-	var result []testChunk
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for chunk := range chunks {
-			result = append(result, toTestChunk(chunk))
-		}
-	}()
-
 	ctx := context.Background()
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
@@ -114,13 +102,10 @@ func TestChunker2EmptyTable(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	r := NewReader(config, tables[0], db, nil, nil, nil)
-	err = r.generateTableChunks(ctx, tables[0], chunks)
+	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
-	close(chunks)
-	wg.Wait()
 
-	assert.Equal(t, 0, len(result))
+	assert.Equal(t, 0, len(chunks))
 }
 
 func TestChunker2SingleRow(t *testing.T) {

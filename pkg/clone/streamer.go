@@ -163,6 +163,19 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	return newRowStream(table, rows)
 }
 
+func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk2, hint string, extraWhereClause string) (RowStream, error) {
+	table := chunk.Table
+	columns := table.ColumnList
+
+	where := chunk2Where(chunk, extraWhereClause)
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
+	rows, err := conn.QueryContext(ctx, stmt)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return newRowStream(table, rows)
+}
+
 func chunkWhere(chunk Chunk, extraWhereClause string) string {
 	table := chunk.Table
 	var clauses []string
@@ -190,6 +203,22 @@ func chunkWhere(chunk Chunk, extraWhereClause string) string {
 				fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 		}
 	}
+	if len(clauses) == 0 {
+		return ""
+	} else {
+		return "where " + strings.Join(clauses, " and ")
+	}
+}
+
+func chunk2Where(chunk Chunk2, extraWhereClause string) string {
+	table := chunk.Table
+	var clauses []string
+	if extraWhereClause != "" {
+		clauses = append(clauses, "("+extraWhereClause+")")
+	}
+	clauses = append(clauses,
+		fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
+		fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 	if len(clauses) == 0 {
 		return ""
 	} else {

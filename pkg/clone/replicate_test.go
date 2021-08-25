@@ -99,7 +99,7 @@ func TestReplicate(t *testing.T) {
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {
@@ -341,6 +341,47 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			},
 		},
 		{
+			name:  "insert middle",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name #5"},
+				{7, "customer name #7"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "customer name #6"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name #5"},
+				{6, "customer name #6"},
+				{7, "customer name #7"},
+			},
+		},
+		{
+			name:  "multiple rows mixed insert and update",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name #5"},
+				{7, "customer name #7"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "customer name #6"},
+				{7, "customer name #7 updated"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name #5"},
+				{6, "customer name #6"},
+				{7, "customer name #7 updated"},
+			},
+		},
+		{
 			name:  "update",
 			start: 5,
 			end:   11,
@@ -352,6 +393,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			eventType: replication.UPDATE_ROWS_EVENTv2,
 			eventRows: [][]interface{}{
 				{6, "updated customer name"},
+				{11, "outside of chunk range"},
 			},
 
 			resultRows: [][]interface{}{
@@ -386,12 +428,10 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			chunk := &OngoingChunk{
 				InsideWatermarks: true,
 				Rows:             inputRows,
-				Chunk: Chunk{
+				Chunk: Chunk2{
 					Start: test.start,
 					End:   test.end,
 					Table: table,
-					First: false,
-					Last:  false,
 				},
 			}
 			err := chunk.reconcileBinlogEvent(

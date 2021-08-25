@@ -513,3 +513,39 @@ func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from 
 
 	return result, err
 }
+
+// bufferChunk2 reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
+// to pause due to back pressure from the writer
+func bufferChunk2(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk2) (RowStream, error) {
+	var result RowStream
+
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
+
+		extraWhereClause := ""
+		hint := ""
+		if from == "target" {
+			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
+		}
+		if from == "source" {
+			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
+		}
+		stream, err := StreamChunk2(ctx, source, chunk, hint, extraWhereClause)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+				chunk.Start, chunk.End, chunk.Table.Name, from)
+		}
+		defer stream.Close()
+		result, err = buffer(stream)
+		if err != nil {
+			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+				chunk.Start, chunk.End, chunk.Table.Name, from)
+		}
+		return nil
+	})
+
+	return result, err
+}

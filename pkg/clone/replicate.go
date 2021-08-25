@@ -729,7 +729,7 @@ func (r *Replicator) readHeartbeat(ctx context.Context) error {
 type OngoingChunk struct {
 	InsideWatermarks bool
 	Rows             []*Row
-	Chunk            Chunk
+	Chunk            Chunk2
 }
 
 func (c *OngoingChunk) findRow(row []interface{}) (*Row, int, error) {
@@ -802,7 +802,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 
 	tableParallelism := semaphore.NewWeighted(r.config.TableParallelism)
 
-	chunks := make(chan Chunk)
+	chunks := make(chan Chunk2)
 
 	chunkParallelism := semaphore.NewWeighted(r.config.ChunkParallelism)
 
@@ -833,7 +833,10 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 			g.Go(func() error {
 				defer tableParallelism.Release(1)
 
-				err := generateTableChunks(ctx, table, r.source, r.sourceRetry, chunks)
+				tableChunks, err := generateTableChunks2(ctx, table, r.source, r.sourceRetry)
+				for _, chunk := range tableChunks {
+					chunks <- chunk
+				}
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -894,7 +897,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 /*
  */
 
-func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks chan OngoingChunk) error {
+func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk2, chunks chan OngoingChunk) error {
 	// First transaction:
 	//   1. insert the low watermark
 	//   2. read the entire chunk
@@ -911,7 +914,7 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			stream, err := bufferChunk(ctx, r.sourceRetry, tx, "source", chunk)
+			stream, err := bufferChunk2(ctx, r.sourceRetry, tx, "source", chunk)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -927,6 +930,8 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 		return errors.WithStack(err)
 	}
 
+	// Second transaction: ,//   1. insert the high watermark
+	//   2. commit the transaction
 	return Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
 		return autotx.Transact(ctx, r.source, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx,
@@ -944,7 +949,8 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 // writeChunk synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error {
-	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
+	logrus.Infof("writing chunk %d-%d", chunk.Chunk.Start, chunk.Chunk.End)
+	targetStream, err := bufferChunk2(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -999,6 +1005,7 @@ func (c *OngoingChunk) reconcileBinlogEvent(e *replication.BinlogEvent, event *r
 				// The row is outside of our range, we can skip it
 				continue
 			}
+			logrus.Infof("reconciling deleted row with ongoing chunk: %v", row)
 			// find the row using binary chop (the chunk rows are sorted)
 			existingRow, i, err := c.findRow(row)
 			if existingRow == nil {
@@ -1021,10 +1028,12 @@ func (c *OngoingChunk) reconcileBinlogEvent(e *replication.BinlogEvent, event *r
 				return errors.WithStack(err)
 			}
 			if existingRow == nil {
+				logrus.Infof("reconciling inserted row with ongoing chunk: %v", row)
 				// This is either an insert or an update of a row that is deleted after the low watermark but before
 				// the chunk read, either way we just insert it and if the delete event comes we take it away again
 				c.insertRow(i, row)
 			} else {
+				logrus.Infof("reconciling updated row with ongoing chunk: %v", row)
 				// We found a matching row, it must be an update
 				c.updateRow(i, row)
 			}
@@ -1148,6 +1157,9 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 				return true, errors.WithStack(err)
 			}
 			r.removeOngoingChunk(ongoingChunk)
+			if len(r.ongoingChunks) == 0 {
+				logrus.Infof("all snapshot chunks written")
+			}
 		}
 	}
 	return true, nil

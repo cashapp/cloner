@@ -179,8 +179,8 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		defer rows.Close()
 	} else if databaseType == Vitess {
 		rows, err = conn.QueryContext(ctx,
-			"select table_schema from information_schema.tables where table_schema = ? and table_name = ?",
-			schema, tableName)
+			"select table_schema from information_schema.columns where table_name = ? and table_schema like ?",
+			tableName, fmt.Sprintf("vt_%s%%", schema))
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -197,6 +197,9 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 
 	mysqlTable, err := mysqlschema.NewTableFromSqlDB(conn, internalTableSchema, tableName)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 
 	if databaseType == MySQL {
 		rows, err = conn.QueryContext(ctx,

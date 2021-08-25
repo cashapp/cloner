@@ -309,7 +309,7 @@ func TestDiffWithChecksum(t *testing.T) {
 			}()
 
 			ctx := context.Background()
-			chunk := Chunk{
+			chunk := Chunk2{
 				Table: tables[0],
 			}
 			err = r.diffChunk(ctx, chunk, diffsChan)

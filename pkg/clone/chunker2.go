@@ -16,8 +16,12 @@ type Chunk2 struct {
 
 	// Start is the first id of the chunk inclusive
 	Start int64
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusive)
+
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
 	End int64 // exclusive
+
+	// Size is the expected number of rows in the chunk
+	Size int
 }
 
 func (c *Chunk2) ContainsRow(row []interface{}) bool {
@@ -55,6 +59,7 @@ func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, ret
 				Seq:   seq,
 				Start: startId,
 				End:   id,
+				Size:  currentChunkSize,
 			})
 			seq++
 			// Next id should be the next start id
@@ -77,6 +82,7 @@ func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, ret
 			Seq:   seq,
 			Start: startId,
 			End:   id + 1,
+			Size:  currentChunkSize,
 		})
 	}
 	return chunks, nil

@@ -166,77 +166,67 @@ type Reader struct {
 	targetRetry RetryOptions
 }
 
-func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
-	return r.read(ctx, g, diffs, true)
+func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
+	return r.read(ctx, diffs, true)
 }
 
-func (r *Reader) Read(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 	// TODO this can be refactored to a separate method
-	return r.read(ctx, g, diffs, false)
+	return r.read(ctx, diffs, false)
 }
 
-func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, diff bool) error {
+func (r *Reader) read(ctx context.Context, diffs chan Diff, diff bool) error {
 
-	chunks := make(chan Chunk)
-
-	// Generate chunks of all source tables
-	g.Go(func() error {
-		err := r.generateTableChunks(ctx, r.table, chunks)
-		close(chunks)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return err
-	})
+	// Generate chunks of source table
+	chunks, err := generateTableChunks2(ctx, r.table, r.source, r.sourceRetry)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
 	// Generate diffs from all chunks
+	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
+	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
-		g, ctx := errgroup.WithContext(ctx)
-		g.Go(func() error {
-			for c := range chunks {
-				chunk := c
-				err := readerParallelism.Acquire(ctx, 1)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				g.Go(func() (err error) {
-					defer readerParallelism.Release(1)
-					if diff {
-						err = r.diffChunk(ctx, chunk, diffs)
-					} else {
-						err = r.readChunk(ctx, chunk, diffs)
-					}
-
-					if err != nil {
-						if r.config.Consistent {
-							return errors.WithStack(err)
-						}
-
-						log.WithField("table", chunk.Table.Name).
-							WithError(err).
-							WithContext(ctx).
-							Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
-								"since this is a best effort clone we just give up: %+v",
-								chunk.Table.Name, chunk.Start, chunk.End, err)
-						return nil
-					}
-
-					return nil
-				})
+		for _, c := range chunks {
+			chunk := c
+			err := readerParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
 			}
-			return nil
-		})
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
+			g.Go(func() (err error) {
+				defer readerParallelism.Release(1)
+				if diff {
+					err = r.diffChunk(ctx, chunk, diffs)
+				} else {
+					err = r.readChunk(ctx, chunk, diffs)
+				}
 
-		// All diffing done, close the diffs channel
-		close(diffs)
+				if err != nil {
+					if r.config.Consistent {
+						return errors.WithStack(err)
+					}
+
+					log.WithField("table", chunk.Table.Name).
+						WithError(err).
+						WithContext(ctx).
+						Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
+							"since this is a best effort clone we just give up: %+v",
+							chunk.Table.Name, chunk.Start, chunk.End, err)
+					return nil
+				}
+
+				return nil
+			})
+		}
 		return nil
 	})
+	err = g.Wait()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
+	// All diffing done, close the diffs channel
+	close(diffs)
 	return nil
 }
 

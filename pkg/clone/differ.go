@@ -336,7 +336,7 @@ func coerceString(value interface{}) (string, error) {
 }
 
 // readChunk reads a chunk without diffing producing only insert diffs
-func (r *Reader) readChunk(ctx context.Context, chunk Chunk, diffs chan Diff) error {
+func (r *Reader) readChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -344,7 +344,7 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk, diffs chan Diff) er
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
 
-	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -363,7 +363,7 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk, diffs chan Diff) er
 	return nil
 }
 
-func (r *Reader) diffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) error {
+func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
 	// TODO what we should actually do here is do a single pass through all of the successful chunks,
 	//      then keep retrying with the failed chunks until they all succeed,
 	//      but that will require larger code restructurings so let's wait with that for a bit
@@ -403,7 +403,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) er
 	return nil
 }
 
-func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) error {
+func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -413,11 +413,11 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) 
 
 	if r.config.UseCRC32Checksum {
 		// start off by running a fast checksum query
-		sourceChecksum, err := checksumChunk(ctx, r.sourceRetry, "source", r.source, chunk)
+		sourceChecksum, err := checksumChunk2(ctx, r.sourceRetry, "source", r.source, chunk)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		targetChecksum, err := checksumChunk(ctx, r.targetRetry, "target", r.target, chunk)
+		targetChecksum, err := checksumChunk2(ctx, r.targetRetry, "target", r.target, chunk)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -427,11 +427,11 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk, diffs chan Diff) 
 		}
 	}
 
-	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
+	targetStream, err := bufferChunk2(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -460,6 +460,41 @@ func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader 
 		}
 		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
 			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
+		rows, err := reader.QueryContext(ctx, sql)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer rows.Close()
+		if !rows.Next() {
+			return errors.Errorf("no checksum result")
+		}
+		err = rows.Scan(&checksum)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
+	return checksum, errors.WithStack(err)
+}
+
+func checksumChunk2(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk2) (int64, error) {
+	var checksum int64
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
+		defer timer.ObserveDuration()
+		extraWhereClause := ""
+		hint := ""
+		if from == "target" {
+			extraWhereClause = chunk.Table.Config.TargetWhere
+			hint = chunk.Table.Config.TargetHint
+		}
+		if from == "source" {
+			extraWhereClause = chunk.Table.Config.SourceWhere
+			hint = chunk.Table.Config.SourceHint
+		}
+		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
+			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunk2Where(chunk, extraWhereClause))
 		rows, err := reader.QueryContext(ctx, sql)
 		if err != nil {
 			return errors.WithStack(err)

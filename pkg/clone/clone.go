@@ -163,12 +163,12 @@ func (cmd *Clone) run() error {
 				}
 
 				if cmd.NoDiff {
-					err = reader.Read(ctx, g, diffs)
+					err = reader.Read(ctx, diffs)
 					if err != nil {
 						return errors.WithStack(err)
 					}
 				} else {
-					err = reader.Diff(ctx, g, diffs)
+					err = reader.Diff(ctx, diffs)
 					if err != nil {
 						return errors.WithStack(err)
 					}

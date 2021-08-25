@@ -146,7 +146,7 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 				return errors.WithStack(err)
 			}
 
-			err = reader.Diff(ctx, g, diffs)
+			err = reader.Diff(ctx, diffs)
 			if err != nil {
 				return errors.WithStack(err)
 			}

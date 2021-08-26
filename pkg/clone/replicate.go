@@ -954,19 +954,35 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	diffs := make(chan Diff)
-	g, ctx := errgroup.WithContext(ctx)
-	writer := NewWriter(r.config.WriterConfig, chunk.Chunk.Table, r.target, r.targetRetry.Limiter)
-	writer.Write(ctx, g, diffs)
-	g.Go(func() error {
-		err := StreamDiff(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream, diffs)
+
+	// Diff the streams
+	diffs, err := StreamDiff2(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	logrus.Infof("diffs: %v", len(diffs))
+
+	// Batch up the diffs
+	batches, err := BatchTableWrites2(ctx, diffs)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	logrus.Infof("batches: %v", len(batches))
+
+	writeCount := 0
+
+	// Write every batch
+	for _, batch := range batches {
+		writeCount += len(batch.Rows)
+		err := writeBatch(ctx, r.config.WriterConfig, batch, r.target, r.targetRetry)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		close(diffs)
-		return err
-	})
-	return g.Wait()
+	}
+
+	logrus.Infof("chunk rows written: %v", writeCount)
+
+	return nil
 }
 
 // reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
@@ -1158,7 +1174,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			}
 			r.removeOngoingChunk(ongoingChunk)
 			if len(r.ongoingChunks) == 0 {
-				logrus.Infof("all snapshot chunks written")
+				logrus.Infof("all snapshot chunks written: %v", len(r.ongoingChunks))
 			}
 		}
 	}

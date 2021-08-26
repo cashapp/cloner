@@ -220,6 +220,92 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 	}
 }
 
+// StreamDiff2 returns the changes need to make target become exactly like source
+func StreamDiff2(ctx context.Context, table *Table, source RowStream, target RowStream) ([]Diff, error) {
+	var err error
+
+	chunksWithDiffs := chunksWithDiffs.WithLabelValues(table.Name)
+
+	hasDiff := false
+	defer func() {
+		if hasDiff {
+			chunksWithDiffs.Inc()
+		}
+	}()
+	advanceSource := true
+	advanceTarget := true
+
+	var result []Diff
+
+	var sourceRow *Row
+	var targetRow *Row
+	for {
+		if advanceSource {
+			sourceRow, err = source.Next()
+			if err != nil {
+				return result, errors.WithStack(err)
+			}
+			readsProcessed.WithLabelValues(table.Name, "source").Inc()
+		}
+		if advanceTarget {
+			targetRow, err = target.Next()
+			if err != nil {
+				return result, errors.WithStack(err)
+			}
+			readsProcessed.WithLabelValues(table.Name, "target").Inc()
+		}
+		advanceSource = false
+		advanceTarget = false
+
+		if sourceRow != nil {
+			if targetRow != nil {
+				if sourceRow.ID < targetRow.ID {
+					result = append(result, Diff{Insert, sourceRow, nil})
+					diffCount.WithLabelValues(table.Name, "insert").Inc()
+					hasDiff = true
+					advanceSource = true
+					advanceTarget = false
+				} else if sourceRow.ID > targetRow.ID {
+					result = append(result, Diff{Delete, targetRow, nil})
+					diffCount.WithLabelValues(table.Name, "delete").Inc()
+					hasDiff = true
+					advanceSource = false
+					advanceTarget = true
+				} else {
+					isEqual, err := RowsEqual(sourceRow, targetRow)
+					if err != nil {
+						return result, errors.WithStack(err)
+					}
+					if !isEqual {
+						result = append(result, Diff{Update, sourceRow, targetRow})
+						hasDiff = true
+						diffCount.WithLabelValues(table.Name, "update").Inc()
+						advanceSource = true
+						advanceTarget = true
+					} else {
+						// Same!
+						advanceSource = true
+						advanceTarget = true
+					}
+				}
+			} else {
+				result = append(result, Diff{Insert, sourceRow, nil})
+				diffCount.WithLabelValues(table.Name, "insert").Inc()
+				hasDiff = true
+				advanceSource = true
+			}
+		} else if targetRow != nil {
+			hasDiff = true
+			result = append(result, Diff{Delete, targetRow, nil})
+			diffCount.WithLabelValues(table.Name, "delete").Inc()
+			hasDiff = true
+			advanceTarget = true
+		} else {
+			return result, nil
+		}
+	}
+}
+
 func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 	for i := range sourceRow.Data {
 		sourceValue := sourceRow.Data[i]

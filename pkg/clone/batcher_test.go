@@ -69,3 +69,43 @@ func TestBatcher(t *testing.T) {
 		})
 	}
 }
+
+func TestBatchTableWrites2(t *testing.T) {
+	tests := []struct {
+		name      string
+		batchSize int
+		diffs     []testDiff
+		batches   []testBatch
+	}{
+		{
+			name:      "empty",
+			batchSize: 1,
+			diffs:     nil,
+			batches:   nil,
+		},
+		{
+			name:      "one",
+			batchSize: 1,
+			diffs:     []testDiff{{Insert, testRow{1, "t1", "A"}}},
+			batches: []testBatch{
+				{diffType: Insert, table: "t1",
+					rows: []testRow{testRow{1, "t1", "A"}}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs := make([]Diff, len(test.diffs))
+			for _, diff := range test.diffs {
+				diffs = append(diffs, diff.toDiff(test.batchSize))
+			}
+			var result []testBatch
+			batches, err := BatchTableWrites2(context.Background(), diffs)
+			assert.NoError(t, err)
+			for _, batch := range batches {
+				result = append(result, toTestBatch(batch))
+			}
+			assert.Equal(t, test.batches, result)
+		})
+	}
+}

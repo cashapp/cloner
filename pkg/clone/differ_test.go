@@ -196,6 +196,153 @@ func TestStreamDiff(t *testing.T) {
 	}
 }
 
+func TestStreamDiff2(t *testing.T) {
+	table := &Table{Name: "foobar"}
+	tests := []struct {
+		name   string
+		source []testRow
+		target []testRow
+		diff   []testDiff
+	}{
+		{
+			name:   "empty",
+			source: nil,
+			target: nil,
+			diff:   nil,
+		},
+		{
+			name: "same",
+			source: []testRow{
+				{id: 1, data: "A"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+			},
+			diff: nil,
+		},
+		{
+			name: "1 new",
+			source: []testRow{
+				{id: 1, data: "A"},
+			},
+			target: nil,
+			diff:   []testDiff{{Insert, testRow{id: 1, data: "A"}}},
+		},
+		{
+			name:   "1 deleted",
+			source: nil,
+			target: []testRow{
+				{id: 1, data: "A"},
+			},
+			diff: []testDiff{{Delete, testRow{id: 1, data: "A"}}},
+		},
+		{
+			name: "1 updated",
+			source: []testRow{
+				{id: 1, data: "B"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+			},
+			diff: []testDiff{{Update, testRow{id: 1, data: "B"}}},
+		},
+		{
+			name: "1 same 1 inserted",
+			source: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+			},
+			diff: []testDiff{{Insert, testRow{id: 2, data: "B"}}},
+		},
+		{
+			name: "1 same 1 deleted",
+			source: []testRow{
+				{id: 1, data: "A"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+			},
+			diff: []testDiff{{Delete, testRow{id: 2, data: "B"}}},
+		},
+		{
+			name: "1 same 1 updated",
+			source: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "A"},
+			},
+			diff: []testDiff{{Update, testRow{id: 2, data: "B"}}},
+		},
+		{
+			name: "1 inserted middle",
+			source: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+				{id: 3, data: "C"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+				{id: 3, data: "C"},
+			},
+			diff: []testDiff{{Insert, testRow{id: 2, data: "B"}}},
+		},
+		{
+			name: "2 inserted middle",
+			source: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+				{id: 3, data: "C"},
+				{id: 4, data: "D"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+				{id: 4, data: "D"},
+			},
+			diff: []testDiff{
+				{Insert, testRow{id: 2, data: "B"}},
+				{Insert, testRow{id: 3, data: "C"}},
+			},
+		},
+		{
+			name: "2 deleted middle",
+			source: []testRow{
+				{id: 1, data: "A"},
+				{id: 4, data: "D"},
+			},
+			target: []testRow{
+				{id: 1, data: "A"},
+				{id: 2, data: "B"},
+				{id: 3, data: "C"},
+				{id: 4, data: "D"},
+			},
+			diff: []testDiff{
+				{Delete, testRow{id: 2, data: "B"}},
+				{Delete, testRow{id: 3, data: "C"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs, err := StreamDiff2(context.Background(), table,
+				streamTestRows(test.source, 5),
+				streamTestRows(test.target, 5))
+			assert.NoError(t, err)
+			var result []testDiff
+			for _, diff := range diffs {
+				result = append(result, toTestDiff(diff))
+			}
+			assert.Equal(t, test.diff, result)
+		})
+	}
+}
+
 type testRowStreamer struct {
 	rows      []testRow
 	batchSize int

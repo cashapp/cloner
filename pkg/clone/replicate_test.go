@@ -285,7 +285,7 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 	tests := []struct {
 		name         string
-		chunk        testChunk2
+		chunk        testChunk
 		start        int64
 		end          int64
 		eventType    replication.EventType

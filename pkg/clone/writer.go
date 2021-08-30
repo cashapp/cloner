@@ -331,7 +331,6 @@ func (w *Writer) replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
-		fmt.Println("INSERT IGNORE!!")
 		rowsAffected, err := result.RowsAffected()
 		// If we get an error we'll just ignore that...
 		if err != nil {
@@ -744,7 +743,6 @@ func replaceBatch(ctx context.Context, config WriterConfig, logger *log.Entry, t
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
-		fmt.Println("INSERT IGNORE!!")
 		rowsAffected, err := result.RowsAffected()
 		// If we get an error we'll just ignore that...
 		if err != nil {

@@ -353,7 +353,10 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	//      but that will require larger code restructurings so let's wait with that for a bit
 	var diffs []Diff
 	var err error
-	for i := 0; i < r.config.FailedChunkRetryCount; i++ {
+	tryCount := r.config.FailedChunkRetryCount + 1
+	i := 0
+	for {
+		i++
 		diffs, err = r.doDiffChunk(ctx, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
@@ -361,16 +364,18 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 		if len(diffs) == 0 {
 			if i >= 1 {
 				log.Infof("chunk [%d-%d) had no diffs after %d retries",
-					chunk.Start, chunk.End, r.config.FailedChunkRetryCount-i-1)
+					chunk.Start, chunk.End, tryCount-i-1)
 			}
 			// Yay! Chunk had no diffs!!
 			return nil, nil
 		} else {
+			if i == tryCount {
+				return diffs, nil
+			}
 			log.Infof("chunk [%d-%d) had diffs, retrying %d more times",
-				chunk.Start, chunk.End, r.config.FailedChunkRetryCount-i-1)
+				chunk.Start, chunk.End, tryCount-i-1)
 		}
 	}
-	return diffs, nil
 }
 
 func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {

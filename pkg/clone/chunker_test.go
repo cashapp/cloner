@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testChunk2 struct {
+type testChunk struct {
 	Start int64
 	End   int64
 }
 
-func TestChunker2(t *testing.T) {
+func TestChunker(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -41,12 +41,12 @@ func TestChunker2(t *testing.T) {
 	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
 
-	result := make([]testChunk2, len(chunks))
+	result := make([]testChunk, len(chunks))
 	for i, chunk := range chunks {
 		result[i] = toTestChunk2(chunk)
 	}
 
-	assert.Equal(t, []testChunk2{
+	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
 			End:   21,
@@ -74,7 +74,7 @@ func TestChunker2(t *testing.T) {
 	}, result)
 }
 
-func TestChunker2EmptyTable(t *testing.T) {
+func TestChunkerEmptyTable(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -107,7 +107,7 @@ func TestChunker2EmptyTable(t *testing.T) {
 	assert.Equal(t, 0, len(chunks))
 }
 
-func TestChunker2SingleRow(t *testing.T) {
+func TestChunkerSingleRow(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -139,21 +139,21 @@ func TestChunker2SingleRow(t *testing.T) {
 	defer db.Close()
 	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
-	var result []testChunk2
+	var result []testChunk
 	for _, chunk := range chunks {
 		result = append(result, toTestChunk2(chunk))
 	}
 
-	assert.Equal(t, []testChunk2{
+	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
-			End:   2,
+			End:   3,
 		},
 	}, result)
 }
 
-func toTestChunk2(chunk Chunk) testChunk2 {
-	return testChunk2{
+func toTestChunk2(chunk Chunk) testChunk {
+	return testChunk{
 		Start: chunk.Start,
 		End:   chunk.End,
 	}

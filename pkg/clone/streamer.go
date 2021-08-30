@@ -150,11 +150,11 @@ func (s *rowStream) Close() error {
 	return s.rows.Close()
 }
 
-func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk, hint string, extraWhereClause string) (RowStream, error) {
+func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, extraWhereClause string) (RowStream, error) {
 	table := chunk.Table
 	columns := table.ColumnList
 
-	where := chunk2Where(chunk, extraWhereClause)
+	where := chunkWhere(chunk, extraWhereClause)
 	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
 	rows, err := conn.QueryContext(ctx, stmt)
 	if err != nil {
@@ -163,7 +163,7 @@ func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk, hint string, 
 	return newRowStream(table, rows)
 }
 
-func chunk2Where(chunk Chunk, extraWhereClause string) string {
+func chunkWhere(chunk Chunk, extraWhereClause string) string {
 	table := chunk.Table
 	var clauses []string
 	if extraWhereClause != "" {

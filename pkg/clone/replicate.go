@@ -943,7 +943,11 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			chunks <- OngoingChunk{Chunk: chunk, Rows: rows}
+			select {
+			case chunks <- OngoingChunk{Chunk: chunk, Rows: rows}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			return nil
 		})
 	})

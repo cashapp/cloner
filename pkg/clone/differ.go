@@ -429,7 +429,7 @@ func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader 
 			hint = chunk.Table.Config.SourceHint
 		}
 		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
-			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunk2Where(chunk, extraWhereClause))
+			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
 		rows, err := reader.QueryContext(ctx, sql)
 		if err != nil {
 			return errors.WithStack(err)
@@ -467,7 +467,7 @@ func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from 
 			extraWhereClause = chunk.Table.Config.SourceWhere
 			hint = chunk.Table.Config.SourceHint
 		}
-		stream, err := StreamChunk2(ctx, source, chunk, hint, extraWhereClause)
+		stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
 		if err != nil {
 			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
 				chunk.Start, chunk.End, chunk.Table.Name, from)

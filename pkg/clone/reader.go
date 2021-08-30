@@ -175,8 +175,7 @@ func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 	return r.read(ctx, diffs, false)
 }
 
-func (r *Reader) read(ctx context.Context, diffs chan Diff, diff bool) error {
-
+func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	// Generate chunks of source table
 	chunks, err := generateTableChunks2(ctx, r.table, r.source, r.sourceRetry)
 	if err != nil {
@@ -195,10 +194,11 @@ func (r *Reader) read(ctx context.Context, diffs chan Diff, diff bool) error {
 			}
 			g.Go(func() (err error) {
 				defer readerParallelism.Release(1)
+				var diffs []Diff
 				if diff {
-					err = r.diffChunk(ctx, chunk, diffs)
+					diffs, err = r.diffChunk(ctx, chunk)
 				} else {
-					err = r.readChunk(ctx, chunk, diffs)
+					diffs, err = r.readChunk(ctx, chunk)
 				}
 
 				if err != nil {
@@ -215,6 +215,14 @@ func (r *Reader) read(ctx context.Context, diffs chan Diff, diff bool) error {
 					return nil
 				}
 
+				for _, diff := range diffs {
+					select {
+					case diffsCh <- diff:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+
 				return nil
 			})
 		}
@@ -226,7 +234,7 @@ func (r *Reader) read(ctx context.Context, diffs chan Diff, diff bool) error {
 	}
 
 	// All diffing done, close the diffs channel
-	close(diffs)
+	close(diffsCh)
 	return nil
 }
 

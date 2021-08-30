@@ -84,6 +84,9 @@ func TestReplicate(t *testing.T) {
 
 	doWrite := atomic.NewBool(true)
 
+	targetDB, err := target.DB()
+	assert.NoError(t, err)
+
 	// Write rows in a separate thread
 	g.Go(func() error {
 		db, err := source.DB()
@@ -127,6 +130,23 @@ func TestReplicate(t *testing.T) {
 	// Wait for a little bit to let the replicator exercise
 	time.Sleep(5 * time.Second)
 
+	// Regularly print replication lag
+	g.Go(func() error {
+		for {
+			select {
+			case <-time.After(1 * time.Second):
+			case <-ctx.Done():
+				return nil
+			}
+			lag, lastHeartbeat, err := readReplicationLag(ctx, targetDB)
+			if err != nil {
+				fmt.Println("replication lag:", err)
+			} else {
+				fmt.Println("replication lag:", lag, "last heartbeat:", lastHeartbeat)
+			}
+		}
+	})
+
 	// Now do the snapshot
 	g.Go(func() error {
 		return currentReplicator.snapshot(ctx)
@@ -136,10 +156,10 @@ func TestReplicate(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
-	err = waitFor(ctx, someReplicationLag)
+	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
 	assert.NoError(t, err)
 	doWrite.Store(false)
-	err = waitFor(ctx, littleReplicationLag)
+	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
 	assert.NoError(t, err)
 
 	// Restart the writes
@@ -154,12 +174,12 @@ func TestReplicate(t *testing.T) {
 		err := replicate.run(ctx)
 		return err
 	})
-	err = waitFor(ctx, someReplicationLag)
+	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
 	assert.NoError(t, err)
 
 	// Let replication catch up and then do a full checksum while replication is running
 	time.Sleep(5 * time.Second)
-	err = waitFor(ctx, littleReplicationLag)
+	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
 	assert.NoError(t, err)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
@@ -180,7 +200,7 @@ func TestReplicate(t *testing.T) {
 
 	if len(diffs) > 0 {
 		for _, diff := range diffs {
-			fmt.Printf("%v %v\n", diff.Type, diff.Row.ID)
+			fmt.Printf("diff %v %v\n", diff.Type, diff.Row.ID)
 		}
 		assert.Fail(t, "there were diffs (see above)")
 	}
@@ -192,31 +212,48 @@ func isCancelledError(err error) bool {
 		strings.Contains(err.Error(), "context canceled")
 }
 
-func someReplicationLag() error {
-	reads := testutil.ToFloat64(heartbeatsRead)
-	if reads == 0 {
-		return errors.Errorf("we haven't read any heartbeats yet")
+func someReplicationLag(ctx context.Context, db *sql.DB) func() error {
+	return func() error {
+		lag, _, err := readReplicationLag(ctx, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if lag <= 0 {
+			return errors.Errorf("no replication lag")
+		}
+		return nil
 	}
-	toFloat64 := testutil.ToFloat64(replicationLag)
-	lag := time.Duration(toFloat64) * time.Millisecond
-	if lag > 0 {
-		return errors.Errorf("no replication lag")
-	}
-	return nil
 }
 
-func littleReplicationLag() error {
-	expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
-	reads := testutil.ToFloat64(heartbeatsRead)
-	if reads == 0 {
-		return errors.Errorf("we haven't read any heartbeats yet")
+func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
+	return func() error {
+		expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
+		reads := testutil.ToFloat64(heartbeatsRead)
+		if reads == 0 {
+			return errors.Errorf("we haven't read any heartbeats yet")
+		}
+		lag, _, err := readReplicationLag(ctx, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if lag > expectedLag {
+			return errors.Errorf("replication lag did not drop yet")
+		}
+		return nil
 	}
-	toFloat64 := testutil.ToFloat64(replicationLag)
-	lag := time.Duration(toFloat64) * time.Millisecond
-	if lag > expectedLag {
-		return errors.Errorf("replication lag did not drop yet")
+}
+
+func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Time, error) {
+	// TODO retries with backoff?
+	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE name = ?", "_cloner_heartbeat")
+	row := db.QueryRowContext(ctx, stmt, "customer/-80")
+	var lastHeartbeat time.Time
+	err := row.Scan(&lastHeartbeat)
+	if err != nil {
+		return 0, time.Time{}, errors.WithStack(err)
 	}
-	return nil
+	lag := time.Now().UTC().Sub(lastHeartbeat)
+	return lag, lastHeartbeat, nil
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
@@ -227,12 +264,17 @@ func waitFor(ctx context.Context, condition func() error) error {
 
 func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 	// Insert a new row
-	_, err = db.ExecContext(ctx, `
+	result, err := db.ExecContext(ctx, `
 				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
 			`)
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	insertId, err := result.LastInsertId()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	fmt.Println("insert", insertId)
 
 	// Randomly update a row
 	var randomCustomerId int64
@@ -248,6 +290,7 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		fmt.Println("delete", randomCustomerId)
 	} else {
 		// Otherwise update it
 		_, err = db.ExecContext(ctx, ` 
@@ -257,6 +300,7 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		fmt.Println("update", randomCustomerId)
 	}
 	return nil
 }

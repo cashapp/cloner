@@ -308,7 +308,7 @@ func (r *Replicator) replicate(ctx context.Context) error {
 			nextPos.Pos = uint32(event.Position)
 		case *replication.QueryEvent:
 			if string(event.Query) == "BEGIN" {
-				r.tx, err = r.target.BeginTx(ctx, nil)
+				err = r.startTransaction(ctx)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -345,6 +345,18 @@ func (r *Replicator) replicate(ctx context.Context) error {
 			eventsProcessed.Inc()
 		}
 	}
+}
+
+func (r *Replicator) startTransaction(ctx context.Context) (err error) {
+	r.tx, err = r.target.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = r.target.ExecContext(ctx, "SET time_zone = \"+00:00\"")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return err
 }
 
 // receiveAllOngoingChunks receives all the read chunks for the SnapshotReader
@@ -406,6 +418,8 @@ func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventH
 	// TODO build the entire statement with a strings.Builder like in deleteRows below. For speed.
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
 		tableSchema.Name, columnList, strings.Join(valueStrings, ","))
+	fmt.Println(stmt)
+	fmt.Println(valueArgs...)
 	// TODO timeout and retries
 	_, err = r.tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
@@ -492,6 +506,8 @@ func (r *Replicator) deleteRows(ctx context.Context, header *replication.EventHe
 	}
 
 	stmtString := stmt.String()
+	fmt.Println(stmt)
+	fmt.Println(args...)
 	// TODO timeout and retries
 	_, err = r.tx.ExecContext(ctx, stmtString, args...)
 	if err != nil {
@@ -598,29 +614,36 @@ func (r *Replicator) createWatermarkTable(ctx context.Context) error {
 }
 
 func (r *Replicator) writeHeartbeat(ctx context.Context) error {
-	// TODO retries with backoff?
-	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
-	defer cancel()
-	row := r.source.QueryRowContext(timeoutCtx,
-		fmt.Sprintf("SELECT count FROM %s WHERE name = ?", r.config.HeartbeatTable), r.config.TaskName)
-	var count int64
-	err := row.Scan(&count)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// We haven't written the first heartbeat yet
-			count = 0
-		} else {
+	err := Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
+		return autotx.Transact(ctx, r.source, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, "SET time_zone = \"+00:00\"")
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			row := tx.QueryRowContext(ctx,
+				fmt.Sprintf("SELECT count FROM %s WHERE name = ?", r.config.HeartbeatTable), r.config.TaskName)
+			var count int64
+			err = row.Scan(&count)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					// We haven't written the first heartbeat yet
+					count = 0
+				} else {
+					return errors.WithStack(err)
+				}
+			}
+			heartbeatTime := time.Now().UTC()
+			fmt.Println("writing heartbeat:", heartbeatTime)
+			_, err = tx.ExecContext(ctx,
+				fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, ?, ?)",
+					r.config.HeartbeatTable),
+				r.config.TaskName, heartbeatTime, count+1)
 			return errors.WithStack(err)
-		}
-	}
-	_, err = r.source.ExecContext(timeoutCtx,
-		fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, CURRENT_TIMESTAMP(), ?)",
-			r.config.HeartbeatTable),
-		r.config.TaskName, count+1)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
+		})
+	})
+
+	return errors.WithStack(err)
 }
 
 func (r *Replicator) writeCheckpoint(ctx context.Context, position mysql.Position, gset mysql.GTIDSet) error {
@@ -629,9 +652,9 @@ func (r *Replicator) writeCheckpoint(ctx context.Context, position mysql.Positio
 		gsetString = gset.String()
 	}
 	_, err := r.target.ExecContext(ctx,
-		fmt.Sprintf("REPLACE INTO %s (name, file, position, gtid_set, timestamp) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP())",
+		fmt.Sprintf("REPLACE INTO %s (name, file, position, gtid_set, timestamp) VALUES (?, ?, ?, ?, ?)",
 			r.config.CheckpointTable),
-		r.config.TaskName, position.Name, position.Pos, gsetString)
+		r.config.TaskName, position.Name, position.Pos, gsetString, time.Now().UTC())
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -705,12 +728,12 @@ func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position 
 
 func (r *Replicator) readHeartbeat(ctx context.Context) error {
 	// TODO retries with backoff?
-	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.ReadTimeout)
 	defer cancel()
-	stmt := fmt.Sprintf("SELECT CURRENT_TIMESTAMP() - time FROM %s WHERE name = ?", r.config.HeartbeatTable)
+	stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
 	row := r.target.QueryRowContext(timeoutCtx, stmt, r.config.TaskName)
-	var lag time.Duration
-	err := row.Scan(&lag)
+	var lastHeartbeat time.Time
+	err := row.Scan(&lastHeartbeat)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// We haven't received the first heartbeat yet
@@ -719,6 +742,7 @@ func (r *Replicator) readHeartbeat(ctx context.Context) error {
 			return errors.WithStack(err)
 		}
 	}
+	lag := time.Now().UTC().Sub(lastHeartbeat)
 	replicationLag.Set(float64(lag.Milliseconds()))
 	heartbeatsRead.Inc()
 	return nil

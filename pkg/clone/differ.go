@@ -422,7 +422,7 @@ func coerceString(value interface{}) (string, error) {
 }
 
 // readChunk reads a chunk without diffing producing only insert diffs
-func (r *Reader) readChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
+func (r *Reader) readChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -432,64 +432,44 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) e
 
 	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
+	diffs := make([]Diff, 0, chunk.Size)
 	for {
 		row, err := sourceStream.Next()
 		if err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		if row == nil {
 			break
 		}
 		readsProcessed.WithLabelValues(row.Table.Name, "source").Inc()
-		diffs <- Diff{Insert, row, nil}
+		diffs = append(diffs, Diff{Insert, row, nil})
 	}
 
-	return nil
+	return diffs, nil
 }
 
-func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
+func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 	// TODO what we should actually do here is do a single pass through all of the successful chunks,
 	//      then keep retrying with the failed chunks until they all succeed,
 	//      but that will require larger code restructurings so let's wait with that for a bit
-	if r.config.FailedChunkRetryCount == 0 {
-		err := r.doDiffChunk(ctx, chunk, diffs)
+	var diffs []Diff
+	var err error
+	for i := 0; i < r.config.FailedChunkRetryCount; i++ {
+		diffs, err = r.doDiffChunk(ctx, chunk)
 		if err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
-	} else {
-		// Buffer diffs for the chunk locally and retry if diffs were found
-		var foundChunkDiffs []Diff
-		chunkDiffs := make(chan Diff)
-		go func() {
-			for diff := range chunkDiffs {
-				foundChunkDiffs = append(foundChunkDiffs, diff)
-			}
-		}()
-		for i := 0; i < r.config.FailedChunkRetryCount; i++ {
-			foundChunkDiffs = nil
-			err := r.doDiffChunk(ctx, chunk, diffs)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			if len(foundChunkDiffs) == 0 {
-				// Yay! Chunk had no diffs!!
-				return nil
-			}
-
-		}
-		close(chunkDiffs)
-
-		// Drain any diffs if we found them
-		for _, diff := range foundChunkDiffs {
-			diffs <- diff
+		if len(diffs) == 0 {
+			// Yay! Chunk had no diffs!!
+			return nil, nil
 		}
 	}
-	return nil
+	return diffs, nil
 }
 
-func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2, diffs chan Diff) error {
+func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -501,32 +481,32 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2, diffs chan Diff)
 		// start off by running a fast checksum query
 		sourceChecksum, err := checksumChunk2(ctx, r.sourceRetry, "source", r.source, chunk)
 		if err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		targetChecksum, err := checksumChunk2(ctx, r.targetRetry, "target", r.target, chunk)
 		if err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		if sourceChecksum == targetChecksum {
 			// Checksums match, no need to do any further diffing
-			return nil
+			return nil, nil
 		}
 	}
 
 	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 	targetStream, err := bufferChunk2(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
-	err = StreamDiff(ctx, chunk.Table, sourceStream, targetStream, diffs)
+	diffs, err := StreamDiff2(ctx, chunk.Table, sourceStream, targetStream)
 	if err != nil {
-		return errors.WithStack(err)
+		return nil, errors.WithStack(err)
 	}
 
-	return nil
+	return diffs, nil
 }
 
 func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk) (int64, error) {

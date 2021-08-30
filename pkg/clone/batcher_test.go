@@ -70,7 +70,7 @@ func TestBatcher(t *testing.T) {
 	}
 }
 
-func TestBatchTableWrites2(t *testing.T) {
+func TestBatchTableWritesSync(t *testing.T) {
 	tests := []struct {
 		name      string
 		batchSize int
@@ -95,7 +95,7 @@ func TestBatchTableWrites2(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			diffs := make([]Diff, len(test.diffs))
+			diffs := make([]Diff, 0, len(test.diffs))
 			for _, diff := range test.diffs {
 				diffs = append(diffs, diff.toDiff(test.batchSize))
 			}

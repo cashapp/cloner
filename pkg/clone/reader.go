@@ -177,7 +177,7 @@ func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 
 func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	// Generate chunks of source table
-	chunks, err := generateTableChunks2(ctx, r.table, r.source, r.sourceRetry)
+	chunks, err := generateTableChunks(ctx, r.table, r.source, r.sourceRetry)
 	if err != nil {
 		return errors.WithStack(err)
 	}

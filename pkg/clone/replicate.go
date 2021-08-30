@@ -854,7 +854,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 			g.Go(func() error {
 				defer tableParallelism.Release(1)
 
-				tableChunks, err := generateTableChunks2(ctx, table, r.source, r.sourceRetry)
+				tableChunks, err := generateTableChunks(ctx, table, r.source, r.sourceRetry)
 				for _, chunk := range tableChunks {
 					chunks <- chunk
 				}

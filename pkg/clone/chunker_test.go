@@ -38,7 +38,7 @@ func TestChunker2(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
+	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
 
 	result := make([]testChunk2, len(chunks))
@@ -101,7 +101,7 @@ func TestChunker2EmptyTable(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
+	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
 
 	assert.Equal(t, 0, len(chunks))
@@ -137,7 +137,7 @@ func TestChunker2SingleRow(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
+	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
 	var result []testChunk2
 	for _, chunk := range chunks {

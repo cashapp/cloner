@@ -163,7 +163,7 @@ func (c *Chunk) ContainsRow(row []interface{}) bool {
 	return id >= c.Start && id < c.End
 }
 
-func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
+func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
 	chunkSize := table.Config.ChunkSize
 
 	ids := streamIds(source, table, chunkSize, retry)

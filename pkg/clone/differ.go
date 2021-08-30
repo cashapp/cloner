@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
 	"reflect"
 	"strconv"
 	"strings"
@@ -462,8 +463,15 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 			return nil, errors.WithStack(err)
 		}
 		if len(diffs) == 0 {
+			if i >= 1 {
+				log.Infof("chunk [%d-%d) had no diffs after %d retries",
+					chunk.Start, chunk.End, r.config.FailedChunkRetryCount-i-1)
+			}
 			// Yay! Chunk had no diffs!!
 			return nil, nil
+		} else {
+			log.Infof("chunk [%d-%d) had diffs, retrying %d more times",
+				chunk.Start, chunk.End, r.config.FailedChunkRetryCount-i-1)
 		}
 	}
 	return diffs, nil
@@ -509,41 +517,6 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) 
 	return diffs, nil
 }
 
-func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk) (int64, error) {
-	var checksum int64
-	err := Retry(ctx, retry, func(ctx context.Context) error {
-		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
-		defer timer.ObserveDuration()
-		extraWhereClause := ""
-		hint := ""
-		if from == "target" {
-			extraWhereClause = chunk.Table.Config.TargetWhere
-			hint = chunk.Table.Config.TargetHint
-		}
-		if from == "source" {
-			extraWhereClause = chunk.Table.Config.SourceWhere
-			hint = chunk.Table.Config.SourceHint
-		}
-		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
-			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
-		rows, err := reader.QueryContext(ctx, sql)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer rows.Close()
-		if !rows.Next() {
-			return errors.Errorf("no checksum result")
-		}
-		err = rows.Scan(&checksum)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
-	})
-
-	return checksum, errors.WithStack(err)
-}
-
 func checksumChunk2(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk2) (int64, error) {
 	var checksum int64
 	err := Retry(ctx, retry, func(ctx context.Context) error {
@@ -577,42 +550,6 @@ func checksumChunk2(ctx context.Context, retry RetryOptions, from string, reader
 	})
 
 	return checksum, errors.WithStack(err)
-}
-
-// bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
-// to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (RowStream, error) {
-	var result RowStream
-
-	err := Retry(ctx, retry, func(ctx context.Context) error {
-		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
-		defer timer.ObserveDuration()
-
-		extraWhereClause := ""
-		hint := ""
-		if from == "target" {
-			extraWhereClause = chunk.Table.Config.TargetWhere
-			hint = chunk.Table.Config.TargetHint
-		}
-		if from == "source" {
-			extraWhereClause = chunk.Table.Config.SourceWhere
-			hint = chunk.Table.Config.SourceHint
-		}
-		stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
-		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
-				chunk.Start, chunk.End, chunk.Table.Name, from)
-		}
-		defer stream.Close()
-		result, err = buffer(stream)
-		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
-				chunk.Start, chunk.End, chunk.Table.Name, from)
-		}
-		return nil
-	})
-
-	return result, err
 }
 
 // bufferChunk2 reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have

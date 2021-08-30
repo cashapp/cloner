@@ -17,20 +17,21 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const heartbeatFrequency = 100 * time.Millisecond
 
 func TestReplicate(t *testing.T) {
 	err := startAll()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	rowCount := 1000
 	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = deleteAllData(tidbContainer.Config())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	source := vitessContainer.Config()
 	// We connect directly to the underlying MySQL database as vtgate does not support binlog streaming
@@ -73,19 +74,19 @@ func TestReplicate(t *testing.T) {
 		CreateTables:       true,
 	}
 	err = kong.ApplyDefaults(replicate)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	g, ctx := errgroup.WithContext(ctx)
 
 	err = deleteAllData(source)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	doWrite := atomic.NewBool(true)
 
 	targetDB, err := target.DB()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Write rows in a separate thread
 	g.Go(func() error {
@@ -102,7 +103,7 @@ func TestReplicate(t *testing.T) {
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {
@@ -130,23 +131,6 @@ func TestReplicate(t *testing.T) {
 	// Wait for a little bit to let the replicator exercise
 	time.Sleep(5 * time.Second)
 
-	// Regularly print replication lag
-	g.Go(func() error {
-		for {
-			select {
-			case <-time.After(1 * time.Second):
-			case <-ctx.Done():
-				return nil
-			}
-			lag, lastHeartbeat, err := readReplicationLag(ctx, targetDB)
-			if err != nil {
-				fmt.Println("replication lag:", err)
-			} else {
-				fmt.Println("replication lag:", lag, "last heartbeat:", lastHeartbeat)
-			}
-		}
-	})
-
 	// Now do the snapshot
 	g.Go(func() error {
 		return currentReplicator.snapshot(ctx)
@@ -157,10 +141,10 @@ func TestReplicate(t *testing.T) {
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
 	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	doWrite.Store(false)
 	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Restart the writes
 	doWrite.Store(true)
@@ -175,12 +159,12 @@ func TestReplicate(t *testing.T) {
 		return err
 	})
 	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Let replication catch up and then do a full checksum while replication is running
 	time.Sleep(5 * time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
 	}
@@ -188,19 +172,19 @@ func TestReplicate(t *testing.T) {
 	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
 	checksum.FailedChunkRetryCount = 20
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	diffs, err := checksum.run(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	cancel()
 	err = g.Wait()
 	if !isCancelledError(err) {
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 
 	if len(diffs) > 0 {
 		for _, diff := range diffs {
-			fmt.Printf("diff %v %v\n", diff.Type, diff.Row.ID)
+			fmt.Printf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
 		}
 		assert.Fail(t, "there were diffs (see above)")
 	}
@@ -264,17 +248,12 @@ func waitFor(ctx context.Context, condition func() error) error {
 
 func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 	// Insert a new row
-	result, err := db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
 			`)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	insertId, err := result.LastInsertId()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	fmt.Println("insert", insertId)
 
 	// Randomly update a row
 	var randomCustomerId int64
@@ -290,7 +269,6 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		fmt.Println("delete", randomCustomerId)
 	} else {
 		// Otherwise update it
 		_, err = db.ExecContext(ctx, ` 
@@ -300,7 +278,6 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		fmt.Println("update", randomCustomerId)
 	}
 	return nil
 }
@@ -308,7 +285,7 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 	tests := []struct {
 		name         string
-		chunk        testChunk
+		chunk        testChunk2
 		start        int64
 		end          int64
 		eventType    replication.EventType
@@ -483,7 +460,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				&replication.RowsEvent{Rows: test.eventRows},
 				tableSchema,
 			)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			assert.Equal(t, len(test.resultRows), len(chunk.Rows))
 			for i, expectedRow := range test.resultRows {

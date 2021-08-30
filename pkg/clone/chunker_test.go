@@ -2,23 +2,18 @@ package clone
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-type testChunk struct {
+type testChunk2 struct {
 	Start int64
 	End   int64
-
-	First bool
-	Last  bool
-	Size  int
 }
 
-func TestChunker(t *testing.T) {
+func TestChunker2(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -32,17 +27,6 @@ func TestChunker(t *testing.T) {
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
-
-	chunks := make(chan Chunk)
-	var result []testChunk
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for chunk := range chunks {
-			result = append(result, toTestChunk(chunk))
-		}
-	}()
 
 	ctx := context.Background()
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
@@ -54,96 +38,43 @@ func TestChunker(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	r := NewReader(config, tables[0], db, nil, nil, nil)
-	err = r.generateTableChunks(ctx, tables[0], chunks)
+	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
-	close(chunks)
-	wg.Wait()
 
-	assert.Equal(t, []testChunk{
+	result := make([]testChunk2, len(chunks))
+	for i, chunk := range chunks {
+		result[i] = toTestChunk2(chunk)
+	}
+
+	assert.Equal(t, []testChunk2{
 		{
 			Start: 0,
 			End:   21,
-			Size:  10,
-			First: true,
 		},
 		{
 			Start: 21,
 			End:   41,
-			Size:  10,
 		},
 		{
 			Start: 41,
 			End:   56,
-			Size:  10,
 		},
 		{
 			Start: 56,
 			End:   73,
-			Size:  10,
 		},
 		{
 			Start: 73,
 			End:   95,
-			Size:  10,
 		},
 		{
 			Start: 95,
-			End:   99,
-			Size:  2,
-			Last:  true,
+			End:   100,
 		},
 	}, result)
 }
 
-func TestPeekingIdStreamer(t *testing.T) {
-	err := startVitess()
-	assert.NoError(t, err)
-
-	source := vitessContainer.Config()
-
-	err = deleteAllData(source)
-	assert.NoError(t, err)
-
-	rowCount := 100
-	err = insertBunchaData(source, "Name", rowCount)
-	assert.NoError(t, err)
-
-	source.Database = "customer/-80@replica"
-
-	ctx := context.Background()
-	db, err := source.DB()
-	assert.NoError(t, err)
-
-	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10,
-		SourceTargetConfig: SourceTargetConfig{Source: source}}
-
-	tables, err := LoadTables(ctx, config)
-	assert.NoError(t, err)
-
-	queriedIds := make([]int64, 0, rowCount)
-	rows, err := db.QueryContext(ctx, "SELECT id FROM customers")
-	assert.NoError(t, err)
-	for rows.Next() {
-		var id int64
-		err := rows.Scan(&id)
-		assert.NoError(t, err)
-		queriedIds = append(queriedIds, id)
-	}
-
-	ids := streamIds(db, tables[0], 1, RetryOptions{Timeout: 1 * time.Second, MaxRetries: 9})
-	pagedIds := make([]int64, 0, rowCount)
-	var next int64
-	hasNext := true
-	for hasNext {
-		next, hasNext, err = ids.Next(ctx)
-		assert.NoError(t, err)
-		pagedIds = append(pagedIds, next)
-	}
-	assert.Equal(t, queriedIds, pagedIds)
-}
-
-func TestChunkerEmptyTable(t *testing.T) {
+func TestChunker2EmptyTable(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -163,18 +94,6 @@ func TestChunkerEmptyTable(t *testing.T) {
 		ChunkSize:          10,
 		SourceTargetConfig: SourceTargetConfig{Source: source}}
 
-	chunks := make(chan Chunk)
-
-	var result []testChunk
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for chunk := range chunks {
-			result = append(result, toTestChunk(chunk))
-		}
-	}()
-
 	ctx := context.Background()
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
@@ -182,16 +101,13 @@ func TestChunkerEmptyTable(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	r := NewReader(config, tables[0], db, nil, nil, nil)
-	err = r.generateTableChunks(ctx, tables[0], chunks)
+	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
-	close(chunks)
-	wg.Wait()
 
-	assert.Equal(t, 0, len(result))
+	assert.Equal(t, 0, len(chunks))
 }
 
-func TestChunkerSingleRow(t *testing.T) {
+func TestChunker2SingleRow(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -205,17 +121,6 @@ func TestChunkerSingleRow(t *testing.T) {
 
 	source.Database = "customer/-80@replica"
 
-	chunks := make(chan Chunk)
-	var result []testChunk
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for chunk := range chunks {
-			result = append(result, toTestChunk(chunk))
-		}
-	}()
-
 	ctx := context.Background()
 	config := ReaderConfig{ReadTimeout: time.Second,
 		Config: Config{
@@ -232,29 +137,24 @@ func TestChunkerSingleRow(t *testing.T) {
 	db, err := config.Source.DB()
 	assert.NoError(t, err)
 	defer db.Close()
-	r := NewReader(config, tables[0], db, nil, nil, nil)
-	err = r.generateTableChunks(ctx, tables[0], chunks)
+	chunks, err := generateTableChunks2(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
 	assert.NoError(t, err)
-	close(chunks)
-	wg.Wait()
+	var result []testChunk2
+	for _, chunk := range chunks {
+		result = append(result, toTestChunk2(chunk))
+	}
 
-	assert.Equal(t, []testChunk{
+	assert.Equal(t, []testChunk2{
 		{
 			Start: 0,
 			End:   2,
-			Size:  1,
-			First: true,
-			Last:  true,
 		},
 	}, result)
 }
 
-func toTestChunk(chunk Chunk) testChunk {
-	return testChunk{
+func toTestChunk2(chunk Chunk2) testChunk2 {
+	return testChunk2{
 		Start: chunk.Start,
 		End:   chunk.End,
-		First: chunk.First,
-		Last:  chunk.Last,
-		Size:  chunk.Size,
 	}
 }

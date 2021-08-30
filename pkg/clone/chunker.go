@@ -9,37 +9,6 @@ import (
 	"io"
 )
 
-// Chunk is an chunk of rows closed to the left [start,end)
-type Chunk struct {
-	Table *Table
-
-	// Seq is the sequence number of chunks for this table
-	Seq int64
-
-	// Start is the first id of the chunk inclusive
-	Start int64
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusive)
-	End int64 // exclusive
-
-	// First chunk of a table
-	First bool
-	// Last chunk of a table
-	Last bool
-	// Size is the expected number of rows in the chunk
-	Size int
-}
-
-func (c *Chunk) ContainsRow(row []interface{}) bool {
-	id := c.Table.PkOfRow(row)
-	if c.First {
-		return id < c.End
-	} else if c.Last {
-		return id >= c.Start
-	} else {
-		return id >= c.Start && id < c.End
-	}
-}
-
 type PeekingIdStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) (int64, bool, error)
@@ -172,20 +141,35 @@ func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) Pe
 	}
 }
 
-func (r *Reader) generateTableChunks(
-	ctx context.Context,
-	table *Table,
-	chunks chan Chunk,
-) error {
-	return generateTableChunks(ctx, table, r.source, r.sourceRetry, chunks)
+// Chunk2 is an chunk of rows closed to the left [start,end)
+type Chunk2 struct {
+	Table *Table
+
+	// Seq is the sequence number of chunks for this table
+	Seq int64
+
+	// Start is the first id of the chunk inclusive
+	Start int64
+
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
+	End int64 // exclusive
+
+	// Size is the expected number of rows in the chunk
+	Size int
 }
 
-func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions, chunks chan Chunk) error {
+func (c *Chunk2) ContainsRow(row []interface{}) bool {
+	id := c.Table.PkOfRow(row)
+	return id >= c.Start && id < c.End
+}
+
+func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk2, error) {
 	chunkSize := table.Config.ChunkSize
 
 	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error
+	var chunks []Chunk2
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
@@ -195,28 +179,22 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
 		if errors.Is(err, io.EOF) {
-			return nil
+			return nil, nil
 		}
 		if err != nil {
-			return errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		currentChunkSize++
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			select {
-			case chunks <- Chunk{
+			chunks = append(chunks, Chunk2{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
 				End:   id,
-				First: first,
-				Last:  !hasNext,
 				Size:  currentChunkSize,
-			}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			})
 			seq++
 			// Next id should be the next start id
 			startId = id
@@ -233,19 +211,13 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 			startId = 0
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		select {
-		case chunks <- Chunk{
+		chunks = append(chunks, Chunk2{
 			Table: table,
 			Seq:   seq,
 			Start: startId,
-			End:   id,
-			First: first,
-			Last:  true,
+			End:   id + 1,
 			Size:  currentChunkSize,
-		}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		})
 	}
-	return nil
+	return chunks, nil
 }

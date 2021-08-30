@@ -418,8 +418,6 @@ func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventH
 	// TODO build the entire statement with a strings.Builder like in deleteRows below. For speed.
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
 		tableSchema.Name, columnList, strings.Join(valueStrings, ","))
-	fmt.Println(stmt)
-	fmt.Println(valueArgs...)
 	// TODO timeout and retries
 	_, err = r.tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
@@ -506,8 +504,6 @@ func (r *Replicator) deleteRows(ctx context.Context, header *replication.EventHe
 	}
 
 	stmtString := stmt.String()
-	fmt.Println(stmt)
-	fmt.Println(args...)
 	// TODO timeout and retries
 	_, err = r.tx.ExecContext(ctx, stmtString, args...)
 	if err != nil {
@@ -634,7 +630,6 @@ func (r *Replicator) writeHeartbeat(ctx context.Context) error {
 				}
 			}
 			heartbeatTime := time.Now().UTC()
-			fmt.Println("writing heartbeat:", heartbeatTime)
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, ?, ?)",
 					r.config.HeartbeatTable),
@@ -832,7 +827,8 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 
 	// Start the goroutine that will process the chunks
 	g.Go(func() error {
-		for chunk := range chunks {
+		for c := range chunks {
+			chunk := c
 			err = chunkParallelism.Acquire(ctx, 1)
 			if err != nil {
 				return errors.WithStack(err)
@@ -845,11 +841,12 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 		return nil
 	})
 
-	// Start generating chunks
+	// Generate chunks
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
 
-		for _, table := range tables {
+		for _, t := range tables {
+			table := t
 			err = tableParallelism.Acquire(ctx, 1)
 			if err != nil {
 				return errors.WithStack(err)

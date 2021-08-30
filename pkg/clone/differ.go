@@ -362,7 +362,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 			return nil, errors.WithStack(err)
 		}
 		if len(diffs) == 0 {
-			if i >= 1 {
+			if tryCount > 1 {
 				log.Infof("chunk [%d-%d) had no diffs after %d retries",
 					chunk.Start, chunk.End, tryCount-i-1)
 			}

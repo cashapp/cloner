@@ -100,7 +100,7 @@ func TestBatchTableWrites2(t *testing.T) {
 				diffs = append(diffs, diff.toDiff(test.batchSize))
 			}
 			var result []testBatch
-			batches, err := BatchTableWrites2(context.Background(), diffs)
+			batches, err := BatchTableWritesSync(diffs)
 			assert.NoError(t, err)
 			for _, batch := range batches {
 				result = append(result, toTestBatch(batch))

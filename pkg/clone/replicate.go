@@ -988,7 +988,7 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 	logrus.Infof("diffs: %v", len(diffs))
 
 	// Batch up the diffs
-	batches, err := BatchTableWrites2(ctx, diffs)
+	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
 		return errors.WithStack(err)
 	}

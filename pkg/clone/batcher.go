@@ -110,8 +110,8 @@ func BatchTableWrites(ctx context.Context, diffs chan Diff, batches chan Batch) 
 	}
 }
 
-// BatchTableWrites2 synchronously batches up diffs into batches by type
-func BatchTableWrites2(ctx context.Context, diffs []Diff) ([]Batch, error) {
+// BatchTableWritesSync synchronously batches up diffs into batches by type
+func BatchTableWritesSync(diffs []Diff) ([]Batch, error) {
 	var batches []Batch
 
 	batchesByType := make(map[DiffType]Batch)

@@ -449,7 +449,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			chunk := &OngoingChunk{
 				InsideWatermarks: true,
 				Rows:             inputRows,
-				Chunk: Chunk2{
+				Chunk: Chunk{
 					Start: test.start,
 					End:   test.end,
 					Table: table,

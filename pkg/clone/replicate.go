@@ -748,7 +748,7 @@ func (r *Replicator) readHeartbeat(ctx context.Context) error {
 type OngoingChunk struct {
 	InsideWatermarks bool
 	Rows             []*Row
-	Chunk            Chunk2
+	Chunk            Chunk
 }
 
 func (c *OngoingChunk) findRow(row []interface{}) (*Row, int, error) {
@@ -821,7 +821,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 
 	tableParallelism := semaphore.NewWeighted(r.config.TableParallelism)
 
-	chunks := make(chan Chunk2)
+	chunks := make(chan Chunk)
 
 	chunkParallelism := semaphore.NewWeighted(r.config.ChunkParallelism)
 
@@ -918,7 +918,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 /*
  */
 
-func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk2, chunks chan OngoingChunk) error {
+func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks chan OngoingChunk) error {
 	// First transaction:
 	//   1. insert the low watermark
 	//   2. read the entire chunk
@@ -935,7 +935,7 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk2, chunks
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			stream, err := bufferChunk2(ctx, r.sourceRetry, tx, "source", chunk)
+			stream, err := bufferChunk(ctx, r.sourceRetry, tx, "source", chunk)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -971,13 +971,13 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk2, chunks
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error {
 	logrus.Infof("writing chunk %d-%d", chunk.Chunk.Start, chunk.Chunk.End)
-	targetStream, err := bufferChunk2(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
+	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// Diff the streams
-	diffs, err := StreamDiff2(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream)
+	diffs, err := StreamDiff(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream)
 	if err != nil {
 		return errors.WithStack(err)
 	}

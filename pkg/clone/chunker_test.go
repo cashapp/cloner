@@ -152,7 +152,7 @@ func TestChunker2SingleRow(t *testing.T) {
 	}, result)
 }
 
-func toTestChunk2(chunk Chunk2) testChunk2 {
+func toTestChunk2(chunk Chunk) testChunk2 {
 	return testChunk2{
 		Start: chunk.Start,
 		End:   chunk.End,

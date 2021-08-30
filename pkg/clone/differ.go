@@ -117,112 +117,8 @@ type Diff struct {
 	Target *Row
 }
 
-// StreamDiff sends the changes need to make target become exactly like source
-func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowStream, diffs chan Diff) error {
-	var err error
-
-	chunksWithDiffs := chunksWithDiffs.WithLabelValues(table.Name)
-
-	hasDiff := false
-	defer func() {
-		if hasDiff {
-			chunksWithDiffs.Inc()
-		}
-	}()
-	advanceSource := true
-	advanceTarget := true
-
-	var sourceRow *Row
-	var targetRow *Row
-	for {
-		if advanceSource {
-			sourceRow, err = source.Next()
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			readsProcessed.WithLabelValues(table.Name, "source").Inc()
-		}
-		if advanceTarget {
-			targetRow, err = target.Next()
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			readsProcessed.WithLabelValues(table.Name, "target").Inc()
-		}
-		advanceSource = false
-		advanceTarget = false
-
-		if sourceRow != nil {
-			if targetRow != nil {
-				if sourceRow.ID < targetRow.ID {
-					select {
-					case diffs <- Diff{Insert, sourceRow, nil}:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-					diffCount.WithLabelValues(table.Name, "insert").Inc()
-					hasDiff = true
-					advanceSource = true
-					advanceTarget = false
-				} else if sourceRow.ID > targetRow.ID {
-					select {
-					case diffs <- Diff{Delete, targetRow, nil}:
-					case <-ctx.Done():
-						return ctx.Err()
-					}
-					diffCount.WithLabelValues(table.Name, "delete").Inc()
-					hasDiff = true
-					advanceSource = false
-					advanceTarget = true
-				} else {
-					isEqual, err := RowsEqual(sourceRow, targetRow)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-					if !isEqual {
-						select {
-						case diffs <- Diff{Update, sourceRow, targetRow}:
-						case <-ctx.Done():
-							return ctx.Err()
-						}
-						hasDiff = true
-						diffCount.WithLabelValues(table.Name, "update").Inc()
-						advanceSource = true
-						advanceTarget = true
-					} else {
-						// Same!
-						advanceSource = true
-						advanceTarget = true
-					}
-				}
-			} else {
-				select {
-				case diffs <- Diff{Insert, sourceRow, nil}:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				diffCount.WithLabelValues(table.Name, "insert").Inc()
-				hasDiff = true
-				advanceSource = true
-			}
-		} else if targetRow != nil {
-			hasDiff = true
-			select {
-			case diffs <- Diff{Delete, targetRow, nil}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			diffCount.WithLabelValues(table.Name, "delete").Inc()
-			hasDiff = true
-			advanceTarget = true
-		} else {
-			return nil
-		}
-	}
-}
-
-// StreamDiff2 returns the changes need to make target become exactly like source
-func StreamDiff2(ctx context.Context, table *Table, source RowStream, target RowStream) ([]Diff, error) {
+// StreamDiff returns the changes need to make target become exactly like source
+func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowStream) ([]Diff, error) {
 	var err error
 
 	chunksWithDiffs := chunksWithDiffs.WithLabelValues(table.Name)
@@ -423,7 +319,7 @@ func coerceString(value interface{}) (string, error) {
 }
 
 // readChunk reads a chunk without diffing producing only insert diffs
-func (r *Reader) readChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
+func (r *Reader) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -431,7 +327,7 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
 
-	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -451,7 +347,7 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 	return diffs, nil
 }
 
-func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
+func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	// TODO what we should actually do here is do a single pass through all of the successful chunks,
 	//      then keep retrying with the failed chunks until they all succeed,
 	//      but that will require larger code restructurings so let's wait with that for a bit
@@ -477,7 +373,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
 	return diffs, nil
 }
 
-func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) {
+func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
@@ -487,11 +383,11 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) 
 
 	if r.config.UseCRC32Checksum {
 		// start off by running a fast checksum query
-		sourceChecksum, err := checksumChunk2(ctx, r.sourceRetry, "source", r.source, chunk)
+		sourceChecksum, err := checksumChunk(ctx, r.sourceRetry, "source", r.source, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		targetChecksum, err := checksumChunk2(ctx, r.targetRetry, "target", r.target, chunk)
+		targetChecksum, err := checksumChunk(ctx, r.targetRetry, "target", r.target, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -501,15 +397,15 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) 
 		}
 	}
 
-	sourceStream, err := bufferChunk2(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	targetStream, err := bufferChunk2(ctx, r.targetRetry, r.target, "target", chunk)
+	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	diffs, err := StreamDiff2(ctx, chunk.Table, sourceStream, targetStream)
+	diffs, err := StreamDiff(ctx, chunk.Table, sourceStream, targetStream)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -517,7 +413,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk2) ([]Diff, error) 
 	return diffs, nil
 }
 
-func checksumChunk2(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk2) (int64, error) {
+func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader DBReader, chunk Chunk) (int64, error) {
 	var checksum int64
 	err := Retry(ctx, retry, func(ctx context.Context) error {
 		timer := prometheus.NewTimer(crc32Duration.WithLabelValues(chunk.Table.Name, from))
@@ -552,9 +448,9 @@ func checksumChunk2(ctx context.Context, retry RetryOptions, from string, reader
 	return checksum, errors.WithStack(err)
 }
 
-// bufferChunk2 reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
+// bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk2(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk2) (RowStream, error) {
+func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (RowStream, error) {
 	var result RowStream
 
 	err := Retry(ctx, retry, func(ctx context.Context) error {

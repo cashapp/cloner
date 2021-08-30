@@ -141,8 +141,8 @@ func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) Pe
 	}
 }
 
-// Chunk2 is an chunk of rows closed to the left [start,end)
-type Chunk2 struct {
+// Chunk is an chunk of rows closed to the left [start,end)
+type Chunk struct {
 	Table *Table
 
 	// Seq is the sequence number of chunks for this table
@@ -158,18 +158,18 @@ type Chunk2 struct {
 	Size int
 }
 
-func (c *Chunk2) ContainsRow(row []interface{}) bool {
+func (c *Chunk) ContainsRow(row []interface{}) bool {
 	id := c.Table.PkOfRow(row)
 	return id >= c.Start && id < c.End
 }
 
-func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk2, error) {
+func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
 	chunkSize := table.Config.ChunkSize
 
 	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error
-	var chunks []Chunk2
+	var chunks []Chunk
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
@@ -188,7 +188,7 @@ func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, ret
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			chunks = append(chunks, Chunk2{
+			chunks = append(chunks, Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
@@ -211,7 +211,7 @@ func generateTableChunks2(ctx context.Context, table *Table, source *sql.DB, ret
 			startId = 0
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		chunks = append(chunks, Chunk2{
+		chunks = append(chunks, Chunk{
 			Table: table,
 			Seq:   seq,
 			Start: startId,

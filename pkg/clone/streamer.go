@@ -150,7 +150,7 @@ func (s *rowStream) Close() error {
 	return s.rows.Close()
 }
 
-func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk2, hint string, extraWhereClause string) (RowStream, error) {
+func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk, hint string, extraWhereClause string) (RowStream, error) {
 	table := chunk.Table
 	columns := table.ColumnList
 
@@ -163,7 +163,7 @@ func StreamChunk2(ctx context.Context, conn DBReader, chunk Chunk2, hint string,
 	return newRowStream(table, rows)
 }
 
-func chunk2Where(chunk Chunk2, extraWhereClause string) string {
+func chunk2Where(chunk Chunk, extraWhereClause string) string {
 	table := chunk.Table
 	var clauses []string
 	if extraWhereClause != "" {

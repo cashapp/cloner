@@ -26,6 +26,9 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
+	assert.Equal(t, 1, len(tables))
+	// not testing the content of this one
+	tables[0].MysqlTable = nil
 	assert.Equal(t, []*Table{
 		{
 			Name:          "customers",

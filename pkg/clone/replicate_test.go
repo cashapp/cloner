@@ -118,6 +118,7 @@ func TestReplicate(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	replicator, err := NewReplicator(*replicate)
+	require.NoError(t, err)
 
 	// Run replication in separate thread
 	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)

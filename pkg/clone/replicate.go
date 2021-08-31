@@ -797,7 +797,11 @@ type SnapshotReader struct {
 	sourceRetry RetryOptions
 }
 
-func NewSnapshotReader(config Replicate, source *sql.DB) *SnapshotReader {
+func NewSnapshotReader(config Replicate) (*SnapshotReader, error) {
+	source, err := config.Source.DB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	return &SnapshotReader{
 		config: config,
 		source: source,
@@ -807,7 +811,7 @@ func NewSnapshotReader(config Replicate, source *sql.DB) *SnapshotReader {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-	}
+	}, nil
 }
 
 func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChunk) error {
@@ -1149,7 +1153,10 @@ func (r *Replicator) removeOngoingChunk(chunk *OngoingChunk) {
 
 func (r *Replicator) snapshot(ctx context.Context) error {
 	// TODO prevent multiple snapshots from running at the same time (the second call should be a no op)
-	reader := NewSnapshotReader(r.config, r.source)
+	reader, err := NewSnapshotReader(r.config)
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	return reader.snapshot(ctx, r.chunks)
 }
 

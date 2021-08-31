@@ -728,24 +728,28 @@ func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position 
 }
 
 func (r *Replicator) readHeartbeat(ctx context.Context) error {
-	// TODO retries with backoff?
-	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.ReadTimeout)
-	defer cancel()
-	stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
-	row := r.target.QueryRowContext(timeoutCtx, stmt, r.config.TaskName)
-	var lastHeartbeat time.Time
-	err := row.Scan(&lastHeartbeat)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// We haven't received the first heartbeat yet
-			return nil
-		} else {
-			return errors.WithStack(err)
+	err := Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
+		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
+		row := r.target.QueryRowContext(ctx, stmt, r.config.TaskName)
+		var lastHeartbeat time.Time
+		err := row.Scan(&lastHeartbeat)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// We haven't received the first heartbeat yet
+				return nil
+			} else {
+				return errors.WithStack(err)
+			}
 		}
+		lag := time.Now().UTC().Sub(lastHeartbeat)
+		replicationLag.Set(float64(lag.Milliseconds()))
+		heartbeatsRead.Inc()
+		return nil
+	})
+	if err != nil {
+		logrus.WithError(err).Errorf("failed to read heartbeat: %v", err)
 	}
-	lag := time.Now().UTC().Sub(lastHeartbeat)
-	replicationLag.Set(float64(lag.Milliseconds()))
-	heartbeatsRead.Inc()
+	// Heartbeat errors are ignored
 	return nil
 }
 

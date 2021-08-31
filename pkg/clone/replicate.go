@@ -54,6 +54,13 @@ var (
 			Help: "The number of times we've successfully read heartbeats",
 		},
 	)
+	chunksSnapshotted = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "chunks_snapshotted",
+			Help: "How many chunks has been read, partitioned by table.",
+		},
+		[]string{"table"},
+	)
 )
 
 func init() {
@@ -62,6 +69,7 @@ func init() {
 	prometheus.MustRegister(eventsIgnored)
 	prometheus.MustRegister(replicationLag)
 	prometheus.MustRegister(heartbeatsRead)
+	prometheus.MustRegister(chunksSnapshotted)
 }
 
 type Replicate struct {
@@ -184,6 +192,7 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 		}
 		r.config.ServerID = hasher.Sum32()
 	}
+	logrus.Infof("using replication server id: %d", r.config.ServerID)
 	r.sourceSchema, err = r.config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -836,7 +845,8 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 			}
 			g.Go(func() error {
 				defer chunkParallelism.Release(1)
-				return r.snapshotChunk(ctx, chunk, chunkChan)
+				err := r.snapshotChunk(ctx, chunk, chunkChan)
+				return errors.WithStack(err)
 			})
 		}
 		return nil
@@ -856,6 +866,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 				defer tableParallelism.Release(1)
 
 				tableChunks, err := generateTableChunks(ctx, table, r.source, r.sourceRetry)
+				logrus.Infof("table '%s' chunked into %d chunks", table.Name, len(tableChunks))
 				for _, chunk := range tableChunks {
 					chunks <- chunk
 				}
@@ -876,7 +887,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 	if err != nil {
 		logrus.Infof("snapshot reads success")
 	}
-	return err
+	return errors.WithStack(err)
 
 	// load tables to snapshot
 	// for each table:
@@ -956,7 +967,10 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 		return errors.WithStack(err)
 	}
 
-	// Second transaction: ,//   1. insert the high watermark
+	chunksSnapshotted.WithLabelValues(chunk.Table.Name).Inc()
+
+	// Second transaction:
+	//   1. insert the high watermark
 	//   2. commit the transaction
 	return Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
 		return autotx.Transact(ctx, r.source, func(tx *sql.Tx) error {

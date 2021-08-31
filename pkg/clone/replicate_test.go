@@ -117,11 +117,13 @@ func TestReplicate(t *testing.T) {
 	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
 	time.Sleep(5 * time.Second)
 
+	replicator, err := NewReplicator(*replicate)
+
 	// Run replication in separate thread
 	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
 	defer cancelFirstReplication()
 	g.Go(func() error {
-		err := replicate.run(firstReplicationCtx)
+		err := replicator.run(firstReplicationCtx)
 		if isCancelledError(err) {
 			return nil
 		}
@@ -133,7 +135,7 @@ func TestReplicate(t *testing.T) {
 
 	// Now do the snapshot
 	g.Go(func() error {
-		return currentReplicator.snapshot(ctx)
+		return replicator.snapshot(ctx)
 	})
 
 	// Wait for the snapshot to run
@@ -155,7 +157,7 @@ func TestReplicate(t *testing.T) {
 	// Wait for a little bit to let some replication lag build up then restart the replicator
 	time.Sleep(5 * time.Second)
 	g.Go(func() error {
-		err := replicate.run(ctx)
+		err := replicator.run(ctx)
 		return err
 	})
 	err = waitFor(ctx, someReplicationLag(ctx, targetDB))

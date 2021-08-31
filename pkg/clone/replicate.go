@@ -865,11 +865,8 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 			g.Go(func() error {
 				defer tableParallelism.Release(1)
 
-				tableChunks, err := generateTableChunks(ctx, table, r.source, r.sourceRetry)
-				logrus.Infof("table '%s' chunked into %d chunks", table.Name, len(tableChunks))
-				for _, chunk := range tableChunks {
-					chunks <- chunk
-				}
+				err := generateTableChunksAsync(ctx, table, r.source, chunks, r.sourceRetry)
+				logrus.Infof("table '%s' chunking done", table.Name)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -989,7 +986,7 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 // writeChunk synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error {
-	logrus.Infof("writing chunk %d-%d", chunk.Chunk.Start, chunk.Chunk.End)
+	logrus.Infof("writing chunk %v [%d-%d)", chunk.Chunk.Table.Name, chunk.Chunk.Start, chunk.Chunk.End)
 	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
@@ -1000,14 +997,12 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	logrus.Infof("diffs: %v", len(diffs))
 
 	// Batch up the diffs
 	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	logrus.Infof("batches: %v", len(batches))
 
 	writeCount := 0
 
@@ -1225,7 +1220,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			}
 			r.removeOngoingChunk(ongoingChunk)
 			if len(r.ongoingChunks) == 0 {
-				logrus.Infof("all snapshot chunks written: %v", len(r.ongoingChunks))
+				logrus.Infof("all snapshot chunks written")
 			}
 		}
 	}

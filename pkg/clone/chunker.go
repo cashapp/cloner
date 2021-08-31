@@ -7,6 +7,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"io"
+	"sync"
 )
 
 type PeekingIdStreamer interface {
@@ -163,13 +164,32 @@ func (c *Chunk) ContainsRow(row []interface{}) bool {
 	return id >= c.Start && id < c.End
 }
 
-func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
+func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) (chunks []Chunk, err error) {
+	chunkCh := make(chan Chunk)
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for c := range chunkCh {
+			chunks = append(chunks, c)
+		}
+	}()
+	err = generateTableChunksAsync(ctx, table, source, chunkCh, retry)
+	close(chunkCh)
+	if err != nil {
+		return chunks, errors.WithStack(err)
+	}
+	wg.Done()
+	return chunks, nil
+}
+
+// generateTableChunksAsync generates chunks async on the current goroutine
+func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB, chunks chan Chunk, retry RetryOptions) error {
 	chunkSize := table.Config.ChunkSize
 
 	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error
-	var chunks []Chunk
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
@@ -179,22 +199,26 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
 		if errors.Is(err, io.EOF) {
-			return nil, nil
+			return nil
 		}
 		if err != nil {
-			return nil, errors.WithStack(err)
+			return errors.WithStack(err)
 		}
 		currentChunkSize++
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			chunks = append(chunks, Chunk{
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
 				End:   id,
 				Size:  currentChunkSize,
-			})
+			}:
+			}
 			seq++
 			// Next id should be the next start id
 			startId = id
@@ -211,13 +235,17 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 			startId = 0
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		chunks = append(chunks, Chunk{
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case chunks <- Chunk{
 			Table: table,
 			Seq:   seq,
 			Start: startId,
 			End:   id + 1,
 			Size:  currentChunkSize,
-		})
+		}:
+		}
 	}
-	return chunks, nil
+	return nil
 }

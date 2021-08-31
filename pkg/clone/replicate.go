@@ -79,24 +79,8 @@ type Replicate struct {
 	CreateTables       bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
 }
 
-var currentReplicator *Replicator
-
 // Run replicates from source to target
 func (cmd *Replicate) Run() error {
-	http.HandleFunc("/snapshot", func(writer http.ResponseWriter, request *http.Request) {
-		go func() {
-			if currentReplicator == nil {
-				return
-			}
-			err := currentReplicator.snapshot(context.Background())
-			if err != nil {
-				logrus.Errorf("failed to snapshot: %v", err)
-			}
-		}()
-		// TODO return status/errors back to the caller?
-		_, _ = writer.Write([]byte(""))
-	})
-
 	var err error
 
 	start := time.Now()
@@ -135,7 +119,16 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	currentReplicator = replicator
+	http.HandleFunc("/snapshot", func(writer http.ResponseWriter, request *http.Request) {
+		go func() {
+			err := replicator.snapshot(context.Background())
+			if err != nil {
+				logrus.Errorf("failed to snapshot: %v", err)
+			}
+		}()
+		// TODO return status/errors back to the caller?
+		_, _ = writer.Write([]byte(""))
+	})
 	return replicator.run(ctx)
 }
 

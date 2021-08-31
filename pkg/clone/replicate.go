@@ -85,7 +85,7 @@ type Replicate struct {
 	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
 	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
 	CreateTables       bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
-	ChunkBufferSize    int           `help:"Create the heartbeat table if it does not exist" default:"true"`
+	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
 }
 
 // Run replicates from source to target
@@ -182,7 +182,7 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 			Timeout:       config.ReadTimeout,
 		},
 		schemaCache:     make(map[uint64]*schema.Table),
-		chunks:          make(chan OngoingChunk),
+		chunks:          make(chan OngoingChunk, config.ChunkBufferSize),
 		snapshotRunning: atomic.NewBool(false),
 	}
 	if r.config.ServerID == 0 {
@@ -962,6 +962,9 @@ func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks 
 			if err != nil {
 				return errors.WithStack(err)
 			}
+			// TODO This is potentially and issue: we have a transaction with a write lock on the watermark table and
+			//      then we potentially block on posting on the chunks channel which might be back-pressured since we
+			//      can't keep up with writing chunks
 			select {
 			case chunks <- OngoingChunk{Chunk: chunk, Rows: rows}:
 			case <-ctx.Done():

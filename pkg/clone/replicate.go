@@ -216,6 +216,11 @@ func (r *Replicator) run(ctx context.Context) error {
 	g.Go(func() error {
 		b := backoff.NewExponentialBackOff()
 		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
 			err := r.replicate(ctx, b)
 			logrus.WithError(err).Errorf("replication loop failed, restarting")
 			time.Sleep(b.NextBackOff())

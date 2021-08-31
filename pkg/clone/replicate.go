@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
@@ -209,9 +210,12 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return errors.WithStack(Retry(ctx, r.targetRetry, func(ctx context.Context) error {
-			return errors.WithStack(r.replicate(ctx))
-		}))
+		b := backoff.NewExponentialBackOff()
+		for {
+			err := r.replicate(ctx, b)
+			logrus.WithError(err).Errorf("replication loop failed, restarting")
+			time.Sleep(b.NextBackOff())
+		}
 	})
 	if r.config.HeartbeatFrequency > 0 {
 		g.Go(func() error {
@@ -264,7 +268,7 @@ func (r *Replicator) init(ctx context.Context) error {
 	return nil
 }
 
-func (r *Replicator) replicate(ctx context.Context) error {
+func (r *Replicator) replicate(ctx context.Context, b *backoff.ExponentialBackOff) error {
 	// TODO acquire lease, there should only be a single replicator running per source->target pair
 	var err error
 
@@ -344,6 +348,8 @@ func (r *Replicator) replicate(ctx context.Context) error {
 				return errors.WithStack(err)
 			}
 			r.tx = nil
+			// We've committed a transaction, we can reset the backoff
+			b.Reset()
 		default:
 			ignored = true
 		}

@@ -180,7 +180,7 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 	if err != nil {
 		return chunks, errors.WithStack(err)
 	}
-	wg.Done()
+	wg.Wait()
 	return chunks, nil
 }
 

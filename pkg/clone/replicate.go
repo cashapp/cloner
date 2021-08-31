@@ -10,6 +10,7 @@ import (
 	"github.com/mightyguava/autotx"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	"hash/fnv"
@@ -92,6 +93,7 @@ func (cmd *Replicate) Run() error {
 				logrus.Errorf("failed to snapshot: %v", err)
 			}
 		}()
+		// TODO return status/errors back to the caller?
 		_, _ = writer.Write([]byte(""))
 	})
 
@@ -157,7 +159,8 @@ type Replicator struct {
 	tx *sql.Tx
 
 	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
-	ongoingChunks []*OngoingChunk
+	ongoingChunks   []*OngoingChunk
+	snapshotRunning *atomic.Bool
 }
 
 func NewReplicator(config Replicate) (*Replicator, error) {
@@ -176,8 +179,9 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		schemaCache: make(map[uint64]*schema.Table),
-		chunks:      make(chan OngoingChunk),
+		schemaCache:     make(map[uint64]*schema.Table),
+		chunks:          make(chan OngoingChunk),
+		snapshotRunning: atomic.NewBool(false),
 	}
 	if r.config.ServerID == 0 {
 		hasher := fnv.New32()
@@ -1151,13 +1155,21 @@ func (r *Replicator) removeOngoingChunk(chunk *OngoingChunk) {
 	r.ongoingChunks = r.ongoingChunks[:n]
 }
 
+// snapshot runs a snapshot synchronously on the current goroutine unless a snapshot is already running
 func (r *Replicator) snapshot(ctx context.Context) error {
-	// TODO prevent multiple snapshots from running at the same time (the second call should be a no op)
+	swapped := r.snapshotRunning.CAS(false, true)
+	if !swapped {
+		// Someone else won the race
+		return nil
+	}
+	defer r.snapshotRunning.Store(false)
+
 	reader, err := NewSnapshotReader(r.config)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	return reader.snapshot(ctx, r.chunks)
+	err = reader.snapshot(ctx, r.chunks)
+	return errors.WithStack(err)
 }
 
 func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogEvent, event *replication.RowsEvent) (bool, error) {

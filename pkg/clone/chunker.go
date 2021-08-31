@@ -164,7 +164,8 @@ func (c *Chunk) ContainsRow(row []interface{}) bool {
 	return id >= c.Start && id < c.End
 }
 
-func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) (chunks []Chunk, err error) {
+func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
+	var chunks []Chunk
 	chunkCh := make(chan Chunk)
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
@@ -174,7 +175,7 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 			chunks = append(chunks, c)
 		}
 	}()
-	err = generateTableChunksAsync(ctx, table, source, chunkCh, retry)
+	err := generateTableChunksAsync(ctx, table, source, chunkCh, retry)
 	close(chunkCh)
 	if err != nil {
 		return chunks, errors.WithStack(err)

@@ -85,6 +85,7 @@ type Replicate struct {
 	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
 	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
 	CreateTables       bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
+	ChunkBufferSize    int           `help:"Create the heartbeat table if it does not exist" default:"true"`
 }
 
 // Run replicates from source to target
@@ -208,7 +209,9 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return r.replicate(ctx)
+		return errors.WithStack(Retry(ctx, r.targetRetry, func(ctx context.Context) error {
+			return errors.WithStack(r.replicate(ctx))
+		}))
 	})
 	if r.config.HeartbeatFrequency > 0 {
 		g.Go(func() error {
@@ -728,7 +731,7 @@ func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position 
 }
 
 func (r *Replicator) readHeartbeat(ctx context.Context) error {
-	err := Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
+	err := Retry(ctx, r.targetRetry, func(ctx context.Context) error {
 		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
 		row := r.target.QueryRowContext(ctx, stmt, r.config.TaskName)
 		var lastHeartbeat time.Time
@@ -835,7 +838,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 
 	tableParallelism := semaphore.NewWeighted(r.config.TableParallelism)
 
-	chunks := make(chan Chunk)
+	chunks := make(chan Chunk, r.config.ChunkBufferSize)
 
 	chunkParallelism := semaphore.NewWeighted(r.config.ChunkParallelism)
 
@@ -869,6 +872,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 			g.Go(func() error {
 				defer tableParallelism.Release(1)
 
+				logrus.Infof("table '%s' chunking start", table.Name)
 				err := generateTableChunksAsync(ctx, table, r.source, chunks, r.sourceRetry)
 				logrus.Infof("table '%s' chunking done", table.Name)
 				if err != nil {
@@ -932,6 +936,8 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
  */
 
 func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks chan OngoingChunk) error {
+	logrus.Infof("snapshotting chunk %v [%d-%d)", chunk.Table.Name, chunk.Start, chunk.End)
+
 	// First transaction:
 	//   1. insert the low watermark
 	//   2. read the entire chunk
@@ -1020,6 +1026,8 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 	}
 
 	logrus.Infof("chunk rows written: %v", writeCount)
+
+	chunksProcessed.WithLabelValues(chunk.Chunk.Table.Name).Inc()
 
 	return nil
 }

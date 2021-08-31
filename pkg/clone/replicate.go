@@ -195,6 +195,10 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 		r.config.ServerID = hasher.Sum32()
 	}
 	logrus.Infof("using replication server id: %d", r.config.ServerID)
+	r.syncerCfg, err = r.config.Source.BinlogSyncerConfig(r.config.ServerID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	r.sourceSchema, err = r.config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -269,13 +273,8 @@ func (r *Replicator) init(ctx context.Context) error {
 }
 
 func (r *Replicator) replicate(ctx context.Context, b *backoff.ExponentialBackOff) error {
-	// TODO acquire lease, there should only be a single replicator running per source->target pair
 	var err error
 
-	r.syncerCfg, err = r.config.Source.BinlogSyncerConfig(r.config.ServerID)
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	syncer := replication.NewBinlogSyncer(r.syncerCfg)
 	defer syncer.Close()
 

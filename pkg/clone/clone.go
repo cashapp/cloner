@@ -174,6 +174,9 @@ func (cmd *Clone) run() error {
 					}
 				}
 
+				// All diffing done, close the diffs channel
+				close(diffs)
+
 				return nil
 			})
 		}

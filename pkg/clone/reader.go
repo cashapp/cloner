@@ -232,9 +232,6 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-
-	// All diffing done, close the diffs channel
-	close(diffsCh)
 	return nil
 }
 

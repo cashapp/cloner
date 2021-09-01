@@ -114,8 +114,6 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
-
 	diffs := make(chan Diff)
 	// Reporter
 	var foundDiffs []Diff
@@ -126,34 +124,48 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		return nil
 	})
 
-	for _, table := range tables {
-		err = tableParallelism.Acquire(ctx, 1)
-		if err != nil {
-			return nil, errors.WithStack(err)
+	g.Go(func() error {
+		g, ctx := errgroup.WithContext(ctx)
+		tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
+
+		for _, table := range tables {
+			err = tableParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			g.Go(func() error {
+				defer tableParallelism.Release(1)
+
+				reader := NewReader(
+					cmd.ReaderConfig,
+					table,
+					sourceReader,
+					sourceLimiter,
+					targetReader,
+					targetLimiter,
+				)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				err = reader.Diff(ctx, diffs)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				return nil
+			})
 		}
-		g.Go(func() error {
-			defer tableParallelism.Release(1)
 
-			reader := NewReader(
-				cmd.ReaderConfig,
-				table,
-				sourceReader,
-				sourceLimiter,
-				targetReader,
-				targetLimiter,
-			)
-			if err != nil {
-				return errors.WithStack(err)
-			}
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
 
-			err = reader.Diff(ctx, diffs)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			return nil
-		})
-	}
+		// All diffing done, close the diffs channel
+		close(diffs)
+		return nil
+	})
 
 	return foundDiffs, g.Wait()
 }

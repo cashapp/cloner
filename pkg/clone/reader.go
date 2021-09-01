@@ -104,6 +104,12 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 				return nil
 			}
 
+			if len(diffs) > 0 {
+				chunksWithDiffs.WithLabelValues(chunk.Table.Name).Inc()
+			}
+
+			chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
 			for _, diff := range diffs {
 				select {
 				case diffsCh <- diff:

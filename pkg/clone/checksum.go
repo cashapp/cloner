@@ -115,6 +115,7 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	g, ctx := errgroup.WithContext(ctx)
 
 	diffs := make(chan Diff)
+
 	// Reporter
 	var foundDiffs []Diff
 	g.Go(func() error {

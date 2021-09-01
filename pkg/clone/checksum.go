@@ -47,7 +47,9 @@ func (cmd *Checksum) Run() error {
 	}
 
 	if len(diffs) > 0 {
-		// TODO log a more detailed diff report
+		for _, diff := range diffs {
+			logrus.Warnf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
+		}
 		return errors.Errorf("found diffs")
 	}
 	return errors.WithStack(err)

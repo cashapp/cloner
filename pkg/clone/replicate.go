@@ -900,7 +900,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 
 	err = g.Wait()
 	if err != nil {
-		logrus.Infof("snapshot reads success")
+		logrus.Infof("snapshot reads done")
 	}
 	return errors.WithStack(err)
 
@@ -1228,25 +1228,30 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 		if err != nil {
 			return true, errors.WithStack(err)
 		}
-		if ongoingChunk != nil {
-			ongoingChunk.InsideWatermarks = true
+		if ongoingChunk == nil {
+			logrus.Warnf("could not find chunk for high watermark, we may be receiving the watermark events before the chunk")
+			return true, nil
 		}
+		ongoingChunk.InsideWatermarks = true
 	}
 	if high.(int8) == 1 {
 		ongoingChunk, err := r.findOngoingChunkFromWatermark(event)
 		if err != nil {
 			return true, errors.WithStack(err)
 		}
-		if ongoingChunk != nil {
-			ongoingChunk.InsideWatermarks = false
-			err = r.writeChunk(ctx, ongoingChunk)
-			if err != nil {
-				return true, errors.WithStack(err)
-			}
-			r.removeOngoingChunk(ongoingChunk)
-			if len(r.ongoingChunks) == 0 {
-				logrus.Infof("all snapshot chunks written")
-			}
+		if ongoingChunk == nil {
+			logrus.Warnf("could not find chunk for high watermark, we may be receiving the watermark events before the chunk")
+			return true, nil
+		}
+
+		ongoingChunk.InsideWatermarks = false
+		err = r.writeChunk(ctx, ongoingChunk)
+		if err != nil {
+			return true, errors.WithStack(err)
+		}
+		r.removeOngoingChunk(ongoingChunk)
+		if len(r.ongoingChunks) == 0 {
+			logrus.Infof("all snapshot chunks written")
 		}
 	}
 	return true, nil

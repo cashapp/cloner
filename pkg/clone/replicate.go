@@ -1229,7 +1229,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			return true, errors.WithStack(err)
 		}
 		if ongoingChunk == nil {
-			logrus.Warnf("could not find chunk for high watermark, we may be receiving the watermark events before the chunk")
+			logrus.Warnf("could not find chunk for low watermark, we may be receiving the watermark events before the chunk")
 			return true, nil
 		}
 		ongoingChunk.InsideWatermarks = true

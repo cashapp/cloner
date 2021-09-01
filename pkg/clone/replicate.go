@@ -886,7 +886,7 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 				err := generateTableChunksAsync(ctx, table, r.source, chunks, r.sourceRetry)
 				logrus.Infof("table '%s' chunking done", table.Name)
 				if err != nil {
-					return errors.WithStack(err)
+					return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
 				}
 
 				return nil

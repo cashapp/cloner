@@ -245,14 +245,6 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	// Yep, hardcoded, maybe we should fix that at some point...
-	idColumn := "id"
-	idColumnIndex := -1
-	for i, column := range columnNames {
-		if column == idColumn {
-			idColumnIndex = i
-		}
-	}
 
 	estimatedRows, err := estimatedRows(ctx, databaseType, conn, schema, tableName)
 	if err != nil {
@@ -270,9 +262,17 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	if len(mysqlTable.PKColumns) != 1 {
 		return nil, errors.Errorf("currently only support a single PK column")
 	}
-	column := mysqlTable.GetPKColumn(0)
-	if column.Type != mysqlschema.TYPE_NUMBER {
+	pkColumn := mysqlTable.GetPKColumn(0)
+	if pkColumn.Type != mysqlschema.TYPE_NUMBER {
 		return nil, errors.Errorf("currently only support integer PK column")
+	}
+
+	idColumn := pkColumn.Name
+	idColumnIndex := -1
+	for i, column := range columnNames {
+		if column == idColumn {
+			idColumnIndex = i
+		}
 	}
 
 	return &Table{

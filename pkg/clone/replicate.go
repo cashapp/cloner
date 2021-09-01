@@ -942,9 +942,6 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 	//       log an error (this should only happen if the cloner had a crash during a snapshot)
 }
 
-/*
- */
-
 func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks chan OngoingChunk) error {
 	logrus.Infof("snapshotting chunk %v [%d-%d)", chunk.Table.Name, chunk.Start, chunk.End)
 
@@ -1021,6 +1018,10 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 		return errors.WithStack(err)
 	}
 
+	if len(diffs) > 0 {
+		chunksWithDiffs.WithLabelValues(chunk.Chunk.Table.Name).Inc()
+	}
+
 	// Batch up the diffs
 	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
@@ -1047,7 +1048,6 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *OngoingChunk) error 
 
 // reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
 func (r *Replicator) reconcileOngoingChunks(e *replication.BinlogEvent, event *replication.RowsEvent) error {
-	// TODO this method deserves a LOT of tests!
 	// should be O(<rows in the RowsEvent> * lg <rows in the chunk>) given that we can binary chop into chunk
 	// RowsEvent is usually not that large so I don't think we need to index anything, that will probably be slower
 	tableSchema, err := r.getTableSchema(event.Table)

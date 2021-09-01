@@ -943,8 +943,6 @@ func (r *SnapshotReader) snapshot(ctx context.Context, chunkChan chan OngoingChu
 }
 
 func (r *SnapshotReader) snapshotChunk(ctx context.Context, chunk Chunk, chunks chan OngoingChunk) error {
-	logrus.Infof("snapshotting chunk %v [%d-%d)", chunk.Table.Name, chunk.Start, chunk.End)
-
 	// First transaction:
 	//   1. insert the low watermark
 	//   2. read the entire chunk
@@ -1168,6 +1166,8 @@ func (r *Replicator) findOngoingChunkFromWatermark(event *replication.RowsEvent)
 			return chunk, nil
 		}
 	}
+	logrus.Warnf("could not find chunk for watermark for table '%s', "+
+		"we may be receiving the watermark events before the chunk", tableName)
 	return nil, nil
 }
 
@@ -1229,7 +1229,6 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			return true, errors.WithStack(err)
 		}
 		if ongoingChunk == nil {
-			logrus.Warnf("could not find chunk for low watermark, we may be receiving the watermark events before the chunk")
 			return true, nil
 		}
 		ongoingChunk.InsideWatermarks = true
@@ -1240,7 +1239,6 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			return true, errors.WithStack(err)
 		}
 		if ongoingChunk == nil {
-			logrus.Warnf("could not find chunk for high watermark, we may be receiving the watermark events before the chunk")
 			return true, nil
 		}
 

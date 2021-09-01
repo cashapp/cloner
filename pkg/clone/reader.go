@@ -69,6 +69,7 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		close(chunks)
 		return nil
 	})
 

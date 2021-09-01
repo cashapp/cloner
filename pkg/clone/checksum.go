@@ -47,10 +47,24 @@ func (cmd *Checksum) Run() error {
 	}
 
 	if len(diffs) > 0 {
+		inserts := 0
+		deletes := 0
+		updates := 0
 		for _, diff := range diffs {
-			logrus.Warnf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
+			switch diff.Type {
+			case Update:
+				updates++
+			case Delete:
+				deletes++
+			case Insert:
+				inserts++
+			}
+			logrus.WithField("table", diff.Row.Table.Name).
+				WithField("type", diff.Type).
+				Warnf("diff %v %v id=%v should=%v actual=%v\n",
+					diff.Row.Table.Name, diff.Type, diff.Row.ID, diff.Row, diff.Target)
 		}
-		return errors.Errorf("found diffs")
+		return errors.Errorf("found diffs inserts=%d deletes=%d updates=%d", inserts, deletes, updates)
 	}
 	return errors.WithStack(err)
 }

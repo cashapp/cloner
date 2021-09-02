@@ -1146,6 +1146,10 @@ func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
 	if r.chunks == nil {
 		// If there are no ongoing chunks and no chunks to be snapshotted then we are done with the snapshot
 		logrus.Infof("snapshot done")
+		chunksEnqueued.Reset()
+		chunksProcessed.Reset()
+		rowsProcessed.Reset()
+		chunksWithDiffs.Reset()
 		r.snapshotRunning.Store(false)
 		return nil
 	}

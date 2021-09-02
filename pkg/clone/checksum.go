@@ -43,7 +43,7 @@ func (cmd *Checksum) Run() error {
 		}
 		logger.WithError(err).Errorf("error: %+v", err)
 	} else {
-		logger.Infof("full checksum success")
+		logger.Infof("full checksum done")
 	}
 
 	if len(diffs) > 0 {
@@ -61,10 +61,11 @@ func (cmd *Checksum) Run() error {
 			}
 			logrus.WithField("table", diff.Row.Table.Name).
 				WithField("type", diff.Type).
-				Warnf("diff %v %v id=%v should=%v actual=%v\n",
-					diff.Row.Table.Name, diff.Type, diff.Row.ID, diff.Row, diff.Target)
+				Warnf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
 		}
 		return errors.Errorf("found diffs inserts=%d deletes=%d updates=%d", inserts, deletes, updates)
+	} else {
+		logger.Infof("no diffs found")
 	}
 	return errors.WithStack(err)
 }

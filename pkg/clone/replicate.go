@@ -810,7 +810,6 @@ func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
 // writeChunk synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (r *Replicator) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error {
-	logrus.Infof("writing chunk %v [%d-%d)", chunk.Chunk.Table.Name, chunk.Chunk.Start, chunk.Chunk.End)
 	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
@@ -842,8 +841,6 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error
 			return errors.WithStack(err)
 		}
 	}
-
-	logrus.Infof("chunk rows written: %v", writeCount)
 
 	chunksProcessed.WithLabelValues(chunk.Chunk.Table.Name).Inc()
 
@@ -1055,9 +1052,6 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 			return true, errors.WithStack(err)
 		}
 		r.removeOngoingChunk(ongoingChunk)
-		if len(r.ongoingChunks) == 0 {
-			logrus.Infof("all snapshot chunks written")
-		}
 	}
 	return true, nil
 }

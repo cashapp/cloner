@@ -139,7 +139,7 @@ func TestReplicate(t *testing.T) {
 		return replicator.snapshot(ctx)
 	})
 
-	// Wait for the snapshot to run
+	// Wait for the snapshot to complete
 	time.Sleep(5 * time.Second)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
@@ -449,7 +449,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 					Data:  row,
 				}
 			}
-			chunk := &OngoingChunk{
+			chunk := &ChunkSnapshot{
 				InsideWatermarks: true,
 				Rows:             inputRows,
 				Chunk: Chunk{

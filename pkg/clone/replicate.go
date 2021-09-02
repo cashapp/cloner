@@ -843,6 +843,7 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error
 	}
 
 	chunksProcessed.WithLabelValues(chunk.Chunk.Table.Name).Inc()
+	rowsProcessed.WithLabelValues(chunk.Chunk.Table.Name).Add(float64(len(chunk.Rows)))
 
 	return nil
 }

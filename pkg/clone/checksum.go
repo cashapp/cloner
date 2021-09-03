@@ -60,8 +60,8 @@ func (cmd *Checksum) Run() error {
 				inserts++
 			}
 			logrus.WithField("table", diff.Row.Table.Name).
-				WithField("type", diff.Type).
-				Warnf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
+				WithField("diff_type", diff.Type).
+				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
 		}
 		return errors.Errorf("found diffs inserts=%d deletes=%d updates=%d", inserts, deletes, updates)
 	} else {

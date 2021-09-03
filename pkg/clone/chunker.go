@@ -10,6 +10,32 @@ import (
 	"sync"
 )
 
+// Chunk is an chunk of rows closed to the left [start,end)
+type Chunk struct {
+	Table *Table
+
+	// Seq is the sequence number of chunks for this table
+	Seq int64
+
+	// Start is the first id of the chunk inclusive
+	Start int64
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
+	End int64 // exclusive
+
+	// First chunk of a table
+	First bool
+	// Last chunk of a table
+	Last bool
+
+	// Size is the expected number of rows in the chunk
+	Size int
+}
+
+func (c *Chunk) ContainsRow(row []interface{}) bool {
+	id := c.Table.PkOfRow(row)
+	return id >= c.Start && id < c.End
+}
+
 type PeekingIdStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) (int64, bool, error)
@@ -142,28 +168,6 @@ func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) Pe
 	}
 }
 
-// Chunk is an chunk of rows closed to the left [start,end)
-type Chunk struct {
-	Table *Table
-
-	// Seq is the sequence number of chunks for this table
-	Seq int64
-
-	// Start is the first id of the chunk inclusive
-	Start int64
-
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
-	End int64 // exclusive
-
-	// Size is the expected number of rows in the chunk
-	Size int
-}
-
-func (c *Chunk) ContainsRow(row []interface{}) bool {
-	id := c.Table.PkOfRow(row)
-	return id >= c.Start && id < c.End
-}
-
 func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
 	var chunks []Chunk
 	chunkCh := make(chan Chunk)
@@ -210,15 +214,17 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
 			case chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
 				End:   id,
+				First: first,
+				Last:  !hasNext,
 				Size:  currentChunkSize,
 			}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			seq++
 			// Next id should be the next start id
@@ -237,15 +243,17 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
 		case chunks <- Chunk{
 			Table: table,
 			Seq:   seq,
 			Start: startId,
 			End:   id + 1,
+			First: first,
+			Last:  true,
 			Size:  currentChunkSize,
 		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 	return nil

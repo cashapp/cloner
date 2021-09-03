@@ -11,6 +11,8 @@ import (
 type testChunk struct {
 	Start int64
 	End   int64
+	First bool
+	Last  bool
 }
 
 func TestChunker(t *testing.T) {
@@ -43,13 +45,14 @@ func TestChunker(t *testing.T) {
 
 	result := make([]testChunk, len(chunks))
 	for i, chunk := range chunks {
-		result[i] = toTestChunk2(chunk)
+		result[i] = toTestChunk(chunk)
 	}
 
 	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
 			End:   21,
+			First: true,
 		},
 		{
 			Start: 21,
@@ -70,6 +73,7 @@ func TestChunker(t *testing.T) {
 		{
 			Start: 95,
 			End:   100,
+			Last:  true,
 		},
 	}, result)
 }
@@ -141,20 +145,24 @@ func TestChunkerSingleRow(t *testing.T) {
 	assert.NoError(t, err)
 	var result []testChunk
 	for _, chunk := range chunks {
-		result = append(result, toTestChunk2(chunk))
+		result = append(result, toTestChunk(chunk))
 	}
 
 	assert.Equal(t, []testChunk{
 		{
 			Start: 0,
 			End:   3,
+			First: true,
+			Last:  true,
 		},
 	}, result)
 }
 
-func toTestChunk2(chunk Chunk) testChunk {
+func toTestChunk(chunk Chunk) testChunk {
 	return testChunk{
 		Start: chunk.Start,
 		End:   chunk.End,
+		First: chunk.First,
+		Last:  chunk.Last,
 	}
 }

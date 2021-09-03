@@ -669,11 +669,13 @@ func (r *Replicator) writeCheckpoint(ctx context.Context, position mysql.Positio
 }
 
 func (r *Replicator) readStartingPoint(ctx context.Context) (mysql.Position, *mysql.GTIDSet, error) {
+	logger := logrus.WithContext(ctx).WithField("task", "replicate")
+
 	file, position, executedGtidSet, err := r.readCheckpoint(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			file, position, executedGtidSet, err = r.readMasterPosition(ctx)
-			logrus.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
+			logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
 			if err != nil {
 				return mysql.Position{}, nil, errors.WithStack(err)
 			}
@@ -685,7 +687,7 @@ func (r *Replicator) readStartingPoint(ctx context.Context) (mysql.Position, *my
 		if err != nil {
 			return mysql.Position{}, nil, errors.WithStack(err)
 		}
-		logrus.Infof("re-starting replication from %s:%d gtid=%s (master is currently at %s:%d gtid=%s)",
+		logger.Infof("re-starting replication from %s:%d gtid=%s (master is currently at %s:%d gtid=%s)",
 			file, position, executedGtidSet, masterFile, masterPos, masterGtidSet)
 	}
 
@@ -734,6 +736,8 @@ func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position 
 }
 
 func (r *Replicator) readHeartbeat(ctx context.Context) error {
+	logger := logrus.WithContext(ctx).WithField("task", "heartbeat")
+
 	err := Retry(ctx, r.targetRetry, func(ctx context.Context) error {
 		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
 		row := r.target.QueryRowContext(ctx, stmt, r.config.TaskName)
@@ -753,7 +757,7 @@ func (r *Replicator) readHeartbeat(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
-		logrus.WithError(err).Errorf("failed to read heartbeat: %v", err)
+		logger.WithError(err).Errorf("failed to read heartbeat: %v", err)
 	}
 	// Heartbeat errors are ignored
 	return nil
@@ -883,7 +887,6 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *
 				// The row is outside of our range, we can skip it
 				continue
 			}
-			logrus.Infof("reconciling deleted row with ongoing chunk: %v", row)
 			// find the row using binary chop (the chunk rows are sorted)
 			existingRow, i, err := c.findRow(row)
 			if existingRow == nil {
@@ -906,12 +909,10 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *
 				return errors.WithStack(err)
 			}
 			if existingRow == nil {
-				logrus.Infof("reconciling inserted row with ongoing chunk: %v", row)
 				// This is either an insert or an update of a row that is deleted after the low watermark but before
 				// the chunk read, either way we just insert it and if the delete event comes we take it away again
 				c.insertRow(i, row)
 			} else {
-				logrus.Infof("reconciling updated row with ongoing chunk: %v", row)
 				// We found a matching row, it must be an update
 				c.updateRow(i, row)
 			}
@@ -951,6 +952,8 @@ func (r *Replicator) handleRowsEvent(ctx context.Context, e *replication.BinlogE
 }
 
 func (r *Replicator) findOngoingChunkFromWatermark(event *replication.RowsEvent) (*ChunkSnapshot, error) {
+	logger := logrus.WithField("task", "replicate")
+
 	tableSchema, err := r.getTableSchema(event.Table)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -970,12 +973,16 @@ func (r *Replicator) findOngoingChunkFromWatermark(event *replication.RowsEvent)
 			return chunk, nil
 		}
 	}
-	logrus.Warnf("could not find chunk for watermark for table '%s', "+
-		"we may be receiving the watermark events before the chunk", tableName)
+	logger.Warnf("could not find chunk for watermark for table '%s', "+
+		"we may be receiving the watermark events before the chunk "+
+		"or this is a watermark left behind from an earlier failed snapshot "+
+		"attempt that crashed before it completed", tableName)
 	return nil, nil
 }
 
 func (r *Replicator) removeOngoingChunk(chunk *ChunkSnapshot) {
+	logger := logrus.WithField("task", "replicate")
+
 	n := 0
 	for _, x := range r.ongoingChunks {
 		if x != chunk {
@@ -984,6 +991,10 @@ func (r *Replicator) removeOngoingChunk(chunk *ChunkSnapshot) {
 		}
 	}
 	r.ongoingChunks = r.ongoingChunks[:n]
+	if chunk.Chunk.Last {
+		logger.WithField("table", chunk.Chunk.Table.Name).
+			Infof("'%s' snapshot done", chunk.Chunk.Table.Name)
+	}
 }
 
 // snapshot runs a snapshot asynchronously unless a snapshot is already running
@@ -996,9 +1007,10 @@ func (r *Replicator) snapshot(ctx context.Context) error {
 	r.chunks = make(chan Chunk, r.config.ChunkBufferSize)
 
 	go func() {
+		logger := logrus.WithContext(ctx).WithField("task", "chunking")
 		err := r.chunkTables(ctx)
 		if err != nil {
-			logrus.WithError(err).Errorf("failed to chunk tables: %v", err)
+			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
 		}
 	}()
 	return nil
@@ -1080,9 +1092,9 @@ func (r *Replicator) chunkTables(ctx context.Context) error {
 			defer tableParallelism.Release(1)
 
 			logger := logger.WithField("table", table.Name)
-			logger.Infof("table '%s' chunking start", table.Name)
+			logger.Infof("'%s' chunking start", table.Name)
 			err := generateTableChunksAsync(ctx, table, r.source, r.chunks, r.sourceRetry)
-			logger.Infof("table '%s' chunking done", table.Name)
+			logger.Infof("'%s' chunking done", table.Name)
 			if err != nil {
 				return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
 			}
@@ -1135,6 +1147,8 @@ func (r *Replicator) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSnap
 }
 
 func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
+	logger := logrus.WithContext(ctx).WithField("task", "snapshot")
+
 	// We only need to read new snapshots if snapshotting is running
 	if !r.snapshotRunning.Load() {
 		return nil
@@ -1145,7 +1159,7 @@ func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
 	}
 	if r.chunks == nil {
 		// If there are no ongoing chunks and no chunks to be snapshotted then we are done with the snapshot
-		logrus.Infof("snapshot done")
+		logger.Infof("snapshot done")
 		chunksEnqueued.Reset()
 		chunksProcessed.Reset()
 		rowsProcessed.Reset()

@@ -85,8 +85,9 @@ type Replicate struct {
 	WatermarkTable     string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
 	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
 	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
-	CreateTables       bool          `help:"Create the heartbeat table if it does not exist" default:"true"`
+	CreateTables       bool          `help:"Create the required tables if they do not exist" default:"true"`
 	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
+	ReconnectTimeout   time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
 }
 
 // Run replicates from source to target
@@ -228,6 +229,9 @@ func (r *Replicator) run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		b := backoff.NewExponentialBackOff()
+		// We try to re-connect for this amount of time before we give up
+		// on Kubernetes that generally means we will get restarted with a backoff
+		b.MaxElapsedTime = r.config.ReconnectTimeout
 		for {
 			select {
 			case <-ctx.Done():
@@ -236,7 +240,11 @@ func (r *Replicator) run(ctx context.Context) error {
 			}
 			err := r.replicate(ctx, b)
 			logrus.WithError(err).Errorf("replication loop failed, restarting")
-			time.Sleep(b.NextBackOff())
+			sleepTime := b.NextBackOff()
+			if sleepTime == backoff.Stop {
+				return errors.Wrapf(err, "failed to reconnect after %v", b.GetElapsedTime())
+			}
+			time.Sleep(sleepTime)
 		}
 	})
 	if r.config.HeartbeatFrequency > 0 {

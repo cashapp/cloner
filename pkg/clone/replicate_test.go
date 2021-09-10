@@ -22,6 +22,8 @@ import (
 
 const heartbeatFrequency = 100 * time.Millisecond
 
+// TODO test for rollback
+
 func TestReplicate(t *testing.T) {
 	err := startAll()
 	require.NoError(t, err)

@@ -380,6 +380,14 @@ func (r *Replicator) replicate(ctx context.Context, b backoff.BackOff) error {
 }
 
 func (r *Replicator) startTransaction(ctx context.Context) (err error) {
+	if r.tx != nil {
+		// Previous transaction never committed, we need to roll it back
+		err := r.tx.Rollback()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		r.tx = nil
+	}
 	r.tx, err = r.target.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.WithStack(err)
@@ -1178,49 +1186,38 @@ func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	var chunks []*ChunkSnapshot
-	snapshotCh := make(chan *ChunkSnapshot)
-
-	g.Go(func() error {
-		for chunk := range snapshotCh {
-			chunks = append(chunks, chunk)
-		}
-		return nil
-	})
+	snapshotCh := make(chan *ChunkSnapshot, r.config.ChunkParallelism)
 
 	chunkCh := r.chunks
 	closed := atomic.NewBool(false)
 
-	g.Go(func() error {
-		g, ctx := errgroup.WithContext(ctx)
-		for i := 0; i < r.config.ChunkParallelism; i++ {
-			g.Go(func() error {
-				select {
-				case chunk, isOpen := <-chunkCh:
-					if !isOpen {
-						// Channel is closed, we're done with all the chunks
-						closed.Store(true)
-						return nil
-					}
-					snapshot, err := r.snapshotChunk(ctx, chunk)
-					snapshotCh <- snapshot
-					return errors.WithStack(err)
-				case <-ctx.Done():
-					return ctx.Err()
+	for i := 0; i < r.config.ChunkParallelism; i++ {
+		g.Go(func() error {
+			select {
+			case chunk, isOpen := <-chunkCh:
+				if !isOpen {
+					// Channel is closed, we're done with all the chunks
+					closed.Store(true)
+					return nil
 				}
-			})
-		}
-		err := g.Wait()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		close(snapshotCh)
-		return nil
-	})
+				snapshot, err := r.snapshotChunk(ctx, chunk)
+				snapshotCh <- snapshot
+				return errors.WithStack(err)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}
 
 	err := g.Wait()
 	if err != nil {
 		return errors.WithStack(err)
+	}
+	close(snapshotCh)
+
+	var chunks []*ChunkSnapshot
+	for chunk := range snapshotCh {
+		chunks = append(chunks, chunk)
 	}
 	r.ongoingChunks = append(r.ongoingChunks, chunks...)
 	if closed.Load() {

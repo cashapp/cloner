@@ -39,123 +39,6 @@ func init() {
 	prometheus.MustRegister(tablesDoneMetric)
 }
 
-//// processTable reads/diffs and issues writes for a table (it's increasingly inaccurately named)
-//func processTable(ctx context.Context, source DBReader, target DBReader, table *Table, config WriterConfig, writer *sql.DB, writerLimiter core.Limiter) error {
-//	logger := logrus.WithField("table", table.Name)
-//	start := time.Now()
-//	logger.WithTime(start).Infof("start %v", table.Name)
-//
-//	var chunkingDuration time.Duration
-//
-//	updates := 0
-//	deletes := 0
-//	inserts := 0
-//	chunkCount := 0
-//
-//	g, ctx := errgroup.WithContext(ctx)
-//
-//	// Chunk up the table
-//	chunks := make(chan Chunk)
-//	g.Go(func() error {
-//		err := generateTableChunks(ctx, config.ReaderConfig, source, table, chunks)
-//		chunkingDuration = time.Since(start)
-//		close(chunks)
-//		if err != nil {
-//			return errors.WithStack(err)
-//		}
-//		return nil
-//	})
-//
-//	// Diff each chunk as they are produced
-//	diffs := make(chan Diff)
-//	g.Go(func() error {
-//		readerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
-//		g, ctx := errgroup.WithContext(ctx)
-//		for c := range chunks {
-//			chunk := c
-//			err := readerParallelism.Acquire(ctx, 1)
-//			if err != nil {
-//				return errors.WithStack(err)
-//			}
-//			g.Go(func() (err error) {
-//				defer readerParallelism.Release(1)
-//				if config.NoDiff {
-//					err = readChunk(ctx, config.ReaderConfig, source, chunk, diffs)
-//				} else {
-//					err = diffChunk(ctx, config.ReaderConfig, source, target, chunk, diffs)
-//				}
-//				return errors.WithStack(err)
-//			})
-//			chunkCount++
-//		}
-//		err := g.Wait()
-//		if err != nil {
-//			return errors.WithStack(err)
-//		}
-//
-//		// All diffing done, close the diffs channel
-//		close(diffs)
-//		return nil
-//	})
-//
-//	// Batch up the diffs
-//	batches := make(chan Batch)
-//	g.Go(func() error {
-//		err := BatchTableWrites(ctx, diffs, batches)
-//		close(batches)
-//		if err != nil {
-//			return errors.WithStack(err)
-//		}
-//		return nil
-//	})
-//
-//	// Write every batch
-//	g.Go(func() error {
-//		writerParallelism := semaphore.NewWeighted(config.ReaderParallelism)
-//		g, ctx := errgroup.WithContext(ctx)
-//		for batch := range batches {
-//			size := len(batch.Rows)
-//			switch batch.Type {
-//			case Update:
-//				updates += size
-//			case Delete:
-//				deletes += size
-//			case Insert:
-//				inserts += size
-//			}
-//			err := scheduleWriteBatch(ctx, config, writerParallelism, writerLimiter, g, writer, batch)
-//			if err != nil {
-//				return errors.WithStack(err)
-//			}
-//		}
-//		err := g.Wait()
-//		if err != nil {
-//			return errors.WithStack(err)
-//		}
-//		return nil
-//	})
-//
-//	err := g.Wait()
-//
-//	elapsed := time.Since(start)
-//
-//	logger = logger.
-//		WithField("duration", elapsed).
-//		WithField("chunking", chunkingDuration).
-//		WithField("chunks", chunkCount).
-//		WithField("inserts", inserts).
-//		WithField("deletes", deletes).
-//		WithField("updates", updates)
-//
-//	if err != nil {
-//		return errors.WithStack(err)
-//	}
-//
-//	logger.Infof("success %v", table.Name)
-//
-//	return nil
-//}
-
 type Reader struct {
 	config ReaderConfig
 	table  *Table
@@ -166,76 +49,83 @@ type Reader struct {
 	targetRetry RetryOptions
 }
 
-func (r *Reader) Diff(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
-	return r.read(ctx, g, diffs, true)
+func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
+	return errors.WithStack(r.read(ctx, diffs, true))
 }
 
-func (r *Reader) Read(ctx context.Context, g *errgroup.Group, diffs chan Diff) error {
+func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 	// TODO this can be refactored to a separate method
-	return r.read(ctx, g, diffs, false)
+	return errors.WithStack(r.read(ctx, diffs, false))
 }
 
-func (r *Reader) read(ctx context.Context, g *errgroup.Group, diffs chan Diff, diff bool) error {
+func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
+	g, ctx := errgroup.WithContext(ctx)
 
 	chunks := make(chan Chunk)
 
-	// Generate chunks of all source tables
 	g.Go(func() error {
-		err := r.generateTableChunks(ctx, r.table, chunks)
-		close(chunks)
+		// Generate chunks of source table
+		err := generateTableChunksAsync(ctx, r.table, r.source, chunks, r.sourceRetry)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		return err
+		close(chunks)
+		return nil
 	})
 
 	// Generate diffs from all chunks
-	g.Go(func() error {
-		readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
-		g, ctx := errgroup.WithContext(ctx)
-		g.Go(func() error {
-			for c := range chunks {
-				chunk := c
-				err := readerParallelism.Acquire(ctx, 1)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				g.Go(func() (err error) {
-					defer readerParallelism.Release(1)
-					if diff {
-						err = r.diffChunk(ctx, chunk, diffs)
-					} else {
-						err = r.readChunk(ctx, chunk, diffs)
-					}
-
-					if err != nil {
-						if r.config.Consistent {
-							return errors.WithStack(err)
-						}
-
-						log.WithField("table", chunk.Table.Name).
-							WithError(err).
-							WithContext(ctx).
-							Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
-								"since this is a best effort clone we just give up: %+v",
-								chunk.Table.Name, chunk.Start, chunk.End, err)
-						return nil
-					}
-
-					return nil
-				})
-			}
-			return nil
-		})
-		err := g.Wait()
+	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
+	for c := range chunks {
+		chunk := c
+		err := readerParallelism.Acquire(ctx, 1)
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		g.Go(func() (err error) {
+			defer readerParallelism.Release(1)
+			var diffs []Diff
+			if diff {
+				diffs, err = r.diffChunk(ctx, chunk)
+			} else {
+				diffs, err = r.readChunk(ctx, chunk)
+			}
 
-		// All diffing done, close the diffs channel
-		close(diffs)
-		return nil
-	})
+			if err != nil {
+				if r.config.Consistent {
+					return errors.WithStack(err)
+				}
+
+				log.WithField("table", chunk.Table.Name).
+					WithError(err).
+					WithContext(ctx).
+					Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
+						"since this is a best effort clone we just give up: %+v",
+						chunk.Table.Name, chunk.Start, chunk.End, err)
+				return nil
+			}
+
+			if len(diffs) > 0 {
+				chunksWithDiffs.WithLabelValues(chunk.Table.Name).Inc()
+			}
+
+			chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
+			for _, diff := range diffs {
+				select {
+				case diffsCh <- diff:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+
+			return nil
+		})
+	}
+
+	err := g.Wait()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 
 	return nil
 }

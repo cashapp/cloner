@@ -148,10 +148,7 @@ func (cmd *Clone) run() error {
 				diffs := make(chan Diff)
 
 				writer := NewWriter(cmd.WriterConfig, table, writer, writerLimiter)
-				err = writer.Write(ctx, g, diffs)
-				if err != nil {
-					return errors.WithStack(err)
-				}
+				writer.Write(ctx, g, diffs)
 
 				reader := NewReader(
 					cmd.ReaderConfig,
@@ -166,16 +163,19 @@ func (cmd *Clone) run() error {
 				}
 
 				if cmd.NoDiff {
-					err = reader.Read(ctx, g, diffs)
+					err = reader.Read(ctx, diffs)
 					if err != nil {
 						return errors.WithStack(err)
 					}
 				} else {
-					err = reader.Diff(ctx, g, diffs)
+					err = reader.Diff(ctx, diffs)
 					if err != nil {
 						return errors.WithStack(err)
 					}
 				}
+
+				// All diffing done, close the diffs channel
+				close(diffs)
 
 				return nil
 			})

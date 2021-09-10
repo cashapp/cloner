@@ -167,6 +167,8 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 }
 
 func TestUnshardedClone(t *testing.T) {
+	t.Skip("unsharded vitess as a source is not currently supported")
+
 	err := startAll()
 	assert.NoError(t, err)
 

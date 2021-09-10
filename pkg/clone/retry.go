@@ -64,6 +64,10 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 
 		err = f(ctx)
 
+		if isSchemaError(err) {
+			return backoff.Permanent(err)
+		}
+
 		return err
 	}, b, func(err error, duration time.Duration) {
 		retries++

@@ -3,7 +3,6 @@ package clone
 import (
 	"context"
 	"github.com/alecthomas/kong"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -174,23 +173,14 @@ func TestStreamDiff(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			diffsChan := make(chan Diff)
-			var result []testDiff
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for diff := range diffsChan {
-					result = append(result, toTestDiff(diff))
-				}
-			}()
-			err := StreamDiff(context.Background(), table,
+			diffs, err := StreamDiff(context.Background(), table,
 				streamTestRows(test.source, 5),
-				streamTestRows(test.target, 5),
-				diffsChan)
+				streamTestRows(test.target, 5))
 			assert.NoError(t, err)
-			close(diffsChan)
-			wg.Wait()
+			var result []testDiff
+			for _, diff := range diffs {
+				result = append(result, toTestDiff(diff))
+			}
 			assert.Equal(t, test.diff, result)
 		})
 	}
@@ -297,25 +287,16 @@ func TestDiffWithChecksum(t *testing.T) {
 
 			// TODO insert data, how can I make sure they end up in -80?
 
-			diffsChan := make(chan Diff)
-			var result []diff
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for d := range diffsChan {
-					result = append(result, diff{d.Type, row{d.Row.ID, d.Row.Data[0].(string)}})
-				}
-			}()
-
 			ctx := context.Background()
 			chunk := Chunk{
 				Table: tables[0],
 			}
-			err = r.diffChunk(ctx, chunk, diffsChan)
+			diffs, err := r.diffChunk(ctx, chunk)
 			assert.NoError(t, err)
-			close(diffsChan)
-			wg.Wait()
+			var result []diff
+			for _, d := range diffs {
+				result = append(result, diff{d.Type, row{d.Row.ID, d.Row.Data[0].(string)}})
+			}
 			assert.Equal(t, test.diff, result)
 		})
 	}

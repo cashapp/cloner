@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pavel-v-chernykh/keystore-go"
@@ -110,11 +111,12 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 		Target:          c.Database,
 		Streaming:       streaming,
 		GRPCDialOptions: options,
+		DefaultLocation: "UTC",
 	})
 }
 
 func (c DBConfig) openMySQL() (*sql.DB, error) {
-	return sql.Open("mysql", fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true", c.Username, c.Password, c.Host, c.Database))
+	return sql.Open("mysql", fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.Password, c.Host, c.Database))
 }
 
 func (c DBConfig) openMisk() (*sql.DB, error) {
@@ -281,13 +283,14 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 			port = 3306
 		}
 		return replication.BinlogSyncerConfig{
-			ServerID:  serverID,
-			Flavor:    "mysql",
-			Host:      endpoint.Host,
-			Port:      port,
-			User:      endpoint.Username,
-			Password:  endpoint.Password,
-			TLSConfig: tlsConfig,
+			ServerID:                serverID,
+			Flavor:                  "mysql",
+			Host:                    endpoint.Host,
+			Port:                    port,
+			User:                    endpoint.Username,
+			Password:                endpoint.Password,
+			TLSConfig:               tlsConfig,
+			TimestampStringLocation: time.UTC,
 		}, nil
 	} else {
 		host, port, err := hostAndPort(c)
@@ -295,12 +298,13 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
 		}
 		return replication.BinlogSyncerConfig{
-			ServerID: serverID,
-			Flavor:   "mysql",
-			Host:     host,
-			Port:     port,
-			User:     c.Username,
-			Password: c.Password,
+			ServerID:                serverID,
+			Flavor:                  "mysql",
+			Host:                    host,
+			Port:                    port,
+			User:                    c.Username,
+			Password:                c.Password,
+			TimestampStringLocation: time.UTC,
 			// TODO TLS!
 		}, nil
 	}

@@ -3,7 +3,10 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/atomic"
@@ -14,20 +17,23 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const heartbeatFrequency = 100 * time.Millisecond
 
+// TODO test for rollback
+
 func TestReplicate(t *testing.T) {
 	err := startAll()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	rowCount := 1000
 	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = deleteAllData(tidbContainer.Config())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	source := vitessContainer.Config()
 	// We connect directly to the underlying MySQL database as vtgate does not support binlog streaming
@@ -46,7 +52,8 @@ func TestReplicate(t *testing.T) {
 			Source: sourceDirect,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		ReadRetries: 1,
+		ChunkSize:   5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -56,39 +63,32 @@ func TestReplicate(t *testing.T) {
 				},
 			},
 		},
+		UseConcurrencyLimits: false,
 	}
 	replicate := &Replicate{
 		WriterConfig: WriterConfig{
+			WriteRetries:            1,
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
 		TaskName:           "customer/-80",
-		HeartbeatTable:     "heartbeat",
 		HeartbeatFrequency: heartbeatFrequency,
 		CreateTables:       true,
 	}
 	err = kong.ApplyDefaults(replicate)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	g, ctx := errgroup.WithContext(ctx)
 
 	err = deleteAllData(source)
-	assert.NoError(t, err)
-
-	// Run replication in separate thread
-	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
-	defer cancelFirstReplication()
-	g.Go(func() error {
-		err := replicate.run(firstReplicationCtx)
-		if isCancelledError(err) {
-			return nil
-		}
-		return err
-	})
+	require.NoError(t, err)
 
 	doWrite := atomic.NewBool(true)
+
+	targetDB, err := target.DB()
+	require.NoError(t, err)
 
 	// Write rows in a separate thread
 	g.Go(func() error {
@@ -105,7 +105,7 @@ func TestReplicate(t *testing.T) {
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {
@@ -116,15 +116,40 @@ func TestReplicate(t *testing.T) {
 		}
 	})
 
+	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
+	time.Sleep(5 * time.Second)
+
+	replicator, err := NewReplicator(*replicate)
+	require.NoError(t, err)
+
+	// Run replication in separate thread
+	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
+	defer cancelFirstReplication()
+	g.Go(func() error {
+		err := replicator.run(firstReplicationCtx)
+		if isCancelledError(err) {
+			return nil
+		}
+		return err
+	})
+
 	// Wait for a little bit to let the replicator exercise
 	time.Sleep(5 * time.Second)
 
+	// Now do the snapshot
+	g.Go(func() error {
+		return replicator.snapshot(ctx)
+	})
+
+	// Wait for the snapshot to complete
+	time.Sleep(5 * time.Second)
+
 	// Stop writing and make sure replication lag drops to heartbeat frequency
-	err = waitFor(ctx, someReplicationLag)
-	assert.NoError(t, err)
+	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
+	require.NoError(t, err)
 	doWrite.Store(false)
-	err = waitFor(ctx, littleReplicationLag)
-	assert.NoError(t, err)
+	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
+	require.NoError(t, err)
 
 	// Restart the writes
 	doWrite.Store(true)
@@ -135,16 +160,16 @@ func TestReplicate(t *testing.T) {
 	// Wait for a little bit to let some replication lag build up then restart the replicator
 	time.Sleep(5 * time.Second)
 	g.Go(func() error {
-		err := replicate.run(ctx)
+		err := replicator.run(ctx)
 		return err
 	})
-	err = waitFor(ctx, someReplicationLag)
-	assert.NoError(t, err)
+	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
+	require.NoError(t, err)
 
 	// Let replication catch up and then do a full checksum while replication is running
 	time.Sleep(5 * time.Second)
-	err = waitFor(ctx, littleReplicationLag)
-	assert.NoError(t, err)
+	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
+	require.NoError(t, err)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
 	}
@@ -152,17 +177,22 @@ func TestReplicate(t *testing.T) {
 	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
 	checksum.FailedChunkRetryCount = 20
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	diffs, err := checksum.run(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	cancel()
 	err = g.Wait()
 	if !isCancelledError(err) {
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 
-	assert.Equal(t, 0, len(diffs))
+	if len(diffs) > 0 {
+		for _, diff := range diffs {
+			fmt.Printf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
+		}
+		assert.Fail(t, "there were diffs (see above)")
+	}
 }
 
 func isCancelledError(err error) bool {
@@ -171,31 +201,48 @@ func isCancelledError(err error) bool {
 		strings.Contains(err.Error(), "context canceled")
 }
 
-func someReplicationLag() error {
-	reads := testutil.ToFloat64(heartbeatsRead)
-	if reads == 0 {
-		return errors.Errorf("we haven't read any heartbeats yet")
+func someReplicationLag(ctx context.Context, db *sql.DB) func() error {
+	return func() error {
+		lag, _, err := readReplicationLag(ctx, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if lag <= 0 {
+			return errors.Errorf("no replication lag")
+		}
+		return nil
 	}
-	toFloat64 := testutil.ToFloat64(replicationLag)
-	lag := time.Duration(toFloat64) * time.Millisecond
-	if lag > 0 {
-		return errors.Errorf("no replication lag")
-	}
-	return nil
 }
 
-func littleReplicationLag() error {
-	expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
-	reads := testutil.ToFloat64(heartbeatsRead)
-	if reads == 0 {
-		return errors.Errorf("we haven't read any heartbeats yet")
+func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
+	return func() error {
+		expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
+		reads := testutil.ToFloat64(heartbeatsRead)
+		if reads == 0 {
+			return errors.Errorf("we haven't read any heartbeats yet")
+		}
+		lag, _, err := readReplicationLag(ctx, db)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if lag > expectedLag {
+			return errors.Errorf("replication lag did not drop yet")
+		}
+		return nil
 	}
-	toFloat64 := testutil.ToFloat64(replicationLag)
-	lag := time.Duration(toFloat64) * time.Millisecond
-	if lag > expectedLag {
-		return errors.Errorf("replication lag did not drop yet")
+}
+
+func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Time, error) {
+	// TODO retries with backoff?
+	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE name = ?", "_cloner_heartbeat")
+	row := db.QueryRowContext(ctx, stmt, "customer/-80")
+	var lastHeartbeat time.Time
+	err := row.Scan(&lastHeartbeat)
+	if err != nil {
+		return 0, time.Time{}, errors.WithStack(err)
 	}
-	return nil
+	lag := time.Now().UTC().Sub(lastHeartbeat)
+	return lag, lastHeartbeat, nil
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
@@ -238,4 +285,195 @@ func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
 		}
 	}
 	return nil
+}
+
+func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
+	tests := []struct {
+		name         string
+		chunk        testChunk
+		start        int64
+		end          int64
+		eventType    replication.EventType
+		startingRows [][]interface{}
+		eventRows    [][]interface{}
+		resultRows   [][]interface{}
+	}{
+		{
+			name:  "delete outside chunk range",
+			start: 5,  // inclusive
+			end:   11, // exclusive
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{11, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name"},
+			},
+		},
+		{
+			name:  "delete inside chunk range",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			resultRows: [][]interface{}{},
+		},
+		{
+			name:  "insert after",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name"},
+				{6, "other customer name"},
+			},
+		},
+		{
+			name:  "insert before",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{6, "customer name"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{5, "other customer name"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "other customer name"},
+				{6, "customer name"},
+			},
+		},
+		{
+			name:  "insert middle",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name #5"},
+				{7, "customer name #7"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "customer name #6"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name #5"},
+				{6, "customer name #6"},
+				{7, "customer name #7"},
+			},
+		},
+		{
+			name:  "multiple rows mixed insert and update",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{5, "customer name #5"},
+				{7, "customer name #7"},
+			},
+
+			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "customer name #6"},
+				{7, "customer name #7 updated"},
+			},
+
+			resultRows: [][]interface{}{
+				{5, "customer name #5"},
+				{6, "customer name #6"},
+				{7, "customer name #7 updated"},
+			},
+		},
+		{
+			name:  "update",
+			start: 5,
+			end:   11,
+			startingRows: [][]interface{}{
+				{6, "customer name"},
+				{7, "other customer name"},
+			},
+
+			eventType: replication.UPDATE_ROWS_EVENTv2,
+			eventRows: [][]interface{}{
+				{6, "updated customer name"},
+				{11, "outside of chunk range"},
+			},
+
+			resultRows: [][]interface{}{
+				{6, "updated customer name"},
+				{7, "other customer name"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tableName := "customer"
+			tableSchema := &schema.Table{
+				Name:      tableName,
+				PKColumns: []int{0},
+				Columns: []schema.TableColumn{
+					{Name: "id"},
+					{Name: "name"},
+				},
+			}
+			table := &Table{
+				Name:       tableName,
+				MysqlTable: tableSchema,
+			}
+			inputRows := make([]*Row, len(test.startingRows))
+			for i, row := range test.startingRows {
+				inputRows[i] = &Row{
+					Table: table,
+					ID:    int64(row[0].(int)),
+					Data:  row,
+				}
+			}
+			chunk := &ChunkSnapshot{
+				InsideWatermarks: true,
+				Rows:             inputRows,
+				Chunk: Chunk{
+					Start: test.start,
+					End:   test.end,
+					Table: table,
+				},
+			}
+			err := chunk.reconcileBinlogEvent(
+				&replication.BinlogEvent{Header: &replication.EventHeader{EventType: test.eventType}},
+				&replication.RowsEvent{Rows: test.eventRows},
+				tableSchema,
+			)
+			require.NoError(t, err)
+
+			assert.Equal(t, len(test.resultRows), len(chunk.Rows))
+			for i, expectedRow := range test.resultRows {
+				actualRow := chunk.Rows[i]
+				for j, cell := range expectedRow {
+					assert.Equal(t, cell, actualRow.Data[j])
+				}
+			}
+		})
+	}
 }

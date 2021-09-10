@@ -157,6 +157,7 @@ github.com/sirupsen/logrus
 # github.com/stretchr/testify v1.6.1
 ## explicit
 github.com/stretchr/testify/assert
+github.com/stretchr/testify/require
 # github.com/tinylib/msgp v1.1.1
 github.com/tinylib/msgp/msgp
 # github.com/uber/jaeger-client-go v2.16.0+incompatible

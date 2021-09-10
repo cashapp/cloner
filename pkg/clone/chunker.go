@@ -7,22 +7,33 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"io"
+	"sync"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)
 type Chunk struct {
 	Table *Table
+
+	// Seq is the sequence number of chunks for this table
+	Seq int64
+
 	// Start is the first id of the chunk inclusive
 	Start int64
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusive)
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
 	End int64 // exclusive
 
 	// First chunk of a table
 	First bool
 	// Last chunk of a table
 	Last bool
+
 	// Size is the expected number of rows in the chunk
 	Size int
+}
+
+func (c *Chunk) ContainsRow(row []interface{}) bool {
+	id := c.Table.PkOfRow(row)
+	return id >= c.Start && id < c.End
 }
 
 type PeekingIdStreamer interface {
@@ -157,19 +168,37 @@ func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) Pe
 	}
 }
 
-func (r *Reader) generateTableChunks(
-	ctx context.Context,
-	table *Table,
-	chunks chan Chunk,
-) error {
+func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retry RetryOptions) ([]Chunk, error) {
+	var chunks []Chunk
+	chunkCh := make(chan Chunk)
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for c := range chunkCh {
+			chunks = append(chunks, c)
+		}
+	}()
+	err := generateTableChunksAsync(ctx, table, source, chunkCh, retry)
+	close(chunkCh)
+	if err != nil {
+		return chunks, errors.WithStack(err)
+	}
+	wg.Wait()
+	return chunks, nil
+}
+
+// generateTableChunksAsync generates chunks async on the current goroutine
+func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB, chunks chan Chunk, retry RetryOptions) error {
 	chunkSize := table.Config.ChunkSize
 
-	ids := streamIds(r.source, table, chunkSize, r.sourceRetry)
+	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error
 	currentChunkSize := 0
 	first := true
 	startId := int64(0)
+	seq := int64(0)
 	var id int64
 	hasNext := true
 	for hasNext {
@@ -187,6 +216,7 @@ func (r *Reader) generateTableChunks(
 			select {
 			case chunks <- Chunk{
 				Table: table,
+				Seq:   seq,
 				Start: startId,
 				End:   id,
 				First: first,
@@ -196,6 +226,7 @@ func (r *Reader) generateTableChunks(
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+			seq++
 			// Next id should be the next start id
 			startId = id
 			// We are no longer the first chunk
@@ -214,8 +245,9 @@ func (r *Reader) generateTableChunks(
 		select {
 		case chunks <- Chunk{
 			Table: table,
+			Seq:   seq,
 			Start: startId,
-			End:   id,
+			End:   id + 1,
 			First: first,
 			Last:  true,
 			Size:  currentChunkSize,

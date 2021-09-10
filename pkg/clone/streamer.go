@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/pkg/errors"
-	"github.com/platinummonkey/go-concurrency-limits/core"
-	"github.com/prometheus/client_golang/prometheus"
 	"strings"
 )
 
@@ -22,44 +20,24 @@ type Row struct {
 	Data  []interface{}
 }
 
-type limitingDBReader struct {
-	limiter       core.Limiter
-	acquireMetric prometheus.Observer
-	reader        DBReader
+// PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
+func (r *Row) PkAfterOrEqual(row []interface{}) bool {
+	return r.ID >= r.Table.PkOfRow(row)
 }
 
-func (l *limitingDBReader) QueryContext(ctx context.Context, query string, args ...interface{}) (rows *sql.Rows, err error) {
-	acquireTimer := prometheus.NewTimer(l.acquireMetric)
-	token, ok := l.limiter.Acquire(ctx)
-	if !ok {
-		if token != nil {
-			token.OnDropped()
-		}
-		if ctx.Err() != nil {
-			return nil, errors.Wrap(ctx.Err(), "context deadline exceeded")
-		} else {
-			return nil, errors.New("context deadline exceeded")
-		}
+// PkEqual returns true if the pk of the row is equal to the PK of the receiver row
+func (r *Row) PkEqual(row []interface{}) bool {
+	return r.ID == r.Table.PkOfRow(row)
+}
+
+func (r *Row) Updated(row []interface{}) *Row {
+	if r.Table.PkOfRow(row) != r.ID {
+		panic("updating row with another ID")
 	}
-	acquireTimer.ObserveDuration()
-
-	defer func() {
-		if err == nil {
-			token.OnSuccess()
-		} else {
-			token.OnDropped()
-		}
-	}()
-
-	rows, err = l.reader.QueryContext(ctx, query, args...)
-	return rows, errors.WithStack(err)
-}
-
-func Limit(db DBReader, limiter core.Limiter, acquireMetric prometheus.Observer) DBReader {
-	return &limitingDBReader{
-		limiter:       limiter,
-		acquireMetric: acquireMetric,
-		reader:        db,
+	return &Row{
+		Table: r.Table,
+		ID:    r.ID,
+		Data:  row,
 	}
 }
 
@@ -83,6 +61,20 @@ func (b *bufferStream) Close() error {
 
 // buffer buffers all of the rows into memory
 func buffer(stream RowStream) (RowStream, error) {
+	rows, err := readAll(stream)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &bufferStream{rows}, nil
+}
+
+// stream converts buffered rows to a stream
+func stream(rows []*Row) RowStream {
+	return &bufferStream{rows}
+}
+
+// buffer buffers all of the rows into memory
+func readAll(stream RowStream) ([]*Row, error) {
 	defer stream.Close()
 	var rows []*Row
 	for {
@@ -95,7 +87,7 @@ func buffer(stream RowStream) (RowStream, error) {
 		}
 		rows = append(rows, row)
 	}
-	return &bufferStream{rows}, nil
+	return rows, nil
 }
 
 type RowStream interface {
@@ -177,27 +169,9 @@ func chunkWhere(chunk Chunk, extraWhereClause string) string {
 	if extraWhereClause != "" {
 		clauses = append(clauses, "("+extraWhereClause+")")
 	}
-	if chunk.First && chunk.Last {
-		// this chunk is the full table, no where clause
-	} else {
-		if chunk.First {
-			clauses = append(clauses, fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
-		} else if chunk.Last {
-			// TODO This means the tail chunk is "infinite" which could cause issues with the retrying checksummer
-			//      since it's very likely we add new rows to the tail chunk. There might be very few moments when the
-			//      tail chunk is fully in sync with the replication source.
-			//      A better option would be to keep the tail chunk "fixed size" from the moment of time of chunking
-			//      but our chunks extend from the Start row until just before the End row so we don't get "gaps" in
-			//      the non-tail chunks. Since this is a tail chunk we don't know the End row. So we would need to
-			//      rethink this whole thing.
-			//      Let's see how we go, maybe it's fine.
-			clauses = append(clauses, fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start))
-		} else {
-			clauses = append(clauses,
-				fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
-				fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
-		}
-	}
+	clauses = append(clauses,
+		fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
+		fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
 	if len(clauses) == 0 {
 		return ""
 	} else {

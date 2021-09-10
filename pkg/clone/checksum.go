@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"github.com/dlmiddlecote/sqlstats"
+	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -42,12 +43,29 @@ func (cmd *Checksum) Run() error {
 		}
 		logger.WithError(err).Errorf("error: %+v", err)
 	} else {
-		logger.Infof("full checksum success")
+		logger.Infof("full checksum done")
 	}
 
 	if len(diffs) > 0 {
-		// TODO log a more detailed diff report
-		return errors.Errorf("found diffs")
+		inserts := 0
+		deletes := 0
+		updates := 0
+		for _, diff := range diffs {
+			switch diff.Type {
+			case Update:
+				updates++
+			case Delete:
+				deletes++
+			case Insert:
+				inserts++
+			}
+			logrus.WithField("table", diff.Row.Table.Name).
+				WithField("diff_type", diff.Type).
+				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
+		}
+		return errors.Errorf("found diffs inserts=%d deletes=%d updates=%d", inserts, deletes, updates)
+	} else {
+		logger.Infof("no diffs found")
 	}
 	return errors.WithStack(err)
 }
@@ -104,14 +122,17 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
-	sourceLimiter := makeLimiter("source_reader_limiter")
-	targetLimiter := makeLimiter("target_reader_limiter")
+	var sourceLimiter core.Limiter
+	var targetLimiter core.Limiter
+	if cmd.UseConcurrencyLimits {
+		sourceLimiter = makeLimiter("source_reader_limiter")
+		targetLimiter = makeLimiter("target_reader_limiter")
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
-
 	diffs := make(chan Diff)
+
 	// Reporter
 	var foundDiffs []Diff
 	g.Go(func() error {
@@ -121,34 +142,48 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		return nil
 	})
 
-	for _, table := range tables {
-		err = tableParallelism.Acquire(ctx, 1)
-		if err != nil {
-			return nil, errors.WithStack(err)
+	g.Go(func() error {
+		g, ctx := errgroup.WithContext(ctx)
+		tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
+
+		for _, table := range tables {
+			err = tableParallelism.Acquire(ctx, 1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			g.Go(func() error {
+				defer tableParallelism.Release(1)
+
+				reader := NewReader(
+					cmd.ReaderConfig,
+					table,
+					sourceReader,
+					sourceLimiter,
+					targetReader,
+					targetLimiter,
+				)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				err = reader.Diff(ctx, diffs)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				return nil
+			})
 		}
-		g.Go(func() error {
-			defer tableParallelism.Release(1)
 
-			reader := NewReader(
-				cmd.ReaderConfig,
-				table,
-				sourceReader,
-				sourceLimiter,
-				targetReader,
-				targetLimiter,
-			)
-			if err != nil {
-				return errors.WithStack(err)
-			}
+		err := g.Wait()
+		if err != nil {
+			return errors.WithStack(err)
+		}
 
-			err = reader.Diff(ctx, g, diffs)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			return nil
-		})
-	}
+		// All diffing done, close the diffs channel
+		close(diffs)
+		return nil
+	})
 
 	return foundDiffs, g.Wait()
 }

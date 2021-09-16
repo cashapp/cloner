@@ -9,7 +9,7 @@ import (
 )
 
 type testBatch struct {
-	diffType DiffType
+	diffType MutationType
 	table    string
 	rows     []testRow
 }

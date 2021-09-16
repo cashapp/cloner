@@ -23,7 +23,7 @@ func (testRow testRow) toRow(batchSize int) *Row {
 }
 
 type testDiff struct {
-	diffType DiffType
+	diffType MutationType
 	row      testRow
 }
 
@@ -261,7 +261,7 @@ func TestDiffWithChecksum(t *testing.T) {
 		name string
 	}
 	type diff struct {
-		diffType DiffType
+		diffType MutationType
 		row      row
 	}
 	tests := []struct {

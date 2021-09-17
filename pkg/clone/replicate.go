@@ -134,6 +134,14 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	return replicator.run(ctx)
 }
 
+func (cmd *Replicate) ReconnectBackoff() backoff.BackOff {
+	b := backoff.NewExponentialBackOff()
+	// We try to re-connect for this amount of time before we give up
+	// on Kubernetes that generally means we will get restarted with a backoff
+	b.MaxElapsedTime = cmd.ReconnectTimeout
+	return b
+}
+
 // Replicator replicates from source to target
 type Replicator struct {
 	config       Replicate
@@ -147,6 +155,7 @@ type Replicator struct {
 	targetRetry RetryOptions
 
 	snapshotter         *Snapshotter
+	heartbeater         *Heartbeater
 	transactionStreamer *TransactionStream
 }
 
@@ -202,6 +211,11 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 		return nil, errors.WithStack(err)
 	}
 
+	r.heartbeater, err = NewHeartbeater(r.config)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	return &r, nil
 }
 
@@ -214,54 +228,60 @@ func (r *Replicator) run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	transactions := make(chan Transaction)
-	g.Go(func() error {
+	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
 		position, err := r.readStartingPosition(ctx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 
-		return r.transactionStreamer.Run(ctx, position, transactions)
-	})
+		return r.transactionStreamer.Run(ctx, b, position, transactions)
+	}))
 
 	transactionsAfterSnapshot := make(chan Transaction)
-	g.Go(func() error {
-		return r.snapshotter.Run(ctx, transactions, transactionsAfterSnapshot)
-	})
+	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
+		return r.snapshotter.Run(ctx, b, transactions, transactionsAfterSnapshot)
+	}))
 
-	g.Go(func() error {
-		b := backoff.NewExponentialBackOff()
-		// We try to re-connect for this amount of time before we give up
-		// on Kubernetes that generally means we will get restarted with a backoff
-		b.MaxElapsedTime = r.config.ReconnectTimeout
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			err := r.replicate(ctx, b, transactionsAfterSnapshot)
-			if errors.Is(err, context.Canceled) {
-				return errors.WithStack(err)
-			}
-			logrus.WithError(err).Errorf("replication write loop failed, restarting")
-			sleepTime := b.NextBackOff()
-			if sleepTime == backoff.Stop {
-				return errors.Wrapf(err, "failed to reconnect after %v", b.GetElapsedTime())
-			}
-			time.Sleep(sleepTime)
-		}
-	})
+	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
+		return r.replicate(ctx, b, transactionsAfterSnapshot)
+	}))
 
 	if r.config.HeartbeatFrequency > 0 {
-		g.Go(func() error {
-			return r.heartbeat(ctx)
-		})
+		g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
+			return r.heartbeater.Run(ctx, b)
+		}))
 	}
 	err = g.Wait()
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	return err
+}
+
+func RestartLoop(ctx context.Context, b backoff.BackOff, loop func(b backoff.BackOff) error) func() error {
+	return func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			err := loop(b)
+			if errors.Is(err, context.Canceled) {
+				return errors.WithStack(err)
+			}
+			logrus.WithError(err).Errorf("replication write loop failed, restarting")
+			sleepTime := b.NextBackOff()
+			if sleepTime == backoff.Stop {
+				return errors.Wrapf(err, "failed to reconnect after retries")
+			}
+			select {
+			case <-time.After(sleepTime):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
 }
 
 func (r *Replicator) init(ctx context.Context) error {
@@ -275,10 +295,6 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 
 	if r.config.CreateTables {
-		err := r.createHeartbeatTable(ctx)
-		if err != nil {
-			return errors.WithStack(err)
-		}
 		err = r.createCheckpointTable(ctx)
 		if err != nil {
 			return errors.WithStack(err)
@@ -286,6 +302,11 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 
 	err = r.snapshotter.Init(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	err = r.heartbeater.Init(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -437,47 +458,6 @@ func (r *Replicator) deleteRows(ctx context.Context, tx *sql.Tx, mutation Mutati
 	return nil
 }
 
-func (r *Replicator) heartbeat(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(r.config.HeartbeatFrequency):
-			err := r.writeHeartbeat(ctx)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			err = r.readHeartbeat(ctx)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-		}
-	}
-}
-
-func (r *Replicator) createHeartbeatTable(ctx context.Context) error {
-	// TODO retries with backoff?
-	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
-	defer cancel()
-	stmt := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-		  name VARCHAR(255) NOT NULL,
-		  time TIMESTAMP NOT NULL,
-		  count BIGINT(20) NOT NULL,
-		  PRIMARY KEY (name)
-		)
-		`, r.config.HeartbeatTable)
-	_, err := r.source.ExecContext(timeoutCtx, stmt)
-	if err != nil {
-		return errors.Wrapf(err, "could not create heartbeat table in source database:\n%s", stmt)
-	}
-	_, err = r.target.ExecContext(timeoutCtx, stmt)
-	if err != nil {
-		return errors.Wrapf(err, "could not create heartbeat table in target database:\n%s", stmt)
-	}
-	return nil
-}
-
 func (r *Replicator) createCheckpointTable(ctx context.Context) error {
 	// TODO retries with backoff?
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
@@ -497,38 +477,6 @@ func (r *Replicator) createCheckpointTable(ctx context.Context) error {
 		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)
 	}
 	return nil
-}
-
-func (r *Replicator) writeHeartbeat(ctx context.Context) error {
-	err := Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
-		return autotx.Transact(ctx, r.source, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, "SET time_zone = \"+00:00\"")
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			row := tx.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count FROM %s WHERE name = ?", r.config.HeartbeatTable), r.config.TaskName)
-			var count int64
-			err = row.Scan(&count)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					// We haven't written the first heartbeat yet
-					count = 0
-				} else {
-					return errors.WithStack(err)
-				}
-			}
-			heartbeatTime := time.Now().UTC()
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, ?, ?)",
-					r.config.HeartbeatTable),
-				r.config.TaskName, heartbeatTime, count+1)
-			return errors.WithStack(err)
-		})
-	})
-
-	return errors.WithStack(err)
 }
 
 func (r *Replicator) writeCheckpoint(ctx context.Context, tx *sql.Tx, position Position) error {
@@ -610,34 +558,6 @@ func (r *Replicator) readCheckpoint(ctx context.Context) (file string, position 
 		&executedGtidSet,
 	)
 	return
-}
-
-func (r *Replicator) readHeartbeat(ctx context.Context) error {
-	logger := logrus.WithContext(ctx).WithField("task", "heartbeat")
-
-	err := Retry(ctx, r.targetRetry, func(ctx context.Context) error {
-		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", r.config.HeartbeatTable)
-		row := r.target.QueryRowContext(ctx, stmt, r.config.TaskName)
-		var lastHeartbeat time.Time
-		err := row.Scan(&lastHeartbeat)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// We haven't received the first heartbeat yet
-				return nil
-			} else {
-				return errors.WithStack(err)
-			}
-		}
-		lag := time.Now().UTC().Sub(lastHeartbeat)
-		replicationLag.Set(float64(lag.Milliseconds()))
-		heartbeatsRead.Inc()
-		return nil
-	})
-	if err != nil {
-		logger.WithError(err).Errorf("failed to read heartbeat: %v", err)
-	}
-	// Heartbeat errors are ignored
-	return nil
 }
 
 func (r *Replicator) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mutation) error {

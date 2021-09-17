@@ -5,15 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"sort"
-	"time"
-
-	"github.com/pkg/errors"
 )
 
 // Snapshotter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
@@ -95,31 +93,7 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 	return nil
 }
 
-func (s *Snapshotter) Run(ctx context.Context, source chan Transaction, sink chan Transaction) error {
-	b := backoff.NewExponentialBackOff()
-	// We try to re-connect for this amount of time before we give up
-	// on Kubernetes that generally means we will get restarted with a backoff
-	b.MaxElapsedTime = s.config.ReconnectTimeout
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err := s.run(ctx, b, source, sink)
-		if errors.Is(err, context.Canceled) {
-			return errors.WithStack(err)
-		}
-		logrus.WithError(err).Errorf("snapshotter loop failed, restarting")
-		sleepTime := b.NextBackOff()
-		if sleepTime == backoff.Stop {
-			return errors.Wrapf(err, "failed to reconnect after %v", b.GetElapsedTime())
-		}
-		time.Sleep(sleepTime)
-	}
-}
-
-func (s *Snapshotter) run(ctx context.Context, b *backoff.ExponentialBackOff, source chan Transaction, sink chan Transaction) error {
+func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
 	logger := logrus.WithField("task", "snapshotter")
 
 	var chunks chan Chunk

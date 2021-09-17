@@ -2,16 +2,12 @@ package clone
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
-	"github.com/sirupsen/logrus"
-	_ "net/http/pprof"
-	"time"
-
 	"github.com/pkg/errors"
+	_ "net/http/pprof"
 )
 
 type Mutation struct {
@@ -37,7 +33,6 @@ type TransactionStream struct {
 	config       Replicate
 	syncerCfg    replication.BinlogSyncerConfig
 	sourceSchema string
-	source       *sql.DB
 	tables       []*Table
 
 	schemaCache map[uint64]*Table
@@ -59,40 +54,10 @@ func NewTransactionStreamer(config Replicate, tables []*Table) (*TransactionStre
 		return nil, errors.WithStack(err)
 	}
 
-	source, err := r.config.Source.DB()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	r.source = source
-
 	return &r, nil
 }
 
-func (r *TransactionStream) Run(ctx context.Context, startingPoint Position, output chan Transaction) error {
-	b := backoff.NewExponentialBackOff()
-	// We try to re-connect for this amount of time before we give up
-	// on Kubernetes that generally means we will get restarted with a backoff
-	b.MaxElapsedTime = r.config.ReconnectTimeout
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		err := r.run(ctx, b, startingPoint, output)
-		if errors.Is(err, context.Canceled) {
-			return errors.WithStack(err)
-		}
-		logrus.WithError(err).Errorf("replication read loop failed, restarting")
-		sleepTime := b.NextBackOff()
-		if sleepTime == backoff.Stop {
-			return errors.Wrapf(err, "failed to reconnect after %v", b.GetElapsedTime())
-		}
-		time.Sleep(sleepTime)
-	}
-}
-
-func (r *TransactionStream) run(ctx context.Context, b backoff.BackOff, position Position, output chan Transaction) error {
+func (r *TransactionStream) Run(ctx context.Context, b backoff.BackOff, position Position, output chan Transaction) error {
 	var err error
 
 	syncer := replication.NewBinlogSyncer(r.syncerCfg)

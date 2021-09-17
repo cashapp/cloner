@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -130,13 +129,14 @@ func TestReplicate(t *testing.T) {
 		if isCancelledError(err) {
 			return nil
 		}
+		require.NoError(t, err)
 		return err
 	})
 
 	// Wait for a little bit to let the replicator exercise
 	time.Sleep(5 * time.Second)
 
-	// Now do the snapshot
+	// Now do the snapshot (runs in the background)
 	g.Go(func() error {
 		return replicator.snapshot(ctx)
 	})
@@ -161,6 +161,9 @@ func TestReplicate(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	g.Go(func() error {
 		err := replicator.run(ctx)
+		if isCancelledError(err) {
+			return nil
+		}
 		return err
 	})
 	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
@@ -246,7 +249,7 @@ func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Ti
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
 }
@@ -293,7 +296,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 		chunk        testChunk
 		start        int64
 		end          int64
-		eventType    replication.EventType
+		eventType    MutationType
 		startingRows [][]interface{}
 		eventRows    [][]interface{}
 		resultRows   [][]interface{}
@@ -306,7 +309,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{5, "customer name"},
 			},
 
-			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventType: Delete,
 			eventRows: [][]interface{}{
 				{11, "other customer name"},
 			},
@@ -323,7 +326,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{5, "customer name"},
 			},
 
-			eventType: replication.DELETE_ROWS_EVENTv2,
+			eventType: Delete,
 			eventRows: [][]interface{}{
 				{5, "customer name"},
 			},
@@ -338,7 +341,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{5, "customer name"},
 			},
 
-			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventType: Insert,
 			eventRows: [][]interface{}{
 				{6, "other customer name"},
 			},
@@ -356,7 +359,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{6, "customer name"},
 			},
 
-			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventType: Insert,
 			eventRows: [][]interface{}{
 				{5, "other customer name"},
 			},
@@ -375,7 +378,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{7, "customer name #7"},
 			},
 
-			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventType: Insert,
 			eventRows: [][]interface{}{
 				{6, "customer name #6"},
 			},
@@ -395,7 +398,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{7, "customer name #7"},
 			},
 
-			eventType: replication.WRITE_ROWS_EVENTv2,
+			eventType: Insert,
 			eventRows: [][]interface{}{
 				{6, "customer name #6"},
 				{7, "customer name #7 updated"},
@@ -416,7 +419,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				{7, "other customer name"},
 			},
 
-			eventType: replication.UPDATE_ROWS_EVENTv2,
+			eventType: Update,
 			eventRows: [][]interface{}{
 				{6, "updated customer name"},
 				{11, "outside of chunk range"},
@@ -461,9 +464,11 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				},
 			}
 			err := chunk.reconcileBinlogEvent(
-				&replication.BinlogEvent{Header: &replication.EventHeader{EventType: test.eventType}},
-				&replication.RowsEvent{Rows: test.eventRows},
-				tableSchema,
+				Mutation{
+					Type:  test.eventType,
+					Table: table,
+					Rows:  test.eventRows,
+				},
 			)
 			require.NoError(t, err)
 

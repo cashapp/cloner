@@ -5,14 +5,14 @@ import (
 )
 
 type Batch struct {
-	Type  DiffType
+	Type  MutationType
 	Table *Table
 	Rows  []*Row
 }
 
 // BatchWrites consumes diffs and batches them up into batches by type and table
 func BatchWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
-	batchesByType := make(map[DiffType]map[string]Batch)
+	batchesByType := make(map[MutationType]map[string]Batch)
 
 readChannel:
 	for {
@@ -67,7 +67,7 @@ readChannel:
 
 // BatchTableWrites consumes diffs for a single table and batches them up into batches by type
 func BatchTableWrites(ctx context.Context, diffs chan Diff, batches chan Batch) error {
-	batchesByType := make(map[DiffType]Batch)
+	batchesByType := make(map[MutationType]Batch)
 
 	for {
 		select {
@@ -114,7 +114,7 @@ func BatchTableWrites(ctx context.Context, diffs chan Diff, batches chan Batch) 
 func BatchTableWritesSync(diffs []Diff) ([]Batch, error) {
 	var batches []Batch
 
-	batchesByType := make(map[DiffType]Batch)
+	batchesByType := make(map[MutationType]Batch)
 	for _, diff := range diffs {
 		batch, ok := batchesByType[diff.Type]
 		if !ok {

@@ -11,13 +11,25 @@ import (
 	"strings"
 )
 
-type DiffType string
+type MutationType byte
 
 const (
-	Insert DiffType = "insert"
-	Update DiffType = "update"
-	Delete DiffType = "delete"
+	Insert MutationType = iota
+	Update
+	Delete
 )
+
+func (m MutationType) String() string {
+	switch m {
+	case Insert:
+		return "insert"
+	case Update:
+		return "update"
+	case Delete:
+		return "delete"
+	}
+	return "unknown"
+}
 
 var (
 	chunksEnqueued = prometheus.NewCounterVec(
@@ -109,11 +121,11 @@ func init() {
 }
 
 type Diff struct {
-	Type DiffType
+	Type MutationType
 	// Row is the row to update to or insert or delete
 	Row *Row
 
-	// Target is in case of the Update DiffType also set so that it can be compared
+	// Target is in case of the Update MutationType also set so that it can be compared
 	Target *Row
 }
 

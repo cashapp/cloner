@@ -7,7 +7,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
-	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/mightyguava/autotx"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -119,12 +118,6 @@ func (cmd *Replicate) Run() error {
 	return errors.WithStack(err)
 }
 
-type Position struct {
-	File     string
-	Position uint32
-	Gset     mysql.GTIDSet
-}
-
 func (cmd *Replicate) run(ctx context.Context) error {
 	replicator, err := NewReplicator(*cmd)
 	if err != nil {
@@ -140,6 +133,7 @@ func (cmd *Replicate) run(ctx context.Context) error {
 		// TODO return status/errors back to the caller?
 		_, _ = writer.Write([]byte(""))
 	})
+
 	return replicator.run(ctx)
 }
 
@@ -150,16 +144,13 @@ type Replicator struct {
 	source       *sql.DB
 	sourceSchema string
 	target       *sql.DB
-
-	schemaCache map[uint64]*schema.Table
+	tables       []*Table
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
 
-	chunks chan Chunk
-
-	// tx holds the currently executing target transaction, only access from the replication thread
-	tx *sql.Tx
+	// chunks receives a channel of chunks when a snapshot starts
+	chunks chan chan Chunk
 
 	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
 	ongoingChunks []*ChunkSnapshot
@@ -184,8 +175,8 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		schemaCache:     make(map[uint64]*schema.Table),
 		snapshotRunning: atomic.NewBool(false),
+		chunks:          make(chan chan Chunk),
 	}
 	if r.config.ServerID == 0 {
 		hasher := fnv.New32()
@@ -227,6 +218,22 @@ func (r *Replicator) run(ctx context.Context) error {
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
+
+	transactions := make(chan *Transaction)
+	g.Go(func() error {
+		streamer, err := NewTransactionStreamer(r.config, r.tables)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		position, err := r.readStartingPosition(ctx)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		return streamer.Run(ctx, position, transactions)
+	})
+
 	g.Go(func() error {
 		b := backoff.NewExponentialBackOff()
 		// We try to re-connect for this amount of time before we give up
@@ -238,8 +245,11 @@ func (r *Replicator) run(ctx context.Context) error {
 				return ctx.Err()
 			default:
 			}
-			err := r.replicate(ctx, b)
-			logrus.WithError(err).Errorf("replication loop failed, restarting")
+			err := r.replicate(ctx, b, transactions)
+			if errors.Is(err, context.Canceled) {
+				return errors.WithStack(err)
+			}
+			logrus.WithError(err).Errorf("replication write loop failed, restarting")
 			sleepTime := b.NextBackOff()
 			if sleepTime == backoff.Stop {
 				return errors.Wrapf(err, "failed to reconnect after %v", b.GetElapsedTime())
@@ -247,6 +257,7 @@ func (r *Replicator) run(ctx context.Context) error {
 			time.Sleep(sleepTime)
 		}
 	})
+
 	if r.config.HeartbeatFrequency > 0 {
 		g.Go(func() error {
 			return r.heartbeat(ctx)
@@ -284,142 +295,95 @@ func (r *Replicator) init(ctx context.Context) error {
 		}
 	}
 
+	r.tables, err = LoadTables(ctx, r.config.ReaderConfig)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	heartbeatTable, err := loadTable(ctx, r.config.ReaderConfig, r.config.Source.Type, r.source, r.sourceSchema, r.config.HeartbeatTable, TableConfig{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	r.tables = append(r.tables, heartbeatTable)
+
+	watermarkTable, err := loadTable(ctx, r.config.ReaderConfig, r.config.Source.Type, r.source, r.sourceSchema, r.config.WatermarkTable, TableConfig{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	r.tables = append(r.tables, watermarkTable)
+
 	return nil
 }
 
-func (r *Replicator) replicate(ctx context.Context, b backoff.BackOff) error {
-	var err error
+func (r *Replicator) replicate(ctx context.Context, b backoff.BackOff, transactions chan *Transaction) error {
+	logger := logrus.WithField("task", "replicate")
 
-	syncer := replication.NewBinlogSyncer(r.syncerCfg)
-	defer syncer.Close()
-
-	position, gset, err := r.readStartingPoint(ctx)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	var streamer *replication.BinlogStreamer
-	if gset != nil {
-		streamer, err = syncer.StartSyncGTID(*gset)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	} else {
-		streamer, err = syncer.StartSync(position)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
-
-	var nextPos mysql.Position
-
+	var chunks chan Chunk
 	for {
-		err := r.maybeSnapshotChunks(ctx)
-		if err != nil {
-			return errors.WithStack(err)
+		select {
+		case chunks = <-r.chunks:
+			logger.Infof("snapshot starting")
+		default:
+		}
+		if chunks != nil {
+			done, err := r.maybeSnapshotChunks(ctx, chunks)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			if done {
+				chunks = nil
+			}
+		}
+		if chunks == nil && len(r.ongoingChunks) == 0 && r.snapshotRunning.Load() {
+			logger.Infof("snapshot done")
+			chunksEnqueued.Reset()
+			chunksProcessed.Reset()
+			rowsProcessed.Reset()
+			chunksWithDiffs.Reset()
+			r.snapshotRunning.Store(false)
 		}
 
-		e, err := streamer.GetEvent(ctx)
-		if err != nil {
-			return errors.WithStack(err)
+		var transaction *Transaction
+		select {
+		case transaction = <-transactions:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 
-		eventsReceived.Inc()
-
-		if e.Header.LogPos > 0 {
-			// Some events like FormatDescriptionEvent return 0, ignore.
-			nextPos.Pos = e.Header.LogPos
-		}
-
-		ignored := false
-		switch event := e.Event.(type) {
-		case *replication.RotateEvent:
-			nextPos.Name = string(event.NextLogName)
-			nextPos.Pos = uint32(event.Position)
-		case *replication.QueryEvent:
-			if string(event.Query) == "BEGIN" {
-				err = r.startTransaction(ctx)
+		err := autotx.Transact(ctx, r.target, func(tx *sql.Tx) error {
+			for _, mutation := range transaction.Mutations {
+				err := r.handleMutation(ctx, tx, mutation)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-			} else {
-				ignored = true
 			}
-		case *replication.RowsEvent:
-			if !r.shouldReplicate(event.Table) {
-				ignored = true
-				continue
-			}
-			err := r.handleRowsEvent(ctx, e, event)
+			err := r.writeCheckpoint(ctx, tx, transaction.FinalPosition)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-		case *replication.XIDEvent:
-			gset := event.GSet
-			err := r.writeCheckpoint(ctx, nextPos, gset)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			err = r.tx.Commit()
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			r.tx = nil
-			// We've committed a transaction, we can reset the backoff
-			b.Reset()
-		default:
-			ignored = true
-		}
-
-		if ignored {
-			eventsIgnored.Inc()
-		} else {
-			eventsProcessed.Inc()
-		}
-	}
-}
-
-func (r *Replicator) startTransaction(ctx context.Context) (err error) {
-	if r.tx != nil {
-		// Previous transaction never committed, we need to roll it back
-		err := r.tx.Rollback()
+			return nil
+		})
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		r.tx = nil
+
+		// We've committed a transaction, we can reset the backoff
+		b.Reset()
 	}
-	r.tx, err = r.target.BeginTx(ctx, nil)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = r.target.ExecContext(ctx, "SET time_zone = \"+00:00\"")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return err
 }
 
-func isDelete(eventType replication.EventType) bool {
-	return eventType == replication.DELETE_ROWS_EVENTv0 || eventType == replication.DELETE_ROWS_EVENTv1 || eventType == replication.DELETE_ROWS_EVENTv2
-}
-
-func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventHeader, event *replication.RowsEvent) error {
-	if r.tx == nil {
-		return errors.Errorf("transaction was not started with BEGIN")
-	}
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+func (r *Replicator) replaceRows(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
+	var err error
+	tableSchema := mutation.Table.MysqlTable
 	tableName := tableSchema.Name
-	writeType := writeTypeOfEvent(header)
+	writeType := mutation.Type.String()
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
 	defer timer.ObserveDuration()
 	defer func() {
 		if err == nil {
-			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
 		}
 	}()
 	var questionMarks strings.Builder
@@ -437,17 +401,16 @@ func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventH
 	values := fmt.Sprintf("(%s)", questionMarks.String())
 	columnList := columnListBuilder.String()
 
-	valueStrings := make([]string, 0, len(event.Rows))
-	valueArgs := make([]interface{}, 0, len(event.Rows)*len(tableSchema.Columns))
-	for _, row := range event.Rows {
+	valueStrings := make([]string, 0, len(mutation.Rows))
+	valueArgs := make([]interface{}, 0, len(mutation.Rows)*len(tableSchema.Columns))
+	for _, row := range mutation.Rows {
 		valueStrings = append(valueStrings, values)
 		valueArgs = append(valueArgs, row...)
 	}
 	// TODO build the entire statement with a strings.Builder like in deleteRows below. For speed.
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
 		tableSchema.Name, columnList, strings.Join(valueStrings, ","))
-	// TODO timeout and retries
-	_, err = r.tx.ExecContext(ctx, stmt, valueArgs...)
+	_, err = tx.ExecContext(ctx, stmt, valueArgs...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmt)
 	}
@@ -455,64 +418,25 @@ func (r *Replicator) replaceRows(ctx context.Context, header *replication.EventH
 	return nil
 }
 
-func writeTypeOfEvent(header *replication.EventHeader) string {
-	switch header.EventType {
-	case replication.WRITE_ROWS_EVENTv0, replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
-		return "insert"
-	case replication.UPDATE_ROWS_EVENTv0, replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
-		return "update"
-	case replication.DELETE_ROWS_EVENTv0, replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
-		return "delete"
-	default:
-		logrus.Fatalf("unknown event type: %d", header.EventType)
-		panic("unknown event type")
-	}
-}
-
-func (r *Replicator) shouldReplicate(table *replication.TableMapEvent) bool {
-	if r.sourceSchema != string(table.Schema) {
-		return false
-	}
-	if len(r.config.Config.Tables) == 0 {
-		// No tables configged, we replicate everything
-		return true
-	}
-	if string(table.Table) == r.config.HeartbeatTable {
-		return true
-	}
-	if string(table.Table) == r.config.WatermarkTable {
-		return true
-	}
-	_, exists := r.config.Config.Tables[string(table.Table)]
-	return exists
-}
-
-func (r *Replicator) deleteRows(ctx context.Context, header *replication.EventHeader, event *replication.RowsEvent) (err error) {
-	if r.tx == nil {
-		return errors.Errorf("transaction was not started with BEGIN")
-	}
-
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+func (r *Replicator) deleteRows(ctx context.Context, tx *sql.Tx, mutation Mutation) (err error) {
+	tableSchema := mutation.Table.MysqlTable
 	tableName := tableSchema.Name
-	writeType := writeTypeOfEvent(header)
+	writeType := mutation.Type.String()
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
 	defer timer.ObserveDuration()
 	defer func() {
 		if err == nil {
-			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(event.Rows)))
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
 		}
 	}()
 	var stmt strings.Builder
-	args := make([]interface{}, 0, len(event.Rows))
+	args := make([]interface{}, 0, len(mutation.Rows))
 	stmt.WriteString("DELETE FROM `")
-	stmt.Write(event.Table.Table)
+	stmt.WriteString(mutation.Table.Name)
 	stmt.WriteString("` WHERE ")
-	for rowIdx, row := range event.Rows {
+	for rowIdx, row := range mutation.Rows {
 		stmt.WriteString("(")
 		for i, pkIndex := range tableSchema.PKColumns {
 			args = append(args, row[pkIndex])
@@ -526,32 +450,17 @@ func (r *Replicator) deleteRows(ctx context.Context, header *replication.EventHe
 		}
 		stmt.WriteString(")")
 
-		if rowIdx != len(event.Rows)-1 {
+		if rowIdx != len(mutation.Rows)-1 {
 			stmt.WriteString(" OR ")
 		}
 	}
 
 	stmtString := stmt.String()
-	// TODO timeout and retries
-	_, err = r.tx.ExecContext(ctx, stmtString, args...)
+	_, err = tx.ExecContext(ctx, stmtString, args...)
 	if err != nil {
 		return errors.Wrapf(err, "could not execute: %s", stmtString)
 	}
 	return nil
-}
-
-func (r *Replicator) getTableSchema(event *replication.TableMapEvent) (*schema.Table, error) {
-	tableSchema, ok := r.schemaCache[event.TableID]
-	if !ok {
-		var err error
-		tableSchema, err = schema.NewTableFromSqlDB(r.source, string(event.Schema), string(event.Table))
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		// TODO invalidate cache on each DDL event
-		r.schemaCache[event.TableID] = tableSchema
-	}
-	return tableSchema, nil
 }
 
 func (r *Replicator) heartbeat(ctx context.Context) error {
@@ -669,22 +578,22 @@ func (r *Replicator) writeHeartbeat(ctx context.Context) error {
 	return errors.WithStack(err)
 }
 
-func (r *Replicator) writeCheckpoint(ctx context.Context, position mysql.Position, gset mysql.GTIDSet) error {
+func (r *Replicator) writeCheckpoint(ctx context.Context, tx *sql.Tx, position Position) error {
 	gsetString := ""
-	if gset != nil {
-		gsetString = gset.String()
+	if position.Gset != nil {
+		gsetString = position.Gset.String()
 	}
-	_, err := r.target.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		fmt.Sprintf("REPLACE INTO %s (name, file, position, gtid_set, timestamp) VALUES (?, ?, ?, ?, ?)",
 			r.config.CheckpointTable),
-		r.config.TaskName, position.Name, position.Pos, gsetString, time.Now().UTC())
+		r.config.TaskName, position.File, position.Position, gsetString, time.Now().UTC())
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	return nil
 }
 
-func (r *Replicator) readStartingPoint(ctx context.Context) (mysql.Position, *mysql.GTIDSet, error) {
+func (r *Replicator) readStartingPosition(ctx context.Context) (Position, error) {
 	logger := logrus.WithContext(ctx).WithField("task", "replicate")
 
 	file, position, executedGtidSet, err := r.readCheckpoint(ctx)
@@ -693,35 +602,34 @@ func (r *Replicator) readStartingPoint(ctx context.Context) (mysql.Position, *my
 			file, position, executedGtidSet, err = r.readMasterPosition(ctx)
 			logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
 			if err != nil {
-				return mysql.Position{}, nil, errors.WithStack(err)
+				return Position{}, errors.WithStack(err)
 			}
 		} else {
-			return mysql.Position{}, nil, errors.WithStack(err)
+			return Position{}, errors.WithStack(err)
 		}
 	} else {
 		masterFile, masterPos, masterGtidSet, err := r.readMasterPosition(ctx)
 		if err != nil {
-			return mysql.Position{}, nil, errors.WithStack(err)
+			return Position{}, errors.WithStack(err)
 		}
 		logger.Infof("re-starting replication from %s:%d gtid=%s (master is currently at %s:%d gtid=%s)",
 			file, position, executedGtidSet, masterFile, masterPos, masterGtidSet)
 	}
 
-	// We always have a position
-	pos := mysql.Position{
-		Name: file,
-		Pos:  position,
-	}
 	// We sometimes have a GTIDSet, if not we return nil
-	var gset *mysql.GTIDSet
+	var gset mysql.GTIDSet
 	if executedGtidSet != "" {
 		parsed, err := mysql.ParseGTIDSet(r.syncerCfg.Flavor, executedGtidSet)
 		if err != nil {
-			return mysql.Position{}, nil, errors.WithStack(err)
+			return Position{}, errors.WithStack(err)
 		}
-		gset = &parsed
+		gset = parsed
 	}
-	return pos, gset, nil
+	return Position{
+		File:     file,
+		Position: position,
+		Gset:     gset,
+	}, nil
 }
 
 func (r *Replicator) readMasterPosition(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
@@ -869,15 +777,11 @@ func (r *Replicator) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error
 }
 
 // reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
-func (r *Replicator) reconcileOngoingChunks(e *replication.BinlogEvent, event *replication.RowsEvent) error {
+func (r *Replicator) reconcileOngoingChunks(mutation Mutation) error {
 	// should be O(<rows in the RowsEvent> * lg <rows in the chunk>) given that we can binary chop into chunk
 	// RowsEvent is usually not that large so I don't think we need to index anything, that will probably be slower
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	for _, chunk := range r.ongoingChunks {
-		err = chunk.reconcileBinlogEvent(e, event, tableSchema)
+		err := chunk.reconcileBinlogEvent(mutation)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -886,7 +790,8 @@ func (r *Replicator) reconcileOngoingChunks(e *replication.BinlogEvent, event *r
 }
 
 // reconcileBinlogEvent will apply the row
-func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *replication.RowsEvent, tableSchema *schema.Table) error {
+func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
+	tableSchema := mutation.Table.MysqlTable
 	if !c.InsideWatermarks {
 		return nil
 	}
@@ -896,9 +801,8 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *
 	if c.Chunk.Table.MysqlTable.Schema != tableSchema.Schema {
 		return nil
 	}
-	isDelete := isDelete(e.Header.EventType)
-	if isDelete {
-		for _, row := range event.Rows {
+	if mutation.Type == Delete {
+		for _, row := range mutation.Rows {
 			if !c.Chunk.ContainsRow(row) {
 				// The row is outside of our range, we can skip it
 				continue
@@ -915,7 +819,7 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *
 			}
 		}
 	} else {
-		for _, row := range event.Rows {
+		for _, row := range mutation.Rows {
 			if !c.Chunk.ContainsRow(row) {
 				// The row is outside of our range, we can skip it
 				continue
@@ -937,8 +841,8 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(e *replication.BinlogEvent, event *
 	return nil
 }
 
-func (r *Replicator) handleRowsEvent(ctx context.Context, e *replication.BinlogEvent, event *replication.RowsEvent) error {
-	wasWatermark, err := r.handleWatermark(ctx, e, event)
+func (r *Replicator) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
+	wasWatermark, err := r.handleWatermark(ctx, mutation)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -947,18 +851,18 @@ func (r *Replicator) handleRowsEvent(ctx context.Context, e *replication.BinlogE
 		return nil
 	}
 
-	err = r.reconcileOngoingChunks(e, event)
+	err = r.reconcileOngoingChunks(mutation)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	if isDelete(e.Header.EventType) {
-		err := r.deleteRows(ctx, e.Header, event)
+	if mutation.Type == Delete {
+		err := r.deleteRows(ctx, tx, mutation)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 	} else {
-		err := r.replaceRows(ctx, e.Header, event)
+		err := r.replaceRows(ctx, tx, mutation)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -967,19 +871,16 @@ func (r *Replicator) handleRowsEvent(ctx context.Context, e *replication.BinlogE
 	return nil
 }
 
-func (r *Replicator) findOngoingChunkFromWatermark(event *replication.RowsEvent) (*ChunkSnapshot, error) {
+func (r *Replicator) findOngoingChunkFromWatermark(mutation Mutation) (*ChunkSnapshot, error) {
 	logger := logrus.WithField("task", "replicate")
 
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	tableNameI, err := tableSchema.GetColumnValue("table_name", event.Rows[0])
+	tableSchema := mutation.Table.MysqlTable
+	tableNameI, err := tableSchema.GetColumnValue("table_name", mutation.Rows[0])
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	tableName := tableNameI.(string)
-	chunkSeqI, err := tableSchema.GetColumnValue("chunk_seq", event.Rows[0])
+	chunkSeqI, err := tableSchema.GetColumnValue("chunk_seq", mutation.Rows[0])
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -1020,7 +921,6 @@ func (r *Replicator) snapshot(ctx context.Context) error {
 		// Someone else won the race
 		return nil
 	}
-	r.chunks = make(chan Chunk, r.config.ChunkBufferSize)
 
 	go func() {
 		logger := logrus.WithContext(ctx).WithField("task", "chunking")
@@ -1029,35 +929,32 @@ func (r *Replicator) snapshot(ctx context.Context) error {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
 		}
 	}()
+
 	return nil
 }
 
-func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogEvent, event *replication.RowsEvent) (bool, error) {
-	tableSchema, err := r.getTableSchema(event.Table)
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	if tableSchema.Name != r.config.WatermarkTable {
+func (r *Replicator) handleWatermark(ctx context.Context, mutation Mutation) (bool, error) {
+	if mutation.Table.Name != r.config.WatermarkTable {
 		return false, nil
 	}
-	if isDelete(e.Header.EventType) {
+	if mutation.Type == Delete {
 		// Someone is probably just cleaning out the watermark table
 		return true, nil
 	}
-	if len(event.Rows) != 1 {
+	if len(mutation.Rows) != 1 {
 		return true, errors.Errorf("more than a single row was written to the watermark table at the same time")
 	}
-	row := event.Rows[0]
-	low, err := tableSchema.GetColumnValue("low", row)
+	row := mutation.Rows[0]
+	low, err := mutation.Table.MysqlTable.GetColumnValue("low", row)
 	if err != nil {
 		return true, errors.WithStack(err)
 	}
-	high, err := tableSchema.GetColumnValue("high", row)
+	high, err := mutation.Table.MysqlTable.GetColumnValue("high", row)
 	if err != nil {
 		return true, errors.WithStack(err)
 	}
 	if low.(int8) == 1 {
-		ongoingChunk, err := r.findOngoingChunkFromWatermark(event)
+		ongoingChunk, err := r.findOngoingChunkFromWatermark(mutation)
 		if err != nil {
 			return true, errors.WithStack(err)
 		}
@@ -1067,7 +964,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 		ongoingChunk.InsideWatermarks = true
 	}
 	if high.(int8) == 1 {
-		ongoingChunk, err := r.findOngoingChunkFromWatermark(event)
+		ongoingChunk, err := r.findOngoingChunkFromWatermark(mutation)
 		if err != nil {
 			return true, errors.WithStack(err)
 		}
@@ -1086,6 +983,7 @@ func (r *Replicator) handleWatermark(ctx context.Context, e *replication.BinlogE
 }
 
 func (r *Replicator) chunkTables(ctx context.Context) error {
+	chunks := make(chan Chunk, r.config.ChunkBufferSize)
 
 	tables, err := loadTables(ctx, r.config.ReaderConfig, r.config.Source, r.source)
 	if err != nil {
@@ -1098,6 +996,11 @@ func (r *Replicator) chunkTables(ctx context.Context) error {
 
 	logger := logrus.WithContext(ctx).WithField("task", "chunking")
 
+	g.Go(func() error {
+		r.chunks <- chunks
+		return nil
+	})
+
 	for _, t := range tables {
 		table := t
 		err = tableParallelism.Acquire(ctx, 1)
@@ -1109,7 +1012,7 @@ func (r *Replicator) chunkTables(ctx context.Context) error {
 
 			logger := logger.WithField("table", table.Name)
 			logger.Infof("'%s' chunking start", table.Name)
-			err := generateTableChunksAsync(ctx, table, r.source, r.chunks, r.sourceRetry)
+			err := generateTableChunksAsync(ctx, table, r.source, chunks, r.sourceRetry)
 			logger.Infof("'%s' chunking done", table.Name)
 			if err != nil {
 				return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
@@ -1122,7 +1025,7 @@ func (r *Replicator) chunkTables(ctx context.Context) error {
 	err = g.Wait()
 	logger.Infof("table chunking done")
 
-	close(r.chunks)
+	close(chunks)
 	return errors.WithStack(err)
 }
 
@@ -1162,33 +1065,16 @@ func (r *Replicator) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSnap
 	return snapshot, nil
 }
 
-func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
-	logger := logrus.WithContext(ctx).WithField("task", "snapshot")
-
-	// We only need to read new snapshots if snapshotting is running
-	if !r.snapshotRunning.Load() {
-		return nil
-	}
+func (r *Replicator) maybeSnapshotChunks(ctx context.Context, chunkCh chan Chunk) (bool, error) {
 	// We read new snapshot when we have finished processing all of the ongoing chunks
 	if len(r.ongoingChunks) > 0 {
-		return nil
-	}
-	if r.chunks == nil {
-		// If there are no ongoing chunks and no chunks to be snapshotted then we are done with the snapshot
-		logger.Infof("snapshot done")
-		chunksEnqueued.Reset()
-		chunksProcessed.Reset()
-		rowsProcessed.Reset()
-		chunksWithDiffs.Reset()
-		r.snapshotRunning.Store(false)
-		return nil
+		return false, nil
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	snapshotCh := make(chan *ChunkSnapshot, r.config.ChunkParallelism)
 
-	chunkCh := r.chunks
 	closed := atomic.NewBool(false)
 
 	for i := 0; i < r.config.ChunkParallelism; i++ {
@@ -1211,17 +1097,13 @@ func (r *Replicator) maybeSnapshotChunks(ctx context.Context) error {
 
 	err := g.Wait()
 	if err != nil {
-		return errors.WithStack(err)
+		return false, errors.WithStack(err)
 	}
 	close(snapshotCh)
 
-	var chunks []*ChunkSnapshot
 	for chunk := range snapshotCh {
-		chunks = append(chunks, chunk)
+		r.ongoingChunks = append(r.ongoingChunks, chunk)
 	}
-	r.ongoingChunks = append(r.ongoingChunks, chunks...)
-	if closed.Load() {
-		r.chunks = nil
-	}
-	return nil
+	done := closed.Load()
+	return done, nil
 }

@@ -2,11 +2,14 @@ package clone
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"hash/fnv"
 	_ "net/http/pprof"
 )
 
@@ -38,29 +41,23 @@ type TransactionStream struct {
 	schemaCache map[uint64]*Table
 }
 
-func NewTransactionStreamer(config Replicate, tables []*Table) (*TransactionStream, error) {
-	var err error
+func NewTransactionStreamer(config Replicate) (*TransactionStream, error) {
 	r := TransactionStream{
 		config:      config,
-		tables:      tables,
 		schemaCache: make(map[uint64]*Table),
 	}
-	r.syncerCfg, err = r.config.Source.BinlogSyncerConfig(r.config.ServerID)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	r.sourceSchema, err = r.config.Source.Schema()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
 	return &r, nil
 }
 
-func (r *TransactionStream) Run(ctx context.Context, b backoff.BackOff, position Position, output chan Transaction) error {
+func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output chan Transaction) error {
 	var err error
 
-	syncer := replication.NewBinlogSyncer(r.syncerCfg)
+	position, err := s.readStartingPosition(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	syncer := replication.NewBinlogSyncer(s.syncerCfg)
 	defer syncer.Close()
 
 	var streamer *replication.BinlogStreamer
@@ -106,11 +103,11 @@ func (r *TransactionStream) Run(ctx context.Context, b backoff.BackOff, position
 				ignored = true
 			}
 		case *replication.RowsEvent:
-			if !r.shouldReplicate(event.Table) {
+			if !s.shouldReplicate(event.Table) {
 				ignored = true
 				continue
 			}
-			currentTransaction.Mutations = append(currentTransaction.Mutations, r.toMutation(e, event))
+			currentTransaction.Mutations = append(currentTransaction.Mutations, s.toMutation(e, event))
 		case *replication.XIDEvent:
 			gset := event.GSet
 			currentTransaction.FinalPosition = Position{
@@ -138,24 +135,24 @@ func (r *TransactionStream) Run(ctx context.Context, b backoff.BackOff, position
 	}
 }
 
-func (r *TransactionStream) toMutation(e *replication.BinlogEvent, event *replication.RowsEvent) Mutation {
+func (s *TransactionStream) toMutation(e *replication.BinlogEvent, event *replication.RowsEvent) Mutation {
 	return Mutation{
 		Type:  toMutationType(e.Header.EventType),
-		Table: r.getTableSchema(event.Table),
+		Table: s.getTableSchema(event.Table),
 		Rows:  event.Rows,
 	}
 }
 
-func (r *TransactionStream) getTableSchema(event *replication.TableMapEvent) *Table {
-	tableSchema, ok := r.schemaCache[event.TableID]
+func (s *TransactionStream) getTableSchema(event *replication.TableMapEvent) *Table {
+	tableSchema, ok := s.schemaCache[event.TableID]
 	if !ok {
-		for _, table := range r.tables {
+		for _, table := range s.tables {
 			if table.Name == string(event.Table) {
-				r.schemaCache[event.TableID] = table
+				s.schemaCache[event.TableID] = table
 				return table
 			}
 		}
-		r.schemaCache[event.TableID] = nil
+		s.schemaCache[event.TableID] = nil
 		return nil
 	}
 	return tableSchema
@@ -181,9 +178,137 @@ func toMutationType(eventType replication.EventType) MutationType {
 	return 0
 }
 
-func (r *TransactionStream) shouldReplicate(event *replication.TableMapEvent) bool {
-	if r.sourceSchema != string(event.Schema) {
+func (s *TransactionStream) shouldReplicate(event *replication.TableMapEvent) bool {
+	if s.sourceSchema != string(event.Schema) {
 		return false
 	}
-	return r.getTableSchema(event) != nil
+	return s.getTableSchema(event) != nil
+}
+
+func (s *TransactionStream) Init(ctx context.Context) error {
+	var err error
+
+	if s.config.ServerID == 0 {
+		hasher := fnv.New32()
+		_, err = hasher.Write([]byte(s.config.TaskName))
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		s.config.ServerID = hasher.Sum32()
+	}
+	logrus.Infof("using replication server id: %d", s.config.ServerID)
+
+	s.syncerCfg, err = s.config.Source.BinlogSyncerConfig(s.config.ServerID)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	s.sourceSchema, err = s.config.Source.Schema()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	s.tables, err = LoadTables(ctx, s.config.ReaderConfig)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	source, err := s.config.Source.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer source.Close()
+
+	// TODO adding this table to the list of tables to replicate should be moved to the Heartbeater
+	heartbeatTable, err := loadTable(ctx, s.config.ReaderConfig, s.config.Source.Type, source, s.sourceSchema, s.config.HeartbeatTable, TableConfig{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	s.tables = append(s.tables, heartbeatTable)
+
+	// TODO adding this table to the list of tables to replicate should be moved to the Snapshotter
+	watermarkTable, err := loadTable(ctx, s.config.ReaderConfig, s.config.Source.Type, source, s.sourceSchema, s.config.WatermarkTable, TableConfig{})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	s.tables = append(s.tables, watermarkTable)
+
+	return nil
+}
+
+func (s *TransactionStream) readStartingPosition(ctx context.Context) (Position, error) {
+	logger := logrus.WithContext(ctx).WithField("task", "replicate")
+
+	file, position, executedGtidSet, err := s.readCheckpoint(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			file, position, executedGtidSet, err = s.readMasterPosition(ctx)
+			logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
+			if err != nil {
+				return Position{}, errors.WithStack(err)
+			}
+		} else {
+			return Position{}, errors.WithStack(err)
+		}
+	} else {
+		masterFile, masterPos, masterGtidSet, err := s.readMasterPosition(ctx)
+		if err != nil {
+			return Position{}, errors.WithStack(err)
+		}
+		logger.Infof("re-starting replication from %s:%d gtid=%s (master is currently at %s:%d gtid=%s)",
+			file, position, executedGtidSet, masterFile, masterPos, masterGtidSet)
+	}
+
+	// We sometimes have a GTIDSet, if not we return nil
+	var gset mysql.GTIDSet
+	if executedGtidSet != "" {
+		parsed, err := mysql.ParseGTIDSet(s.syncerCfg.Flavor, executedGtidSet)
+		if err != nil {
+			return Position{}, errors.WithStack(err)
+		}
+		gset = parsed
+	}
+	return Position{
+		File:     file,
+		Position: position,
+		Gset:     gset,
+	}, nil
+}
+
+func (s *TransactionStream) readMasterPosition(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
+	source, err := s.config.Source.DB()
+	if err != nil {
+		return
+	}
+	defer source.Close()
+
+	row := source.QueryRowContext(ctx, "SHOW MASTER STATUS")
+	var binlogDoDB string
+	var binlogIgnoreDB string
+	err = row.Scan(
+		&file,
+		&position,
+		&binlogDoDB,
+		&binlogIgnoreDB,
+		&executedGtidSet,
+	)
+	return
+}
+
+func (s *TransactionStream) readCheckpoint(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
+	target, err := s.config.Target.DB()
+	if err != nil {
+		return
+	}
+	defer target.Close()
+
+	row := target.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT file, position, gtid_set FROM %s WHERE name = ?",
+			s.config.CheckpointTable),
+		s.config.TaskName)
+	err = row.Scan(
+		&file,
+		&position,
+		&executedGtidSet,
+	)
+	return
 }

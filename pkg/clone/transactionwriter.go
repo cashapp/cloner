@@ -8,7 +8,6 @@ import (
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/atomic"
 	_ "net/http/pprof"
 	"strings"
 	"time"
@@ -23,15 +22,6 @@ type TransactionWriter struct {
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
-
-	// chunks receives a channel of chunks when a snapshot starts
-	chunks chan chan Chunk
-
-	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
-	ongoingChunks []*ChunkSnapshot
-
-	// snapshotRunning is true while a snapshot is running
-	snapshotRunning *atomic.Bool
 }
 
 func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
@@ -50,8 +40,6 @@ func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		snapshotRunning: atomic.NewBool(false),
-		chunks:          make(chan chan Chunk),
 	}
 	target, err := r.config.Target.DB()
 	if err != nil {

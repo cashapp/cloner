@@ -8,29 +8,18 @@ import (
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"go.uber.org/atomic"
 	_ "net/http/pprof"
 	"time"
 )
 
 // Heartbeater receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type Heartbeater struct {
-	config       Replicate
-	source       *sql.DB
-	sourceSchema string
-	target       *sql.DB
+	config Replicate
+	source *sql.DB
+	target *sql.DB
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
-
-	// chunks receives a channel of chunks when a snapshot starts
-	chunks chan chan Chunk
-
-	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
-	ongoingChunks []*ChunkSnapshot
-
-	// snapshotRunning is true while a snapshot is running
-	snapshotRunning *atomic.Bool
 }
 
 func NewHeartbeater(config Replicate) (*Heartbeater, error) {
@@ -49,12 +38,6 @@ func NewHeartbeater(config Replicate) (*Heartbeater, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		snapshotRunning: atomic.NewBool(false),
-		chunks:          make(chan chan Chunk),
-	}
-	r.sourceSchema, err = r.config.Source.Schema()
-	if err != nil {
-		return nil, errors.WithStack(err)
 	}
 
 	source, err := r.config.Source.DB()

@@ -68,7 +68,7 @@ func NewTransactionStreamer(config Replicate, tables []*Table) (*TransactionStre
 	return &r, nil
 }
 
-func (r *TransactionStream) Run(ctx context.Context, startingPoint Position, output chan *Transaction) error {
+func (r *TransactionStream) Run(ctx context.Context, startingPoint Position, output chan Transaction) error {
 	b := backoff.NewExponentialBackOff()
 	// We try to re-connect for this amount of time before we give up
 	// on Kubernetes that generally means we will get restarted with a backoff
@@ -92,7 +92,7 @@ func (r *TransactionStream) Run(ctx context.Context, startingPoint Position, out
 	}
 }
 
-func (r *TransactionStream) run(ctx context.Context, b backoff.BackOff, position Position, output chan *Transaction) error {
+func (r *TransactionStream) run(ctx context.Context, b backoff.BackOff, position Position, output chan Transaction) error {
 	var err error
 
 	syncer := replication.NewBinlogSyncer(r.syncerCfg)
@@ -127,6 +127,8 @@ func (r *TransactionStream) run(ctx context.Context, b backoff.BackOff, position
 			nextPos.Pos = e.Header.LogPos
 		}
 
+		// TODO we should crash hard if we get a DDL as we currently do not support that
+
 		ignored := false
 		switch event := e.Event.(type) {
 		case *replication.RotateEvent:
@@ -152,7 +154,7 @@ func (r *TransactionStream) run(ctx context.Context, b backoff.BackOff, position
 				Gset:     gset,
 			}
 			select {
-			case output <- currentTransaction:
+			case output <- *currentTransaction:
 			case <-ctx.Done():
 				return ctx.Err()
 			}

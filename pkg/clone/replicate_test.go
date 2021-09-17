@@ -249,7 +249,7 @@ func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Ti
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
 }

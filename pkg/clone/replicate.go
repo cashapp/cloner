@@ -10,13 +10,10 @@ import (
 	"github.com/mightyguava/autotx"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 	"hash/fnv"
 	"net/http"
 	_ "net/http/pprof"
-	"sort"
 	"strings"
 	"time"
 
@@ -149,14 +146,8 @@ type Replicator struct {
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
 
-	// chunks receives a channel of chunks when a snapshot starts
-	chunks chan chan Chunk
-
-	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
-	ongoingChunks []*ChunkSnapshot
-
-	// snapshotRunning is true while a snapshot is running
-	snapshotRunning *atomic.Bool
+	snapshotter         *Snapshotter
+	transactionStreamer *TransactionStream
 }
 
 func NewReplicator(config Replicate) (*Replicator, error) {
@@ -175,8 +166,6 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		snapshotRunning: atomic.NewBool(false),
-		chunks:          make(chan chan Chunk),
 	}
 	if r.config.ServerID == 0 {
 		hasher := fnv.New32()
@@ -208,6 +197,11 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 	}
 	r.target = target
 
+	r.snapshotter, err = NewSnapshotter(r.config)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
 	return &r, nil
 }
 
@@ -219,19 +213,19 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	transactions := make(chan *Transaction)
+	transactions := make(chan Transaction)
 	g.Go(func() error {
-		streamer, err := NewTransactionStreamer(r.config, r.tables)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
 		position, err := r.readStartingPosition(ctx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 
-		return streamer.Run(ctx, position, transactions)
+		return r.transactionStreamer.Run(ctx, position, transactions)
+	})
+
+	transactionsAfterSnapshot := make(chan Transaction)
+	g.Go(func() error {
+		return r.snapshotter.Run(ctx, transactions, transactionsAfterSnapshot)
 	})
 
 	g.Go(func() error {
@@ -245,7 +239,7 @@ func (r *Replicator) run(ctx context.Context) error {
 				return ctx.Err()
 			default:
 			}
-			err := r.replicate(ctx, b, transactions)
+			err := r.replicate(ctx, b, transactionsAfterSnapshot)
 			if errors.Is(err, context.Canceled) {
 				return errors.WithStack(err)
 			}
@@ -289,10 +283,11 @@ func (r *Replicator) init(ctx context.Context) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		err = r.createWatermarkTable(ctx)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	}
+
+	err = r.snapshotter.Init(ctx)
+	if err != nil {
+		return errors.WithStack(err)
 	}
 
 	r.tables, err = LoadTables(ctx, r.config.ReaderConfig)
@@ -312,38 +307,17 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 	r.tables = append(r.tables, watermarkTable)
 
+	r.transactionStreamer, err = NewTransactionStreamer(r.config, r.tables)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	return nil
 }
 
-func (r *Replicator) replicate(ctx context.Context, b backoff.BackOff, transactions chan *Transaction) error {
-	logger := logrus.WithField("task", "replicate")
-
-	var chunks chan Chunk
+func (r *Replicator) replicate(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
 	for {
-		select {
-		case chunks = <-r.chunks:
-			logger.Infof("snapshot starting")
-		default:
-		}
-		if chunks != nil {
-			done, err := r.maybeSnapshotChunks(ctx, chunks)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			if done {
-				chunks = nil
-			}
-		}
-		if chunks == nil && len(r.ongoingChunks) == 0 && r.snapshotRunning.Load() {
-			logger.Infof("snapshot done")
-			chunksEnqueued.Reset()
-			chunksProcessed.Reset()
-			rowsProcessed.Reset()
-			chunksWithDiffs.Reset()
-			r.snapshotRunning.Store(false)
-		}
-
-		var transaction *Transaction
+		var transaction Transaction
 		select {
 		case transaction = <-transactions:
 		case <-ctx.Done():
@@ -525,27 +499,6 @@ func (r *Replicator) createCheckpointTable(ctx context.Context) error {
 	return nil
 }
 
-func (r *Replicator) createWatermarkTable(ctx context.Context) error {
-	// TODO retries with backoff?
-	timeoutCtx, cancel := context.WithTimeout(ctx, r.config.WriteTimeout)
-	defer cancel()
-	stmt := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
-			table_name VARCHAR(255) NOT NULL,
-			chunk_seq  BIGINT(20)   NOT NULL,
-			low        TINYINT      DEFAULT 0,
-			high       TINYINT      DEFAULT 0,
-			PRIMARY KEY (id)
-		)
-		`, r.config.WatermarkTable)
-	_, err := r.source.ExecContext(timeoutCtx, stmt)
-	if err != nil {
-		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)
-	}
-	return nil
-}
-
 func (r *Replicator) writeHeartbeat(ctx context.Context) error {
 	err := Retry(ctx, r.sourceRetry, func(ctx context.Context) error {
 		return autotx.Transact(ctx, r.source, func(tx *sql.Tx) error {
@@ -687,175 +640,7 @@ func (r *Replicator) readHeartbeat(ctx context.Context) error {
 	return nil
 }
 
-// ChunkSnapshot is a mutable struct for representing the current reconciliation state of a chunk, it is used single
-// threaded by the replication thread only
-type ChunkSnapshot struct {
-	InsideWatermarks bool
-	Rows             []*Row
-	Chunk            Chunk
-}
-
-func (c *ChunkSnapshot) findRow(row []interface{}) (*Row, int, error) {
-	n := len(c.Rows)
-	i := sort.Search(n, func(i int) bool {
-		return c.Rows[i].PkAfterOrEqual(row)
-	})
-	var candidate *Row
-	if n == i {
-		i = -1
-	} else {
-		candidate = c.Rows[i]
-		if !candidate.PkEqual(row) {
-			candidate = nil
-		}
-	}
-	return candidate, i, nil
-}
-
-func (c *ChunkSnapshot) updateRow(i int, row []interface{}) {
-	c.Rows[i] = c.Rows[i].Updated(row)
-}
-
-func (c *ChunkSnapshot) deleteRow(i int) {
-	c.Rows = append(c.Rows[:i], c.Rows[i+1:]...)
-}
-
-func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
-	pk := c.Chunk.Table.PkOfRow(row)
-	r := &Row{
-		Table: c.Chunk.Table,
-		ID:    pk,
-		Data:  row,
-	}
-	if i == -1 {
-		// We found no place to insert it so we append it
-		c.Rows = append(c.Rows, r)
-	} else {
-		c.Rows = append(c.Rows[:i], append([]*Row{r}, c.Rows[i:]...)...)
-	}
-}
-
-// writeChunk synchronously diffs and writes the chunk to the target (diff and write)
-// the writes are made synchronously in the replication stream to maintain strong consistency
-func (r *Replicator) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error {
-	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk.Chunk)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Diff the streams
-	diffs, err := StreamDiff(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if len(diffs) > 0 {
-		chunksWithDiffs.WithLabelValues(chunk.Chunk.Table.Name).Inc()
-	}
-
-	// Batch up the diffs
-	batches, err := BatchTableWritesSync(diffs)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	writeCount := 0
-
-	// Write every batch
-	for _, batch := range batches {
-		writeCount += len(batch.Rows)
-		err := writeBatch(ctx, r.config.WriterConfig, batch, r.target, r.targetRetry)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
-
-	chunksProcessed.WithLabelValues(chunk.Chunk.Table.Name).Inc()
-	rowsProcessed.WithLabelValues(chunk.Chunk.Table.Name).Add(float64(len(chunk.Rows)))
-
-	return nil
-}
-
-// reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
-func (r *Replicator) reconcileOngoingChunks(mutation Mutation) error {
-	// should be O(<rows in the RowsEvent> * lg <rows in the chunk>) given that we can binary chop into chunk
-	// RowsEvent is usually not that large so I don't think we need to index anything, that will probably be slower
-	for _, chunk := range r.ongoingChunks {
-		err := chunk.reconcileBinlogEvent(mutation)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
-	return nil
-}
-
-// reconcileBinlogEvent will apply the row
-func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
-	tableSchema := mutation.Table.MysqlTable
-	if !c.InsideWatermarks {
-		return nil
-	}
-	if c.Chunk.Table.MysqlTable.Name != tableSchema.Name {
-		return nil
-	}
-	if c.Chunk.Table.MysqlTable.Schema != tableSchema.Schema {
-		return nil
-	}
-	if mutation.Type == Delete {
-		for _, row := range mutation.Rows {
-			if !c.Chunk.ContainsRow(row) {
-				// The row is outside of our range, we can skip it
-				continue
-			}
-			// find the row using binary chop (the chunk rows are sorted)
-			existingRow, i, err := c.findRow(row)
-			if existingRow == nil {
-				// Row already deleted, this event probably happened after the low watermark but before the chunk read
-			} else {
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				c.deleteRow(i)
-			}
-		}
-	} else {
-		for _, row := range mutation.Rows {
-			if !c.Chunk.ContainsRow(row) {
-				// The row is outside of our range, we can skip it
-				continue
-			}
-			existingRow, i, err := c.findRow(row)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			if existingRow == nil {
-				// This is either an insert or an update of a row that is deleted after the low watermark but before
-				// the chunk read, either way we just insert it and if the delete event comes we take it away again
-				c.insertRow(i, row)
-			} else {
-				// We found a matching row, it must be an update
-				c.updateRow(i, row)
-			}
-		}
-	}
-	return nil
-}
-
 func (r *Replicator) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
-	wasWatermark, err := r.handleWatermark(ctx, mutation)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if wasWatermark {
-		// We don't otherwise process watermarks
-		return nil
-	}
-
-	err = r.reconcileOngoingChunks(mutation)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
 	if mutation.Type == Delete {
 		err := r.deleteRows(ctx, tx, mutation)
 		if err != nil {
@@ -871,239 +656,6 @@ func (r *Replicator) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mu
 	return nil
 }
 
-func (r *Replicator) findOngoingChunkFromWatermark(mutation Mutation) (*ChunkSnapshot, error) {
-	logger := logrus.WithField("task", "replicate")
-
-	tableSchema := mutation.Table.MysqlTable
-	tableNameI, err := tableSchema.GetColumnValue("table_name", mutation.Rows[0])
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	tableName := tableNameI.(string)
-	chunkSeqI, err := tableSchema.GetColumnValue("chunk_seq", mutation.Rows[0])
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	chunkSeq := chunkSeqI.(int64)
-	for _, chunk := range r.ongoingChunks {
-		if chunk.Chunk.Seq == chunkSeq && chunk.Chunk.Table.Name == tableName {
-			return chunk, nil
-		}
-	}
-	logger.Warnf("could not find chunk for watermark for table '%s', "+
-		"we may be receiving the watermark events before the chunk "+
-		"or this is a watermark left behind from an earlier failed snapshot "+
-		"attempt that crashed before it completed", tableName)
-	return nil, nil
-}
-
-func (r *Replicator) removeOngoingChunk(chunk *ChunkSnapshot) {
-	logger := logrus.WithField("task", "replicate")
-
-	n := 0
-	for _, x := range r.ongoingChunks {
-		if x != chunk {
-			r.ongoingChunks[n] = x
-			n++
-		}
-	}
-	r.ongoingChunks = r.ongoingChunks[:n]
-	if chunk.Chunk.Last {
-		logger.WithField("table", chunk.Chunk.Table.Name).
-			Infof("'%s' snapshot done", chunk.Chunk.Table.Name)
-	}
-}
-
-// snapshot runs a snapshot asynchronously unless a snapshot is already running
 func (r *Replicator) snapshot(ctx context.Context) error {
-	succeeded := r.snapshotRunning.CAS(false, true)
-	if !succeeded {
-		// Someone else won the race
-		return nil
-	}
-
-	go func() {
-		logger := logrus.WithContext(ctx).WithField("task", "chunking")
-		err := r.chunkTables(ctx)
-		if err != nil {
-			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
-		}
-	}()
-
-	return nil
-}
-
-func (r *Replicator) handleWatermark(ctx context.Context, mutation Mutation) (bool, error) {
-	if mutation.Table.Name != r.config.WatermarkTable {
-		return false, nil
-	}
-	if mutation.Type == Delete {
-		// Someone is probably just cleaning out the watermark table
-		return true, nil
-	}
-	if len(mutation.Rows) != 1 {
-		return true, errors.Errorf("more than a single row was written to the watermark table at the same time")
-	}
-	row := mutation.Rows[0]
-	low, err := mutation.Table.MysqlTable.GetColumnValue("low", row)
-	if err != nil {
-		return true, errors.WithStack(err)
-	}
-	high, err := mutation.Table.MysqlTable.GetColumnValue("high", row)
-	if err != nil {
-		return true, errors.WithStack(err)
-	}
-	if low.(int8) == 1 {
-		ongoingChunk, err := r.findOngoingChunkFromWatermark(mutation)
-		if err != nil {
-			return true, errors.WithStack(err)
-		}
-		if ongoingChunk == nil {
-			return true, nil
-		}
-		ongoingChunk.InsideWatermarks = true
-	}
-	if high.(int8) == 1 {
-		ongoingChunk, err := r.findOngoingChunkFromWatermark(mutation)
-		if err != nil {
-			return true, errors.WithStack(err)
-		}
-		if ongoingChunk == nil {
-			return true, nil
-		}
-
-		ongoingChunk.InsideWatermarks = false
-		err = r.writeChunk(ctx, ongoingChunk)
-		if err != nil {
-			return true, errors.WithStack(err)
-		}
-		r.removeOngoingChunk(ongoingChunk)
-	}
-	return true, nil
-}
-
-func (r *Replicator) chunkTables(ctx context.Context) error {
-	chunks := make(chan Chunk, r.config.ChunkBufferSize)
-
-	tables, err := loadTables(ctx, r.config.ReaderConfig, r.config.Source, r.source)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	g, ctx := errgroup.WithContext(ctx)
-
-	tableParallelism := semaphore.NewWeighted(r.config.TableParallelism)
-
-	logger := logrus.WithContext(ctx).WithField("task", "chunking")
-
-	g.Go(func() error {
-		r.chunks <- chunks
-		return nil
-	})
-
-	for _, t := range tables {
-		table := t
-		err = tableParallelism.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		g.Go(func() error {
-			defer tableParallelism.Release(1)
-
-			logger := logger.WithField("table", table.Name)
-			logger.Infof("'%s' chunking start", table.Name)
-			err := generateTableChunksAsync(ctx, table, r.source, chunks, r.sourceRetry)
-			logger.Infof("'%s' chunking done", table.Name)
-			if err != nil {
-				return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
-			}
-
-			return nil
-		})
-	}
-
-	err = g.Wait()
-	logger.Infof("table chunking done")
-
-	close(chunks)
-	return errors.WithStack(err)
-}
-
-func (r *Replicator) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSnapshot, error) {
-	//   1. insert the low watermark
-	//   2. read the entire chunk
-	//   3. insert the high watermark
-
-	_, err := r.source.ExecContext(ctx,
-		fmt.Sprintf("INSERT INTO %s (table_name, chunk_seq, low) VALUES (?, ?, 1)",
-			r.config.WatermarkTable),
-		chunk.Table.Name, chunk.Seq)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	stream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	rows, err := readAll(stream)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	snapshot := &ChunkSnapshot{Chunk: chunk, Rows: rows}
-
-	chunksSnapshotted.WithLabelValues(chunk.Table.Name).Inc()
-
-	_, err = r.source.ExecContext(ctx,
-		fmt.Sprintf("INSERT INTO %s (table_name, chunk_seq, high) VALUES (?, ?, 1)",
-			r.config.WatermarkTable),
-		chunk.Table.Name, chunk.Seq)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	return snapshot, nil
-}
-
-func (r *Replicator) maybeSnapshotChunks(ctx context.Context, chunkCh chan Chunk) (bool, error) {
-	// We read new snapshot when we have finished processing all of the ongoing chunks
-	if len(r.ongoingChunks) > 0 {
-		return false, nil
-	}
-
-	g, ctx := errgroup.WithContext(ctx)
-
-	snapshotCh := make(chan *ChunkSnapshot, r.config.ChunkParallelism)
-
-	closed := atomic.NewBool(false)
-
-	for i := 0; i < r.config.ChunkParallelism; i++ {
-		g.Go(func() error {
-			select {
-			case chunk, isOpen := <-chunkCh:
-				if !isOpen {
-					// Channel is closed, we're done with all the chunks
-					closed.Store(true)
-					return nil
-				}
-				snapshot, err := r.snapshotChunk(ctx, chunk)
-				snapshotCh <- snapshot
-				return errors.WithStack(err)
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		})
-	}
-
-	err := g.Wait()
-	if err != nil {
-		return false, errors.WithStack(err)
-	}
-	close(snapshotCh)
-
-	for chunk := range snapshotCh {
-		r.ongoingChunks = append(r.ongoingChunks, chunk)
-	}
-	done := closed.Load()
-	return done, nil
+	return r.snapshotter.snapshot(ctx)
 }

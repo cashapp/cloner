@@ -132,20 +132,14 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 		if len(s.ongoingChunks) > 0 {
 			newMutations := make([]Mutation, 0, len(transaction.Mutations))
 			for _, mutation := range transaction.Mutations {
-				wasWatermark, err := s.handleWatermark(ctx, mutation)
+				err := s.reconcileOngoingChunks(mutation)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				if wasWatermark {
-					// Watermarks are not replicated and not forwarded to the target
-					continue
-				}
-
-				err = s.reconcileOngoingChunks(mutation)
+				newMutations, err = s.handleWatermark(mutation, newMutations)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				newMutations = append(newMutations, mutation)
 			}
 			transaction.Mutations = newMutations
 		}
@@ -228,49 +222,6 @@ func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
 	} else {
 		c.Rows = append(c.Rows[:i], append([]*Row{r}, c.Rows[i:]...)...)
 	}
-}
-
-// writeChunk synchronously diffs and writes the chunk to the target (diff and write)
-// the writes are made synchronously in the replication stream to maintain strong consistency
-func (s *Snapshotter) writeChunk(ctx context.Context, chunk *ChunkSnapshot) error {
-	// TODO before we parallelize the writing of transactions we should instead of writing directly to the
-	//      target we should instead convert the diffs into a Transaction event
-	targetStream, err := bufferChunk(ctx, s.targetRetry, s.target, "target", chunk.Chunk)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Diff the streams
-	diffs, err := StreamDiff(ctx, chunk.Chunk.Table, stream(chunk.Rows), targetStream)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if len(diffs) > 0 {
-		chunksWithDiffs.WithLabelValues(chunk.Chunk.Table.Name).Inc()
-	}
-
-	// Batch up the diffs
-	batches, err := BatchTableWritesSync(diffs)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	writeCount := 0
-
-	// Write every batch
-	for _, batch := range batches {
-		writeCount += len(batch.Rows)
-		err := writeBatch(ctx, s.config.WriterConfig, batch, s.target, s.targetRetry)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	}
-
-	chunksProcessed.WithLabelValues(chunk.Chunk.Table.Name).Inc()
-	rowsProcessed.WithLabelValues(chunk.Chunk.Table.Name).Add(float64(len(chunk.Rows)))
-
-	return nil
 }
 
 // reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
@@ -400,53 +351,62 @@ func (s *Snapshotter) snapshot(ctx context.Context) error {
 	return nil
 }
 
-func (s *Snapshotter) handleWatermark(ctx context.Context, mutation Mutation) (bool, error) {
+func (s *Snapshotter) handleWatermark(mutation Mutation, result []Mutation) ([]Mutation, error) {
 	if mutation.Table.Name != s.config.WatermarkTable {
-		return false, nil
+		// Nothing to do, we just add the mutation untouched and return
+		result = append(result, mutation)
+		return result, nil
 	}
 	if mutation.Type == Delete {
 		// Someone is probably just cleaning out the watermark table
-		return true, nil
+		// Watermark mutations aren't replicated so we don't bother adding it
+		return result, nil
 	}
 	if len(mutation.Rows) != 1 {
-		return true, errors.Errorf("more than a single row was written to the watermark table at the same time")
+		return result, errors.Errorf("more than a single row was written to the watermark table at the same time")
 	}
 	row := mutation.Rows[0]
 	low, err := mutation.Table.MysqlTable.GetColumnValue("low", row)
 	if err != nil {
-		return true, errors.WithStack(err)
+		return result, errors.WithStack(err)
 	}
 	high, err := mutation.Table.MysqlTable.GetColumnValue("high", row)
 	if err != nil {
-		return true, errors.WithStack(err)
+		return result, errors.WithStack(err)
 	}
 	if low.(int8) == 1 {
 		ongoingChunk, err := s.findOngoingChunkFromWatermark(mutation)
 		if err != nil {
-			return true, errors.WithStack(err)
+			return result, errors.WithStack(err)
 		}
 		if ongoingChunk == nil {
-			return true, nil
+			return result, nil
 		}
 		ongoingChunk.InsideWatermarks = true
 	}
 	if high.(int8) == 1 {
 		ongoingChunk, err := s.findOngoingChunkFromWatermark(mutation)
 		if err != nil {
-			return true, errors.WithStack(err)
+			return result, errors.WithStack(err)
 		}
 		if ongoingChunk == nil {
-			return true, nil
+			return result, nil
 		}
 
 		ongoingChunk.InsideWatermarks = false
-		err = s.writeChunk(ctx, ongoingChunk)
-		if err != nil {
-			return true, errors.WithStack(err)
+		rows := make([][]interface{}, len(ongoingChunk.Rows))
+		for i, row := range ongoingChunk.Rows {
+			rows[i] = row.Data
 		}
+		result = append(result, Mutation{
+			Type:  Repair,
+			Table: ongoingChunk.Chunk.Table,
+			Rows:  rows,
+			Chunk: ongoingChunk.Chunk,
+		})
 		s.removeOngoingChunk(ongoingChunk)
 	}
-	return true, nil
+	return result, nil
 }
 
 func (s *Snapshotter) chunkTables(ctx context.Context) error {

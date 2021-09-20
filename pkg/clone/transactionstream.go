@@ -17,6 +17,9 @@ type Mutation struct {
 	Type  MutationType
 	Table *Table
 	Rows  [][]interface{}
+
+	// Chunk is only sent with a Repair mutation type
+	Chunk Chunk
 }
 
 type Transaction struct {

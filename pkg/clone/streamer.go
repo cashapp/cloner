@@ -73,6 +73,15 @@ func stream(rows []*Row) RowStream {
 	return &bufferStream{rows}
 }
 
+// streamRaw converts raw rows to a stream
+func streamRaw(table *Table, raws [][]interface{}) RowStream {
+	rows := make([]*Row, len(raws))
+	for i, raw := range raws {
+		rows[i] = table.ToRow(raw)
+	}
+	return &bufferStream{rows}
+}
+
 // buffer buffers all of the rows into memory
 func readAll(stream RowStream) ([]*Row, error) {
 	defer stream.Close()

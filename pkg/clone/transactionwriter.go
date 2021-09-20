@@ -98,7 +98,16 @@ func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transact
 }
 
 func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
-	if mutation.Type == Delete {
+	if mutation.Table.Name == w.config.WatermarkTable {
+		// We don't send writes to the watermark table to the target
+		return nil
+	}
+	if mutation.Type == Repair {
+		err := w.repair(ctx, tx, mutation)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	} else if mutation.Type == Delete {
 		err := w.deleteRows(ctx, tx, mutation)
 		if err != nil {
 			return errors.WithStack(err)
@@ -238,4 +247,60 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 		return errors.WithStack(err)
 	}
 	return nil
+}
+
+// repair synchronously diffs and writes the chunk to the target (diff and write)
+// the writes are made synchronously in the replication stream to maintain strong consistency
+func (s *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
+	targetStream, err := bufferChunk(ctx, s.targetRetry, s.target, "target", mutation.Chunk)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Diff the streams
+	// TODO StreamDiff should return []Mutation here instead
+	diffs, err := StreamDiff(ctx, mutation.Table, streamRaw(mutation.Table, mutation.Rows), targetStream)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if len(diffs) > 0 {
+		chunksWithDiffs.WithLabelValues(mutation.Table.Name).Inc()
+	}
+
+	// Batch up the diffs
+	// TODO BatchTableWritesSync should batch []Mutation into []Mutation instead
+	batches, err := BatchTableWritesSync(diffs)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	writeCount := 0
+
+	// Write every batch
+	for _, batch := range batches {
+		writeCount += len(batch.Rows)
+		// TODO we may need to split up batches across multiple transactions...?
+		err := s.handleMutation(ctx, tx, toMutation(batch))
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+
+	chunksProcessed.WithLabelValues(mutation.Table.Name).Inc()
+	rowsProcessed.WithLabelValues(mutation.Table.Name).Add(float64(len(mutation.Rows)))
+
+	return nil
+}
+
+func toMutation(batch Batch) Mutation {
+	rows := make([][]interface{}, len(batch.Rows))
+	for i, row := range batch.Rows {
+		rows[i] = row.Data
+	}
+	return Mutation{
+		Type:  batch.Type,
+		Table: batch.Table,
+		Rows:  rows,
+	}
 }

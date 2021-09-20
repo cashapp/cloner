@@ -15,10 +15,8 @@ import (
 
 // TransactionWriter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type TransactionWriter struct {
-	config       Replicate
-	source       *sql.DB
-	sourceSchema string
-	target       *sql.DB
+	config Replicate
+	target *sql.DB
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
@@ -259,7 +257,7 @@ func (s *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mut
 
 	// Diff the streams
 	// TODO StreamDiff should return []Mutation here instead
-	diffs, err := StreamDiff(ctx, mutation.Table, streamRaw(mutation.Table, mutation.Rows), targetStream)
+	diffs, err := StreamDiff(ctx, mutation.Table, stream(mutation.Table, mutation.Rows), targetStream)
 	if err != nil {
 		return errors.WithStack(err)
 	}

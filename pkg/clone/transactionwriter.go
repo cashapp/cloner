@@ -5,10 +5,15 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/mightyguava/autotx"
+	"github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -65,6 +70,15 @@ func (w *TransactionWriter) Init(ctx context.Context) error {
 }
 
 func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+	if w.config.ReplicationParallelism == 1 {
+		return errors.WithStack(w.runSequential(ctx, b, transactions))
+	} else {
+		return errors.WithStack(w.runParallel(ctx, b, transactions))
+	}
+}
+
+// runSequential implements sequential replication
+func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
 	for {
 		var transaction Transaction
 		select {
@@ -92,6 +106,279 @@ func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transact
 
 		// We've committed a transaction, we can reset the backoff
 		b.Reset()
+	}
+}
+
+type pkSet struct {
+	table *mysqlschema.Table
+	m     map[uint64][][]interface{}
+}
+
+// Intersects checks if any PKs in the set belong to the chunk
+func (s *pkSet) Intersects(chunk Chunk) bool {
+	for _, pks := range s.m {
+		for _, pk := range pks {
+			if chunk.ContainsPKs(pk) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *pkSet) ContainsRow(row []interface{}) bool {
+	pkValues, err := s.table.GetPKValues(row)
+	if err != nil {
+		panic(err)
+	}
+	return s.ContainsPK(pkValues)
+}
+
+func (s *pkSet) ContainsPK(pks []interface{}) bool {
+	hash, err := hashstructure.Hash(pks, hashstructure.FormatV2, nil)
+	if err != nil {
+		panic(err)
+	}
+	vals, exists := s.m[hash]
+	if !exists {
+		return false
+	}
+	for _, val := range vals {
+		if reflect.DeepEqual(pks, val) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *pkSet) AddRow(row []interface{}) {
+	pkValues, err := s.table.GetPKValues(row)
+	if err != nil {
+		panic(err)
+	}
+	s.AddPK(pkValues)
+}
+
+func (s *pkSet) AddPK(pks []interface{}) {
+	hash, err := hashstructure.Hash(pks, hashstructure.FormatV2, nil)
+	if err != nil {
+		panic(err)
+	}
+	s.m[hash] = append(s.m[hash], pks)
+}
+
+type transactionSequence struct {
+	writer *TransactionWriter
+	// chunks is the list of chunks this sequence repair
+	chunks []Chunk
+	// primaryKeys caches the primary key sets of this sequence, keyed by table name
+	primaryKeys  map[string]*pkSet
+	transactions []Transaction
+}
+
+// TODO needs tests!!!
+func (s *transactionSequence) IsCausal(transaction Transaction) bool {
+	for _, chunk := range s.chunks {
+		for _, mutation := range transaction.Mutations {
+			if mutation.Type == Repair {
+				// Chunks never overlap so this mutation is certainly not causal
+				continue
+			}
+			if mutation.Table.Name != chunk.Table.Name {
+				// Not the same table so certainly not causal
+				continue
+			}
+
+			// Same table and not a Repair so go through all the PKs to check if they are inside this chunk
+			for _, row := range mutation.Rows {
+				if chunk.ContainsRow(row) {
+					// Yep, causal
+					return true
+				}
+			}
+		}
+	}
+	for _, mutation := range transaction.Mutations {
+		if mutation.Type == Repair {
+			for tableName, pks := range s.primaryKeys {
+				chunk := mutation.Chunk
+				if chunk.Table.Name != tableName {
+					continue
+				}
+				if pks.Intersects(chunk) {
+					return true
+				}
+			}
+		} else {
+			pks, exists := s.primaryKeys[mutation.Table.Name]
+			if !exists {
+				// This sequence doesn't touch this table (yet?) so not causal with these mutations for sure
+				continue
+			}
+			for _, row := range mutation.Rows {
+				if pks.ContainsRow(row) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// TODO needs tests!!!
+func (s *transactionSequence) Append(transaction Transaction) {
+	s.transactions = append(s.transactions, transaction)
+
+	// update the cache of the primary key set
+	for _, mutation := range transaction.Mutations {
+		if mutation.Type == Repair {
+			s.chunks = append(s.chunks, mutation.Chunk)
+		} else {
+			pks, exists := s.primaryKeys[mutation.Table.Name]
+			if !exists {
+				pks = &pkSet{
+					table: mutation.Table.MysqlTable,
+					m:     make(map[uint64][][]interface{}),
+				}
+				s.primaryKeys[mutation.Table.Name] = pks
+			}
+			for _, row := range mutation.Rows {
+				pks.AddRow(row)
+			}
+		}
+	}
+}
+
+func (s *transactionSequence) Run(ctx context.Context) error {
+	for _, transaction := range s.transactions {
+		if len(transaction.Mutations) == 0 {
+			continue
+		}
+		err := autotx.Transact(ctx, s.writer.target, func(tx *sql.Tx) error {
+			for _, mutation := range transaction.Mutations {
+				err := s.writer.handleMutation(ctx, tx, mutation)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
+}
+
+type transactionSet struct {
+	writer *TransactionWriter
+
+	sequences     []*transactionSequence
+	finalPosition Position
+	g             *errgroup.Group
+}
+
+func (s *transactionSet) Append(transaction Transaction) {
+	s.finalPosition = transaction.FinalPosition
+	for _, sequence := range s.sequences {
+		if sequence.IsCausal(transaction) {
+			sequence.Append(transaction)
+			return
+		}
+	}
+
+	// Non-causal with any of the existing sequences so we create a new sequence for this transaction
+	sequence := &transactionSequence{writer: s.writer, primaryKeys: make(map[string]*pkSet)}
+	sequence.Append(transaction)
+	s.sequences = append(s.sequences, sequence)
+}
+
+func (s *transactionSet) Wait() error {
+	return errors.WithStack(s.g.Wait())
+}
+
+func (s *transactionSet) Start(parent context.Context) {
+	if s.g != nil {
+		panic("can't start twice")
+	}
+	g, ctx := errgroup.WithContext(parent)
+	s.g = g
+	writerParallelism := semaphore.NewWeighted(s.writer.config.ReplicationParallelism)
+	for _, seq := range s.sequences {
+		sequence := seq
+		s.g.Go(func() error {
+			err := writerParallelism.Acquire(ctx, 1)
+			defer writerParallelism.Release(1)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			err = sequence.Run(ctx)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			return nil
+		})
+	}
+}
+
+// runParallel implements parallelized replication
+func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+	var currentlyExecutingTransactionSet *transactionSet
+	for {
+		nextTransactionSet, err := w.fillTransactionSet(ctx, transactions)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		// Wait for the currently executing transaction set to complete running
+		if currentlyExecutingTransactionSet != nil {
+			err := currentlyExecutingTransactionSet.Wait()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			err = autotx.Transact(ctx, w.target, func(tx *sql.Tx) error {
+				err := w.writeCheckpoint(ctx, tx, currentlyExecutingTransactionSet.finalPosition)
+				return errors.WithStack(err)
+			})
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			// We've committed a transaction set, we can reset the backoff
+			b.Reset()
+		}
+		currentlyExecutingTransactionSet = nextTransactionSet
+		currentlyExecutingTransactionSet.Start(ctx)
+	}
+}
+
+func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions chan Transaction) (*transactionSet, error) {
+	// TODO these should probably be configurable? or auto tuning?
+	transactionSetTimeoutDuration := 1 * time.Second
+	transactionSetMaxSize := 30
+
+	size := 0
+	nextTransactionSet := &transactionSet{writer: w}
+	transactionSetTimeout := time.After(transactionSetTimeoutDuration)
+
+	// Fill the next transaction set before the transaction set timeout expires
+	for {
+		select {
+		case transaction := <-transactions:
+			size++
+			nextTransactionSet.Append(transaction)
+			if size >= transactionSetMaxSize {
+				return nextTransactionSet, nil
+			}
+		case <-transactionSetTimeout:
+			if size == 0 {
+				// We have no transactions so we might as well wait a bit longer
+				transactionSetTimeout = time.After(transactionSetTimeoutDuration)
+			}
+			return nextTransactionSet, nil
+		case <-ctx.Done():
+			return nextTransactionSet, ctx.Err()
+		}
 	}
 }
 
@@ -249,8 +536,8 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
-func (s *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
-	targetStream, err := bufferChunk(ctx, s.targetRetry, s.target, "target", mutation.Chunk)
+func (w *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
+	targetStream, err := bufferChunk(ctx, w.targetRetry, w.target, "target", mutation.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -279,7 +566,7 @@ func (s *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mut
 	for _, batch := range batches {
 		writeCount += len(batch.Rows)
 		// TODO we may need to split up batches across multiple transactions...?
-		err := s.handleMutation(ctx, tx, toMutation(batch))
+		err := w.handleMutation(ctx, tx, toMutation(batch))
 		if err != nil {
 			return errors.WithStack(err)
 		}

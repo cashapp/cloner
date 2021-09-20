@@ -33,7 +33,23 @@ type Chunk struct {
 
 func (c *Chunk) ContainsRow(row []interface{}) bool {
 	id := c.Table.PkOfRow(row)
+	return c.ContainsPK(id)
+}
+
+func (c *Chunk) ContainsPK(id int64) bool {
 	return id >= c.Start && id < c.End
+}
+
+func (c *Chunk) ContainsPKs(pk []interface{}) bool {
+	// TODO when we support arbitrary primary keys this logic has to change
+	if len(pk) != 1 {
+		panic("currently only supported single integer pk")
+	}
+	i, err := coerceInt64(pk[0])
+	if err != nil {
+		panic(err)
+	}
+	return c.ContainsPK(i)
 }
 
 type PeekingIdStreamer interface {

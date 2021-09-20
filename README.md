@@ -13,14 +13,13 @@ It needs to solve for the following:
 
 ## Assumptions
 
- * Single integer id primary key (we could relax this restriction but it would complicate the code tremendously)
- * Single integer sharding column, could be loaded from the vschema but will be hardcoded for Franklin to start with at least (it's almost always `customer_id` for new tables but some older tables have other sharding columns)
+ * Single integer id primary key (we will eventually relax this restriction)
  
 ## Algorithm
 
 It performs a diffing clone like this:
  1. Connects to a single Franklin on prem shard either via franklin-vtgate or via the ODS ingress envoy (below)
- 2. Connect to the connects to TiDB with a sharding filter such that it only sees a single Franklin shard at the time of TiDB
+ 2. Connect to TiDB with a sharding filter such that it only sees a single Franklin shard at the time of TiDB
  3. For each table
      1. Chunk up each table in roughly equally sized parts (see below for details)
      2. Diff the table to generate a bunch of diffs (see below for details)
@@ -53,7 +52,7 @@ Ideally we would use the MySQL built in stats histogram of the primary key index
 
 ## Diffing a chunk
 
-We filter the TiDB side query by Vitess shard so we can clone a single Vitess shard at the time without deleting a bunch of out-of-shard data. This filtering should use the MySQL built in DES_ENCRYPT/DES_DECRYPT but sadly that is currently not yet supported by TiDB. So we do this filtering client side. [There is a ticket to implement this](https://github.com/pingcap/tidb/issues/4055) and it would not be a lot of work.
+We filter the TiDB side query by Vitess shard using a configurable where clause so we can clone a single Vitess shard at the time without deleting a bunch of out-of-shard data. 
 
 First we should execute a single SQL statement that calculates a checksum. We execute the same statement on both TiDB and MySQL and compare the results. Only if the checksum doesn't match we go to the real diffing part. This is to minimize the bandwidth required. Sadly, this is not yet implemented.
 
@@ -62,8 +61,6 @@ After that we stream the results in parallel and execute a simple stream diffing
 ## Checksumming
 
 This tool can eventually also be used to checksum across a replication boundary without any freezing in time.
-
-This is not implemented yet!
 
 ```puml
 database A
@@ -74,25 +71,44 @@ A -r-> B : replication
 
 (plantuml doesn't render in github sadly)
 
-We divide each table into chunks as above. Then for each chunk we calculate the checksum and compare. If there is a difference it can mean two things:
+We divide each table into chunks as above. Then we load each chunk from source and target and compare. If there is a difference it can mean two things:
  1. There is data corruption in that chunk or,
  2. there is replication lag for that chunk
 
 In order to differentiate between the two possibilities we simply re-run the checksum a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
 
-We could use the same approach for calculating a checksum as pt-table-checksum: https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367
+We could use the same approach for calculating a checksum as pt-table-checksum but this is computationally intensive on TiDB right now so instead we just load the chunks and compare in memory. https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367
+
+## Replication
+
+Replication reads the MySQL binlog and applies to the target.
+
+Does not currently support DDL.
+
+## Replication heartbeat
+
+Can be configured to write to a heartbeat table and then read the heartbeat table from the source. This determines real end to end replication lag (with the heartbeat period as resolution).
 
 ## Consistent clone
 
-To be able to start replication we have to clone the database at a specific GTID. To do that we have to either:
-* Create multiple synced connections using either `LOCK TABLES ... READ` or `FLUSH TABLES WITH READ LOCK` [see more in the dumpling codebase](https://github.com/pingcap/dumpling/blob/b84f64ff362cedcb795aa23fa1188ba7b7c9a7d7/v4/export/consistency.go#L22)
-* This might not be exposed to vtgate in which case we can use a single connection with a read transaction. This will be a lot slower since we won't have any parallelism but if we do a few inconsistent clones before to minimize the delta to write it might be fine
+Consistent cloning uses Netflix DBLog algorithm as presented in this paper:
+https://arxiv.org/pdf/2010.12597.pdf
 
-This is not currently implemented.
+In summary the consistent cloning algorithm works by this:
+1. Start replication
+2. Chunk each table as above
+3. For each chunk: write a low watermark to a watermark table in the source, then read the chunk rows then write a high watermark.
+4. When the replication loop encounters a low watermark it starts reconciling any binlog events inside the chunk with the in memory result set of the chunk. (Replaces rows that are updated or inserted and deletes rows that are deleted.)
+5. When the replication loop encounters a high watermark the chunk is now strongly consistent with the source and is diffed and written (as described above).
 
-## Open source
+It needs write access to the source to be able to write to the watermark table.
 
-There are some Cash specific assumption that we would need to remove to make it possible to make it open source:
+## Parallel replication
 
- * Support arbitrary primary keys
- * Support a configurable WHERE clause per table on either side of the clone - this would be to support the TiDB side shard filtering. This configuration could be generated from the vschema. I think it would be difficult to support arbitrary vindexes so we assume the Vitess `hash` vindex 
+This is currently being implemented.
+
+It runs transactions in parallel unless they are causal. Transactions A and B are causal iff 1) A happens before transaction B in the global ordering and 2) the set of primary keys they write to overlap.
+
+## Open sourcing status
+
+Only a single Cash specific feature is left: Connecting using a Misk datasource. This can probably be replaced with command line flags and support for JKS/JCEKS key stores.

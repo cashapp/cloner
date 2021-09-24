@@ -58,6 +58,14 @@ func (t *Table) Validate() error {
 	return nil
 }
 
+func (t *Table) ToRow(raw []interface{}) *Row {
+	return &Row{
+		Table: t,
+		ID:    t.PkOfRow(raw),
+		Data:  raw,
+	}
+}
+
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	var err error
 

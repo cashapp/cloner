@@ -17,6 +17,9 @@ const (
 	Insert MutationType = iota
 	Update
 	Delete
+
+	// Repair is a mutation which sends a full chunk which is then diffed against the target and the diffs are applied
+	Repair
 )
 
 func (m MutationType) String() string {
@@ -27,6 +30,8 @@ func (m MutationType) String() string {
 		return "update"
 	case Delete:
 		return "delete"
+	case Repair:
+		return "repair"
 	}
 	return "unknown"
 }

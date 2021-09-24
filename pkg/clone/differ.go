@@ -477,32 +477,42 @@ func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from 
 	var result RowStream
 
 	err := Retry(ctx, retry, func(ctx context.Context) error {
-		timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
-		defer timer.ObserveDuration()
-
-		extraWhereClause := ""
-		hint := ""
-		if from == "target" {
-			extraWhereClause = chunk.Table.Config.TargetWhere
-			hint = chunk.Table.Config.TargetHint
-		}
-		if from == "source" {
-			extraWhereClause = chunk.Table.Config.SourceWhere
-			hint = chunk.Table.Config.SourceHint
-		}
-		stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
+		var err error
+		result, err = readChunk(ctx, source, from, chunk)
 		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
-				chunk.Start, chunk.End, chunk.Table.Name, from)
-		}
-		defer stream.Close()
-		result, err = buffer(stream)
-		if err != nil {
-			return errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
-				chunk.Start, chunk.End, chunk.Table.Name, from)
+			return errors.WithStack(err)
 		}
 		return nil
 	})
 
+	return result, err
+}
+
+// readChunk reads and buffers a chunk without retries
+func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (RowStream, error) {
+	timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
+	defer timer.ObserveDuration()
+
+	extraWhereClause := ""
+	hint := ""
+	if from == "target" {
+		extraWhereClause = chunk.Table.Config.TargetWhere
+		hint = chunk.Table.Config.TargetHint
+	}
+	if from == "source" {
+		extraWhereClause = chunk.Table.Config.SourceWhere
+		hint = chunk.Table.Config.SourceHint
+	}
+	stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+			chunk.Start, chunk.End, chunk.Table.Name, from)
+	}
+	defer stream.Close()
+	result, err := buffer(stream)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+			chunk.Start, chunk.End, chunk.Table.Name, from)
+	}
 	return result, err
 }

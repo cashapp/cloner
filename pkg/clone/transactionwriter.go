@@ -387,38 +387,41 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 		// We don't send writes to the watermark table to the target
 		return nil
 	}
-	if mutation.Type == Repair {
-		err := w.repair(ctx, tx, mutation)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	} else if mutation.Type == Delete {
-		err := w.deleteRows(ctx, tx, mutation)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-	} else {
-		err := w.replaceRows(ctx, tx, mutation)
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	err := mutation.write(ctx, tx)
+	if err != nil {
+		return errors.WithStack(err)
 	}
 
 	return nil
 }
 
-func (w *TransactionWriter) replaceRows(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
+func (m *Mutation) write(ctx context.Context, tx *sql.Tx) error {
 	var err error
-	tableSchema := mutation.Table.MysqlTable
+	switch m.Type {
+	case Repair:
+		err = m.repair(ctx, tx)
+	case Delete:
+		err = m.delete(ctx, tx)
+	case Insert, Update:
+		err = m.replace(ctx, tx)
+	default:
+		panic(fmt.Sprintf("unknown mutation type: %d", m.Type))
+	}
+	return errors.WithStack(err)
+}
+
+func (m *Mutation) replace(ctx context.Context, tx *sql.Tx) error {
+	var err error
+	tableSchema := m.Table.MysqlTable
 	tableName := tableSchema.Name
-	writeType := mutation.Type.String()
+	writeType := m.Type.String()
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
 	defer timer.ObserveDuration()
 	defer func() {
 		if err == nil {
-			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		}
 	}()
 	var questionMarks strings.Builder
@@ -436,13 +439,13 @@ func (w *TransactionWriter) replaceRows(ctx context.Context, tx *sql.Tx, mutatio
 	values := fmt.Sprintf("(%s)", questionMarks.String())
 	columnList := columnListBuilder.String()
 
-	valueStrings := make([]string, 0, len(mutation.Rows))
-	valueArgs := make([]interface{}, 0, len(mutation.Rows)*len(tableSchema.Columns))
-	for _, row := range mutation.Rows {
+	valueStrings := make([]string, 0, len(m.Rows))
+	valueArgs := make([]interface{}, 0, len(m.Rows)*len(tableSchema.Columns))
+	for _, row := range m.Rows {
 		valueStrings = append(valueStrings, values)
 		valueArgs = append(valueArgs, row...)
 	}
-	// TODO build the entire statement with a strings.Builder like in deleteRows below. For speed.
+	// TODO build the entire statement with a strings.Builder like in delete below. For speed.
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
 		tableSchema.Name, columnList, strings.Join(valueStrings, ","))
 	_, err = tx.ExecContext(ctx, stmt, valueArgs...)
@@ -453,25 +456,25 @@ func (w *TransactionWriter) replaceRows(ctx context.Context, tx *sql.Tx, mutatio
 	return nil
 }
 
-func (w *TransactionWriter) deleteRows(ctx context.Context, tx *sql.Tx, mutation Mutation) (err error) {
-	tableSchema := mutation.Table.MysqlTable
+func (m *Mutation) delete(ctx context.Context, tx *sql.Tx) (err error) {
+	tableSchema := m.Table.MysqlTable
 	tableName := tableSchema.Name
-	writeType := mutation.Type.String()
+	writeType := m.Type.String()
 	timer := prometheus.NewTimer(writeDuration.WithLabelValues(tableName, writeType))
 	defer timer.ObserveDuration()
 	defer func() {
 		if err == nil {
-			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
+			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(mutation.Rows)))
+			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		}
 	}()
 	var stmt strings.Builder
-	args := make([]interface{}, 0, len(mutation.Rows))
+	args := make([]interface{}, 0, len(m.Rows))
 	stmt.WriteString("DELETE FROM `")
-	stmt.WriteString(mutation.Table.Name)
+	stmt.WriteString(m.Table.Name)
 	stmt.WriteString("` WHERE ")
-	for rowIdx, row := range mutation.Rows {
+	for rowIdx, row := range m.Rows {
 		stmt.WriteString("(")
 		for i, pkIndex := range tableSchema.PKColumns {
 			args = append(args, row[pkIndex])
@@ -485,7 +488,7 @@ func (w *TransactionWriter) deleteRows(ctx context.Context, tx *sql.Tx, mutation
 		}
 		stmt.WriteString(")")
 
-		if rowIdx != len(mutation.Rows)-1 {
+		if rowIdx != len(m.Rows)-1 {
 			stmt.WriteString(" OR ")
 		}
 	}
@@ -536,21 +539,21 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
-func (w *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
-	targetStream, err := bufferChunk(ctx, w.targetRetry, w.target, "target", mutation.Chunk)
+func (m *Mutation) repair(ctx context.Context, tx *sql.Tx) error {
+	targetStream, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	// Diff the streams
 	// TODO StreamDiff should return []Mutation here instead
-	diffs, err := StreamDiff(ctx, mutation.Table, stream(mutation.Table, mutation.Rows), targetStream)
+	diffs, err := StreamDiff(ctx, m.Table, stream(m.Table, m.Rows), targetStream)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
 	if len(diffs) > 0 {
-		chunksWithDiffs.WithLabelValues(mutation.Table.Name).Inc()
+		chunksWithDiffs.WithLabelValues(m.Table.Name).Inc()
 	}
 
 	// Batch up the diffs
@@ -566,14 +569,15 @@ func (w *TransactionWriter) repair(ctx context.Context, tx *sql.Tx, mutation Mut
 	for _, batch := range batches {
 		writeCount += len(batch.Rows)
 		// TODO we may need to split up batches across multiple transactions...?
-		err := w.handleMutation(ctx, tx, toMutation(batch))
+		m := toMutation(batch)
+		err := m.write(ctx, tx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 	}
 
-	chunksProcessed.WithLabelValues(mutation.Table.Name).Inc()
-	rowsProcessed.WithLabelValues(mutation.Table.Name).Add(float64(len(mutation.Rows)))
+	chunksProcessed.WithLabelValues(m.Table.Name).Inc()
+	rowsProcessed.WithLabelValues(m.Table.Name).Add(float64(len(m.Rows)))
 
 	return nil
 }

@@ -511,7 +511,7 @@ func (w *TransactionWriter) createCheckpointTable(ctx context.Context) error {
 			timestamp TIMESTAMP    NOT NULL,
 			PRIMARY KEY (name)
 		)
-		`, w.config.CheckpointTable)
+		`, "`"+w.config.CheckpointTable+"`")
 	_, err := w.target.ExecContext(timeoutCtx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)

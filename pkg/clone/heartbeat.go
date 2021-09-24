@@ -105,7 +105,7 @@ func (h *Heartbeat) createTable(ctx context.Context) error {
 		  count BIGINT(20) NOT NULL,
 		  PRIMARY KEY (name)
 		)
-		`, h.config.HeartbeatTable)
+		`, "`"+h.config.HeartbeatTable+"`")
 	_, err := h.source.ExecContext(timeoutCtx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not create heartbeat table in source database:\n%s", stmt)

@@ -221,7 +221,7 @@ func (s *TransactionStream) Init(ctx context.Context) error {
 	}
 	defer source.Close()
 
-	// TODO adding this table to the list of tables to replicate should be moved to the Heartbeater
+	// TODO adding this table to the list of tables to replicate should be moved to the Heartbeat
 	heartbeatTable, err := loadTable(ctx, s.config.ReaderConfig, s.config.Source.Type, source, s.sourceSchema, s.config.HeartbeatTable, TableConfig{})
 	if err != nil {
 		return errors.WithStack(err)

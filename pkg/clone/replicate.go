@@ -146,7 +146,7 @@ type Replicator struct {
 	config Replicate
 
 	snapshotter         *Snapshotter
-	heartbeater         *Heartbeater
+	heartbeat           *Heartbeat
 	transactionStreamer *TransactionStream
 	transactionWriter   *TransactionWriter
 }
@@ -162,7 +162,7 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	r.heartbeater, err = NewHeartbeater(r.config)
+	r.heartbeat, err = NewHeartbeat(r.config)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -204,7 +204,7 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	if r.config.HeartbeatFrequency > 0 {
 		g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
-			return r.heartbeater.Run(ctx, b)
+			return r.heartbeat.Run(ctx, b)
 		}))
 	}
 	err = g.Wait()
@@ -246,7 +246,7 @@ func (r *Replicator) init(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 
-	err = r.heartbeater.Init(ctx)
+	err = r.heartbeat.Init(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}

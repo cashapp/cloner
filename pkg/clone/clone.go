@@ -136,53 +136,49 @@ func (cmd *Clone) run() error {
 
 	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
 
-	g.Go(func() error {
-		for _, table := range tables {
-			err = tableParallelism.Acquire(ctx, 1)
+	for _, table := range tables {
+		err = tableParallelism.Acquire(ctx, 1)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		g.Go(func() error {
+			defer tableParallelism.Release(1)
+
+			diffs := make(chan Diff)
+
+			writer := NewWriter(cmd.WriterConfig, table, writer, writerLimiter)
+			writer.Write(ctx, g, diffs)
+
+			reader := NewReader(
+				cmd.ReaderConfig,
+				table,
+				sourceReader,
+				sourceLimiter,
+				targetReader,
+				targetLimiter,
+			)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			g.Go(func() error {
-				defer tableParallelism.Release(1)
 
-				diffs := make(chan Diff)
-
-				writer := NewWriter(cmd.WriterConfig, table, writer, writerLimiter)
-				writer.Write(ctx, g, diffs)
-
-				reader := NewReader(
-					cmd.ReaderConfig,
-					table,
-					sourceReader,
-					sourceLimiter,
-					targetReader,
-					targetLimiter,
-				)
+			if cmd.NoDiff {
+				err = reader.Read(ctx, diffs)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-
-				if cmd.NoDiff {
-					err = reader.Read(ctx, diffs)
-					if err != nil {
-						return errors.WithStack(err)
-					}
-				} else {
-					err = reader.Diff(ctx, diffs)
-					if err != nil {
-						return errors.WithStack(err)
-					}
+			} else {
+				err = reader.Diff(ctx, diffs)
+				if err != nil {
+					return errors.WithStack(err)
 				}
+			}
 
-				// All diffing done, close the diffs channel
-				close(diffs)
+			// All diffing done, close the diffs channel
+			close(diffs)
 
-				return nil
-			})
-		}
-
-		return nil
-	})
+			return nil
+		})
+	}
 
 	return g.Wait()
 }

@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
@@ -17,6 +18,11 @@ import (
 	"strings"
 	"time"
 )
+
+type DBWriter interface {
+	DBReader
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
 
 // TransactionWriter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type TransactionWriter struct {
@@ -176,7 +182,6 @@ type transactionSequence struct {
 	transactions []Transaction
 }
 
-// TODO needs tests!!!
 func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 	for _, chunk := range s.chunks {
 		for _, mutation := range transaction.Mutations {
@@ -225,7 +230,6 @@ func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 	return false
 }
 
-// TODO needs tests!!!
 func (s *transactionSequence) Append(transaction Transaction) {
 	s.transactions = append(s.transactions, transaction)
 
@@ -301,7 +305,6 @@ func (s *transactionSet) Start(parent context.Context) {
 	if s.g != nil {
 		panic("can't start twice")
 	}
-
 	g, ctx := errgroup.WithContext(parent)
 	s.g = g
 	writerParallelism := semaphore.NewWeighted(s.writer.config.ReplicationParallelism)
@@ -315,10 +318,40 @@ func (s *transactionSet) Start(parent context.Context) {
 			defer writerParallelism.Release(1)
 			err = sequence.Run(ctx)
 			if err != nil {
+				if isWriteConflict(err) {
+					s.print(parent)
+				}
 				return errors.WithStack(err)
 			}
 			return nil
 		})
+	}
+}
+
+type printingWriter struct {
+	db *sql.DB
+}
+
+func (l *printingWriter) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+	fmt.Printf("%v %v\n", query, args)
+	return l.db.QueryContext(ctx, query, args...)
+}
+
+func (l *printingWriter) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	fmt.Printf("%v %v\n", query, args)
+	return driver.RowsAffected(0), nil
+}
+
+func (s *transactionSet) print(ctx context.Context) {
+	writer := &printingWriter{db: s.writer.target}
+	fmt.Println("parallel: ===========")
+	for _, seq := range s.sequences {
+		fmt.Println("serially: --------------")
+		for _, transaction := range seq.transactions {
+			for _, mutation := range transaction.Mutations {
+				_ = mutation.Write(ctx, writer)
+			}
+		}
 	}
 }
 
@@ -389,7 +422,7 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 		// We don't send writes to the watermark table to the target
 		return nil
 	}
-	err := mutation.write(ctx, tx)
+	err := mutation.Write(ctx, tx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -397,7 +430,7 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 	return nil
 }
 
-func (m *Mutation) write(ctx context.Context, tx *sql.Tx) error {
+func (m *Mutation) Write(ctx context.Context, tx DBWriter) error {
 	var err error
 	switch m.Type {
 	case Repair:
@@ -412,7 +445,7 @@ func (m *Mutation) write(ctx context.Context, tx *sql.Tx) error {
 	return errors.WithStack(err)
 }
 
-func (m *Mutation) replace(ctx context.Context, tx *sql.Tx) error {
+func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 	var err error
 	tableSchema := m.Table.MysqlTable
 	tableName := tableSchema.Name
@@ -458,7 +491,7 @@ func (m *Mutation) replace(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func (m *Mutation) delete(ctx context.Context, tx *sql.Tx) (err error) {
+func (m *Mutation) delete(ctx context.Context, tx DBWriter) (err error) {
 	tableSchema := m.Table.MysqlTable
 	tableName := tableSchema.Name
 	writeType := m.Type.String()
@@ -541,7 +574,7 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
-func (m *Mutation) repair(ctx context.Context, tx *sql.Tx) error {
+func (m *Mutation) repair(ctx context.Context, tx DBWriter) error {
 	targetStream, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
@@ -572,7 +605,7 @@ func (m *Mutation) repair(ctx context.Context, tx *sql.Tx) error {
 		writeCount += len(batch.Rows)
 		// TODO we may need to split up batches across multiple transactions...?
 		m := toMutation(batch)
-		err := m.write(ctx, tx)
+		err := m.Write(ctx, tx)
 		if err != nil {
 			return errors.WithStack(err)
 		}

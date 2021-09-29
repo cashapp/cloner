@@ -173,7 +173,6 @@ func mysqlError(err error) *mysql.MySQLError {
 // isConstraintViolation are errors caused by a single row in a batch, for these errors we break down the batch
 // into smaller parts until we find the erroneous row, uniqueness constraints can also be fixed by clone jobs for other
 // shards removing the row if the row has been copied from one shard to the other
-//nolint:deadcode,unused
 func isConstraintViolation(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
@@ -189,6 +188,16 @@ func isConstraintViolation(err error) bool {
 	default:
 		return false
 	}
+}
+
+// isWriteConflict are errors caused by a write-write conflict between two parallel transactions:
+//   https://docs.pingcap.com/tidb/stable/error-codes
+func isWriteConflict(err error) bool {
+	me := mysqlError(err)
+	if me == nil {
+		return false
+	}
+	return me.Number == 9007
 }
 
 // isSchemaError are errors that should immediately fail the clone operation and can't be fixed by retrying

@@ -253,6 +253,9 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 		if isSchemaError(err) {
 			return backoff.Permanent(err)
 		}
+		if isConstraintViolation(err) {
+			return backoff.Permanent(err)
+		}
 		// We immediately fail non-single row batches, the caller will do binary chop to find the violating row
 		if len(batch.Rows) > 1 {
 			return backoff.Permanent(err)

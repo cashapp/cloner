@@ -65,7 +65,11 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 
 	g.Go(func() error {
 		// Generate chunks of source table
+		logger := log.WithContext(ctx).WithField("task", "chunking")
+		logger = logger.WithField("table", r.table.Name)
+		logger.Infof("'%s' chunking start", r.table.Name)
 		err := generateTableChunksAsync(ctx, r.table, r.source, chunks, r.sourceRetry)
+		logger.Infof("'%s' chunking done", r.table.Name)
 		if err != nil {
 			return errors.WithStack(err)
 		}

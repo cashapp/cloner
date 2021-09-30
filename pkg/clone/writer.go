@@ -46,6 +46,20 @@ var (
 		},
 		[]string{"table", "type"},
 	)
+	constraintViolationErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "constraint_violation_errors",
+			Help: "How many constraint violations we're causing (this is increased once per row after retries)",
+		},
+		[]string{"table", "type"},
+	)
+	schemaErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "schema_errors",
+			Help: "How many schema errors we're getting (this is increased once per row after retries)",
+		},
+		[]string{"table", "type"},
+	)
 	writeDuration = prometheus.NewSummaryVec(
 		prometheus.SummaryOpts{
 			Name:       "write_duration",
@@ -110,6 +124,13 @@ func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batc
 					return nil
 				})
 				return nil
+			}
+
+			if isConstraintViolation(err) {
+				constraintViolationErrors.WithLabelValues(batch.Table.Name, batch.Type.String()).Inc()
+			}
+			if isSchemaError(err) {
+				schemaErrors.WithLabelValues(batch.Table.Name, batch.Type.String()).Inc()
 			}
 
 			if !w.config.Consistent {

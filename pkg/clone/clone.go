@@ -136,7 +136,8 @@ func (cmd *Clone) run() error {
 
 	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
 
-	for _, table := range tables {
+	for _, t := range tables {
+		table := t
 		err = tableParallelism.Acquire(ctx, 1)
 		if err != nil {
 			return errors.WithStack(err)

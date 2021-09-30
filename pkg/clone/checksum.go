@@ -146,7 +146,8 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		g, ctx := errgroup.WithContext(ctx)
 		tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
 
-		for _, table := range tables {
+		for _, t := range tables {
+			table := t
 			err = tableParallelism.Acquire(ctx, 1)
 			if err != nil {
 				return errors.WithStack(err)

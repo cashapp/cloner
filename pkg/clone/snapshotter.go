@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
@@ -13,6 +14,20 @@ import (
 	_ "net/http/pprof"
 	"sort"
 )
+
+var (
+	snapshotChunkReconciles = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "snapshot_chunk_reconciles",
+			Help: "How many events we reconcile with ongoing chunks before writing during snapshotting.",
+		},
+		[]string{"table", "type"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(snapshotChunkReconciles)
+}
 
 // Snapshotter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type Snapshotter struct {
@@ -255,6 +270,7 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
 				// The row is outside of our range, we can skip it
 				continue
 			}
+			snapshotChunkReconciles.WithLabelValues(mutation.Table.Name, mutation.Type.String()).Inc()
 			// find the row using binary chop (the chunk rows are sorted)
 			existingRow, i, err := c.findRow(row)
 			if existingRow == nil {
@@ -272,6 +288,7 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
 				// The row is outside of our range, we can skip it
 				continue
 			}
+			snapshotChunkReconciles.WithLabelValues(mutation.Table.Name, mutation.Type.String()).Inc()
 			existingRow, i, err := c.findRow(row)
 			if err != nil {
 				return errors.WithStack(err)

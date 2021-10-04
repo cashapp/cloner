@@ -60,16 +60,15 @@ var (
 		},
 		[]string{"table", "type"},
 	)
-	writeDuration = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name:       "write_duration",
-			Help:       "Duration of writes (does not include retries and backoff).",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+	writeDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "write_duration",
+			Help: "Duration of writes (does not include retries and backoff).",
 		},
 		[]string{"table", "type"},
 	)
-	writeLimiterDelay = prometheus.NewSummary(
-		prometheus.SummaryOpts{
+	writeLimiterDelay = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
 			Name: "writer_limiter_delay_duration",
 			Help: "Duration of back off from the concurrency limiter.",
 		},

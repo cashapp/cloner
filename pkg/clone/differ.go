@@ -79,32 +79,29 @@ var (
 		},
 		[]string{"table"},
 	)
-	readDuration = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name:       "read_duration",
-			Help:       "Total duration of the database read of a chunk from a table from either source or target.",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+	readDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "read_duration",
+			Help: "Total duration of the database read of a chunk from a table from either source or target.",
 		},
 		[]string{"table", "from"},
 	)
-	crc32Duration = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name:       "crc32_duration",
-			Help:       "Duration of running the crc32 pre-diffing check.",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+	crc32Duration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "crc32_duration",
+			Help: "Duration of running the crc32 pre-diffing check.",
 		},
 		[]string{"table", "from"},
 	)
-	diffDuration = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
-			Name:       "diff_duration",
-			Help:       "Total duration of diffing a chunk (including database reads).",
-			Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+	diffDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "diff_duration",
+			Help: "Total duration of diffing a chunk (including database reads).",
 		},
 		[]string{"table"},
 	)
-	readLimiterDelay = prometheus.NewSummaryVec(
-		prometheus.SummaryOpts{
+	readLimiterDelay = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Name: "read_limiter_delay_duration",
 			Help: "Duration of back off from the concurrency limiter for reads.",
 		},

@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
@@ -369,29 +370,36 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	// TODO what we should actually do here is do a single pass through all of the successful chunks,
 	//      then keep retrying with the failed chunks until they all succeed,
 	//      but that will require larger code restructurings so let's wait with that for a bit
-	var diffs []Diff
 	var err error
-	tryCount := r.config.FailedChunkRetryCount + 1
-	i := 0
-	for {
-		i++
-		diffs, err = r.doDiffChunk(ctx, chunk)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		if len(diffs) == 0 {
-			if i > 1 {
-				log.Infof("chunk %s[%d-%d) had no diffs after %d retries",
-					chunk.Table.Name, chunk.Start, chunk.End, i)
+	if r.config.FailedChunkRetryCount == 0 {
+		return r.doDiffChunk(ctx, chunk)
+	} else {
+		var diffs []Diff
+		tries := 0
+		err := backoff.Retry(func() error {
+			diffs = nil
+			diffs, err = r.doDiffChunk(ctx, chunk)
+			if err != nil {
+				return errors.WithStack(err)
 			}
-			// Yay! Chunk had no diffs!!
-			return nil, nil
+			if len(diffs) == 0 {
+				if tries > 1 {
+					log.Infof("chunk %s[%d-%d) had no diffs after %d retries",
+						chunk.Table.Name, chunk.Start, chunk.End, tries)
+				}
+				// Yay! Chunk had no diffs!!
+				return nil
+			} else {
+				log.Infof("chunk %s[%d-%d) had diffs, retrying %d more times",
+					chunk.Table.Name, chunk.Start, chunk.End, r.config.FailedChunkRetryCount-tries)
+				return errors.Errorf("chunk %s[%d-%d) had diffs",
+					chunk.Table.Name, chunk.Start, chunk.End)
+			}
+		}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(r.config.FailedChunkRetryCount)))
+		if len(diffs) > 0 {
+			return diffs, nil
 		} else {
-			if i == tryCount {
-				return diffs, nil
-			}
-			log.Infof("chunk %s[%d-%d) had diffs, retrying %d more times",
-				chunk.Table.Name, chunk.Start, chunk.End, tryCount-i-1)
+			return diffs, err
 		}
 	}
 }

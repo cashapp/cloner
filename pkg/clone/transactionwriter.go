@@ -301,6 +301,7 @@ func (s *transactionSet) Start(parent context.Context) {
 	if s.g != nil {
 		panic("can't start twice")
 	}
+
 	g, ctx := errgroup.WithContext(parent)
 	s.g = g
 	writerParallelism := semaphore.NewWeighted(s.writer.config.ReplicationParallelism)
@@ -354,8 +355,8 @@ func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, 
 
 func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions chan Transaction) (*transactionSet, error) {
 	// TODO these should probably be configurable? or auto tuning?
-	transactionSetTimeoutDuration := 1 * time.Second
-	transactionSetMaxSize := 30
+	transactionSetTimeoutDuration := 5 * time.Second
+	transactionSetMaxSize := 100
 
 	size := 0
 	nextTransactionSet := &transactionSet{writer: w}

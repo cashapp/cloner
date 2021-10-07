@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -95,16 +97,16 @@ func TestReplicate(t *testing.T) {
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		for i := 0; ; i++ {
+		for {
 			if doWrite.Load() {
-				err := write(ctx, db, i%5 == 0)
+				err := write(ctx, db)
 				if err != nil {
 					return errors.WithStack(err)
 				}
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {
@@ -192,7 +194,14 @@ func TestReplicate(t *testing.T) {
 
 	if len(diffs) > 0 {
 		for _, diff := range diffs {
-			fmt.Printf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
+			should, err := coerceString(diff.Row.Data[1])
+			assert.NoError(t, err)
+			var actual string
+			if diff.Target != nil {
+				actual, err = coerceString(diff.Target.Data[1])
+				assert.NoError(t, err)
+			}
+			fmt.Printf("diff %v id=%v should=%s actual=%s\n", diff.Type, diff.Row.ID, should, actual)
 		}
 		assert.Fail(t, "there were diffs (see above)")
 	}
@@ -249,43 +258,51 @@ func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Ti
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
 }
 
-func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
-	// Insert a new row
-	_, err = db.ExecContext(ctx, `
+func write(ctx context.Context, db *sql.DB) (err error) {
+	return autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		// Insert a new row
+		_, err = tx.ExecContext(ctx, `
 				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
 			`)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Randomly update a row
-	var randomCustomerId int64
-	row := db.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-	err = row.Scan(&randomCustomerId)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Every five iterations randomly delete a row
-	if delete {
-		_, err = db.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-	} else {
-		// Otherwise update it
-		_, err = db.ExecContext(ctx, ` 
+
+		// Do 5 random updates
+		for i := 0; i < 5; i++ {
+			// Randomly update or delete rows
+			var randomCustomerId int64
+			row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
+			err = row.Scan(&randomCustomerId)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			// For every five inserted rows we randomly delete one
+			doDelete := rand.Intn(25) == 0
+
+			if doDelete {
+				_, err = tx.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			} else {
+				// Otherwise update it
+				_, err = tx.ExecContext(ctx, ` 
 					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 					WHERE id = ?
 				`, randomCustomerId)
-		if err != nil {
-			return errors.WithStack(err)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			}
 		}
-	}
-	return nil
+
+		return nil
+	})
 }

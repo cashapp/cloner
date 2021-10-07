@@ -309,10 +309,10 @@ func (s *transactionSet) Start(parent context.Context) {
 		sequence := seq
 		s.g.Go(func() error {
 			err := writerParallelism.Acquire(ctx, 1)
-			defer writerParallelism.Release(1)
 			if err != nil {
 				return errors.WithStack(err)
 			}
+			defer writerParallelism.Release(1)
 			err = sequence.Run(ctx)
 			if err != nil {
 				return errors.WithStack(err)

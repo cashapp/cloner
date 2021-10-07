@@ -17,6 +17,9 @@ import (
 )
 
 var (
+	// defaultBuckets suitable for database operations, the upper buckets are of course defects but useful for debugging
+	defaultBuckets = []float64{.01, .05, .1, .5, 1, 2.5, 5, 10, 60, 120, 300}
+
 	writesRequested = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "writes_requested",
@@ -62,15 +65,17 @@ var (
 	)
 	writeDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "write_duration",
-			Help: "Duration of writes (does not include retries and backoff).",
+			Name:    "write_duration",
+			Help:    "Duration of writes (does not include retries and backoff).",
+			Buckets: defaultBuckets,
 		},
 		[]string{"table", "type"},
 	)
 	writeLimiterDelay = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Name: "writer_limiter_delay_duration",
-			Help: "Duration of back off from the concurrency limiter.",
+			Name:    "writer_limiter_delay_duration",
+			Help:    "Duration of back off from the concurrency limiter.",
+			Buckets: defaultBuckets,
 		},
 	)
 )

@@ -375,6 +375,7 @@ func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions
 			if size == 0 {
 				// We have no transactions so we might as well wait a bit longer
 				transactionSetTimeout = time.After(transactionSetTimeoutDuration)
+				continue
 			}
 			return nextTransactionSet, nil
 		case <-ctx.Done():

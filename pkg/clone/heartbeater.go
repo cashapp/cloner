@@ -166,8 +166,8 @@ func (h *Heartbeater) readHeartbeat(ctx context.Context) error {
 			}
 		}
 		lag := time.Now().UTC().Sub(lastHeartbeat)
-		replicationLag.Set(float64(lag.Milliseconds()))
-		heartbeatsRead.Inc()
+		replicationLag.WithLabelValues(h.config.TaskName).Set(float64(lag.Milliseconds()))
+		heartbeatsRead.WithLabelValues(h.config.TaskName).Inc()
 		return nil
 	})
 	if err != nil {

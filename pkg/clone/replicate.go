@@ -14,42 +14,47 @@ import (
 )
 
 var (
-	eventsReceived = prometheus.NewCounter(
+	eventsReceived = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "replication_events_received",
 			Help: "How many events we've received",
 		},
+		[]string{"task"},
 	)
-	eventsProcessed = prometheus.NewCounter(
+	eventsProcessed = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "replication_events_processed",
 			Help: "How many events we've processed",
 		},
+		[]string{"task"},
 	)
-	eventsIgnored = prometheus.NewCounter(
+	eventsIgnored = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "replication_events_ignored",
 			Help: "How many events we've ignored",
 		},
+		[]string{"task"},
 	)
-	replicationLag = prometheus.NewGauge(
+	replicationLag = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "replication_lag",
 			Help: "The time in milliseconds between a change applied to source is replicated to the target",
 		},
+		[]string{"task"},
 	)
-	heartbeatsRead = prometheus.NewCounter(
+	heartbeatsRead = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "heartbeats_read",
 			Help: "The number of times we've successfully read heartbeats",
 		},
+		[]string{"task"},
 	)
 	chunksSnapshotted = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "chunks_snapshotted",
 			Help: "How many chunks has been read, partitioned by table.",
 		},
-		[]string{"table"},
+		[]string{"task", "table"},
 	)
 )
 

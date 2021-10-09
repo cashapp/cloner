@@ -9,6 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
+	"math/rand"
 )
 
 var (
@@ -61,25 +62,20 @@ func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	g, ctx := errgroup.WithContext(ctx)
 
-	chunks := make(chan Chunk)
-
-	g.Go(func() error {
-		// Generate chunks of source table
-		logger := log.WithContext(ctx).WithField("task", "chunking")
-		logger = logger.WithField("table", r.table.Name)
-		logger.Infof("'%s' chunking start", r.table.Name)
-		err := generateTableChunksAsync(ctx, r.table, r.source, chunks, r.sourceRetry)
-		logger.Infof("'%s' chunking done", r.table.Name)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		close(chunks)
-		return nil
-	})
+	// Generate chunks of source table
+	logger := log.WithContext(ctx).WithField("task", "chunking")
+	logger = logger.WithField("table", r.table.Name)
+	logger.Infof("'%s' chunking start", r.table.Name)
+	chunks, err := generateTableChunks(ctx, r.table, r.source, r.sourceRetry)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	rand.Shuffle(len(chunks), func(i, j int) { chunks[i], chunks[j] = chunks[j], chunks[i] })
+	logger.Infof("'%s' chunking done", r.table.Name)
 
 	// Generate diffs from all chunks
 	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
-	for c := range chunks {
+	for _, c := range chunks {
 		chunk := c
 		err := readerParallelism.Acquire(ctx, 1)
 		if err != nil {
@@ -126,7 +122,7 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 		})
 	}
 
-	err := g.Wait()
+	err = g.Wait()
 	if err != nil {
 		return errors.WithStack(err)
 	}

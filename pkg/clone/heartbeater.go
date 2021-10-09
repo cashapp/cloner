@@ -156,18 +156,21 @@ func (h *Heartbeater) readHeartbeat(ctx context.Context) error {
 		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", h.config.HeartbeatTable)
 		row := h.target.QueryRowContext(ctx, stmt, h.config.TaskName)
 		var lastHeartbeat time.Time
+		var lag time.Duration
 		err := row.Scan(&lastHeartbeat)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				// We haven't received the first heartbeat yet
-				return nil
+				// We haven't received the first heartbeat yet, maybe we're an hour behind, who knows?
+				// We're definitely more than 0 ms so let's go with one hour just to pick a number >0
+				lag = time.Hour
 			} else {
 				return errors.WithStack(err)
 			}
+		} else {
+			heartbeatsRead.WithLabelValues(h.config.TaskName).Inc()
+			lag = time.Now().UTC().Sub(lastHeartbeat)
 		}
-		lag := time.Now().UTC().Sub(lastHeartbeat)
-		replicationLag.Set(float64(lag.Milliseconds()))
-		heartbeatsRead.Inc()
+		replicationLag.WithLabelValues(h.config.TaskName).Set(float64(lag / time.Second))
 		return nil
 	})
 	if err != nil {

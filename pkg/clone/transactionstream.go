@@ -85,7 +85,7 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 			return errors.WithStack(err)
 		}
 
-		eventsReceived.Inc()
+		eventsReceived.WithLabelValues(s.config.TaskName).Inc()
 
 		if e.Header.LogPos > 0 {
 			// Some events like FormatDescriptionEvent return 0, ignore.
@@ -131,9 +131,9 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 		}
 
 		if ignored {
-			eventsIgnored.Inc()
+			eventsIgnored.WithLabelValues(s.config.TaskName).Inc()
 		} else {
-			eventsProcessed.Inc()
+			eventsProcessed.WithLabelValues(s.config.TaskName).Inc()
 		}
 	}
 }

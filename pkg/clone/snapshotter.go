@@ -496,7 +496,7 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 
 	snapshot := &ChunkSnapshot{Chunk: chunk, Rows: rows}
 
-	chunksSnapshotted.WithLabelValues(chunk.Table.Name).Inc()
+	chunksSnapshotted.WithLabelValues(s.config.TaskName, chunk.Table.Name).Inc()
 
 	_, err = s.source.ExecContext(ctx,
 		fmt.Sprintf("INSERT INTO %s (table_name, chunk_seq, high) VALUES (?, ?, 1)",

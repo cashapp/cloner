@@ -24,7 +24,19 @@ const heartbeatFrequency = 100 * time.Millisecond
 
 // TODO test for rollback
 
-func TestReplicate(t *testing.T) {
+func TestReplicateSingleThreaded(t *testing.T) {
+	doTestReplicate(t, func(replicate *Replicate) {
+		replicate.ReplicationParallelism = 1
+	})
+}
+
+func TestReplicateParallel(t *testing.T) {
+	doTestReplicate(t, func(replicate *Replicate) {
+		replicate.ReplicationParallelism = 10
+	})
+}
+
+func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err := startAll()
 	require.NoError(t, err)
 
@@ -76,6 +88,7 @@ func TestReplicate(t *testing.T) {
 		CreateTables:           true,
 		ReplicationParallelism: 10,
 	}
+	replicateConfig(replicate)
 	err = kong.ApplyDefaults(replicate)
 	require.NoError(t, err)
 

@@ -258,20 +258,21 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 			}()
 
 			if w.config.NoDiff {
-				return w.replaceBatch(ctx, logger, tx, batch)
+				err = w.replaceBatch(ctx, logger, tx, batch)
 			} else {
 				switch batch.Type {
 				case Insert:
-					return w.insertBatch(ctx, logger, tx, batch)
+					err = w.insertBatch(ctx, logger, tx, batch)
 				case Delete:
-					return w.deleteBatch(ctx, logger, tx, batch)
+					err = w.deleteBatch(ctx, logger, tx, batch)
 				case Update:
-					return w.updateBatch(ctx, logger, tx, batch)
+					err = w.updateBatch(ctx, logger, tx, batch)
 				default:
 					logger.Panicf("Unknown batch type %s", batch.Type)
 					return nil
 				}
 			}
+			return err
 		})
 
 		// These should not be retried

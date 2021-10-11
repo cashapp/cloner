@@ -182,6 +182,15 @@ type transactionSequence struct {
 	transactions []Transaction
 }
 
+func (s *transactionSequence) Print(ctx context.Context) {
+	writer := &printingWriter{db: s.writer.target}
+	for _, transaction := range s.transactions {
+		for _, mutation := range transaction.Mutations {
+			_ = mutation.Write(ctx, writer)
+		}
+	}
+}
+
 func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 	for _, chunk := range s.chunks {
 		for _, mutation := range transaction.Mutations {
@@ -319,7 +328,10 @@ func (s *transactionSet) Start(parent context.Context) {
 			err = sequence.Run(ctx)
 			if err != nil {
 				if isWriteConflict(err) {
-					s.print(parent)
+					fmt.Printf("write conflict when committing this sequence:\n")
+					sequence.Print(parent)
+					fmt.Printf("all sequences:\n")
+					s.Print(parent)
 				}
 				return errors.WithStack(err)
 			}
@@ -342,16 +354,13 @@ func (l *printingWriter) ExecContext(ctx context.Context, query string, args ...
 	return driver.RowsAffected(0), nil
 }
 
-func (s *transactionSet) print(ctx context.Context) {
-	writer := &printingWriter{db: s.writer.target}
-	fmt.Println("parallel: ===========")
+func (s *transactionSet) Print(ctx context.Context) {
 	for _, seq := range s.sequences {
-		fmt.Println("serially: --------------")
-		for _, transaction := range seq.transactions {
-			for _, mutation := range transaction.Mutations {
-				_ = mutation.Write(ctx, writer)
-			}
+		if len(seq.transactions) == 0 {
+			continue
 		}
+		fmt.Println("serially: --------------")
+		seq.Print(ctx)
 	}
 }
 

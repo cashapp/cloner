@@ -185,6 +185,7 @@ type transactionSequence struct {
 func (s *transactionSequence) Print(ctx context.Context) {
 	writer := &printingWriter{db: s.writer.target}
 	for _, transaction := range s.transactions {
+		fmt.Printf("---\n")
 		for _, mutation := range transaction.Mutations {
 			_ = mutation.Write(ctx, writer)
 		}

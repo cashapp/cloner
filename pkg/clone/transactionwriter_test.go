@@ -372,7 +372,6 @@ func TestTransactionSetAppend(t *testing.T) {
 				},
 			},
 		},
-		// TODO test cases with chunk repairs
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

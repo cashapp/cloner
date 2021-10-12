@@ -336,6 +336,10 @@ type transactionSet struct {
 func (s *transactionSet) Append(transaction Transaction) {
 	s.finalPosition = transaction.FinalPosition
 	for _, sequence := range s.sequences {
+		// TODO a transaction can be causal with multiple sequences, i.e. a transaction "spans" sequences
+		//      in that case those sequences need to be merged in order
+		//      to do that we need to maintain a sequence number for each transaction inside the transaction set
+		//      so that transaction sequences can be merged with maintained order
 		if sequence.IsCausal(transaction) {
 			sequence.Append(transaction)
 			return

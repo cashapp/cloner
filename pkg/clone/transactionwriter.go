@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 )
@@ -189,23 +190,28 @@ func (s *pkSet) String() string {
 	return strings.Join(vals, " ")
 }
 
+type orderedTransaction struct {
+	ordinal     int64
+	transaction Transaction
+}
+
 type transactionSequence struct {
 	writer *TransactionWriter
 	// chunks is the list of chunks this sequence repair
 	chunks []Chunk
 	// primaryKeys caches the primary key sets of this sequence, keyed by table name
 	primaryKeys  map[string]*pkSet
-	transactions []Transaction
+	transactions []orderedTransaction
 }
 
 func (s *transactionSequence) Print(ctx context.Context) {
 	fmt.Printf("%v\n", s.PKSetString())
 	for _, transaction := range s.transactions {
-		if len(transaction.Mutations) == 0 {
+		if len(transaction.transaction.Mutations) == 0 {
 			continue
 		}
 		fmt.Printf("---\n")
-		for _, mutation := range transaction.Mutations {
+		for _, mutation := range transaction.transaction.Mutations {
 			if mutation.Type == Repair {
 				fmt.Printf("repair %v-%v\n", mutation.Chunk.Start, mutation.Chunk.End)
 			} else {
@@ -264,11 +270,11 @@ func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 	return false
 }
 
-func (s *transactionSequence) Append(transaction Transaction) {
+func (s *transactionSequence) Append(transaction orderedTransaction) {
 	s.transactions = append(s.transactions, transaction)
 
 	// update the cache of the primary key set
-	for _, mutation := range transaction.Mutations {
+	for _, mutation := range transaction.transaction.Mutations {
 		if mutation.Type == Repair {
 			s.chunks = append(s.chunks, mutation.Chunk)
 		} else {
@@ -289,11 +295,11 @@ func (s *transactionSequence) Append(transaction Transaction) {
 
 func (s *transactionSequence) Run(ctx context.Context) error {
 	for _, transaction := range s.transactions {
-		if len(transaction.Mutations) == 0 {
+		if len(transaction.transaction.Mutations) == 0 {
 			continue
 		}
 		err := autotx.Transact(ctx, s.writer.target, func(tx *sql.Tx) error {
-			for _, mutation := range transaction.Mutations {
+			for _, mutation := range transaction.transaction.Mutations {
 				err := s.writer.handleMutation(ctx, tx, mutation)
 				if err != nil {
 					return errors.WithStack(err)
@@ -321,7 +327,7 @@ func (s *transactionSequence) PKSetString() string {
 
 func PKSetString(t Transaction) string {
 	seq := transactionSequence{primaryKeys: make(map[string]*pkSet)}
-	seq.Append(t)
+	seq.Append(orderedTransaction{transaction: t})
 	return seq.PKSetString()
 }
 
@@ -329,27 +335,62 @@ type transactionSet struct {
 	writer *TransactionWriter
 
 	sequences     []*transactionSequence
+	ordinal       int64
 	finalPosition Position
 	g             *errgroup.Group
 }
 
-func (s *transactionSet) Append(transaction Transaction) {
-	s.finalPosition = transaction.FinalPosition
+func (s *transactionSet) Append(t Transaction) {
+	transaction := orderedTransaction{
+		ordinal:     s.ordinal,
+		transaction: t,
+	}
+	s.ordinal++
+	s.finalPosition = transaction.transaction.FinalPosition
+	var sequences []*transactionSequence
 	for _, sequence := range s.sequences {
-		// TODO a transaction can be causal with multiple sequences, i.e. a transaction "spans" sequences
-		//      in that case those sequences need to be merged in order
-		//      to do that we need to maintain a sequence number for each transaction inside the transaction set
-		//      so that transaction sequences can be merged with maintained order
-		if sequence.IsCausal(transaction) {
-			sequence.Append(transaction)
-			return
+		if sequence.IsCausal(transaction.transaction) {
+			sequences = append(sequences, sequence)
 		}
 	}
+	var sequence *transactionSequence
+	if len(sequences) == 0 {
+		// Non-causal with any of the existing sequences so we create a new sequence for this transaction
+		sequence = &transactionSequence{writer: s.writer, primaryKeys: make(map[string]*pkSet)}
+		s.sequences = append(s.sequences, sequence)
+	} else if len(sequences) == 1 {
+		sequence = sequences[0]
+	} else {
+		// This transaction spans multiple sequences which conjoins them and makes them all causal
+		// we have to merge them all together into a single sequence
+		// To merge sequences we grab all the transactions from all sequences
+		var transactions []orderedTransaction
+		for _, seq := range sequences {
+			transactions = append(transactions, seq.transactions...)
+		}
+		// sort them by time order
+		sort.Slice(transactions, func(i, j int) bool {
+			return transactions[i].ordinal < transactions[j].ordinal
+		})
+		// add them to a fresh sequence
+		sequence = &transactionSequence{writer: s.writer, primaryKeys: make(map[string]*pkSet)}
+		for _, t := range transactions {
+			sequence.Append(t)
+		}
+		// then remove all the merged sequences
+		for _, seq := range sequences {
+			for i, sq := range s.sequences {
+				if sq == seq {
+					s.sequences = append(s.sequences[:i], s.sequences[i+1:]...)
+					break
+				}
+			}
+		}
+		// and add the new union sequence
+		s.sequences = append(s.sequences, sequence)
+	}
 
-	// Non-causal with any of the existing sequences so we create a new sequence for this transaction
-	sequence := &transactionSequence{writer: s.writer, primaryKeys: make(map[string]*pkSet)}
 	sequence.Append(transaction)
-	s.sequences = append(s.sequences, sequence)
 }
 
 func (s *transactionSet) Wait() error {

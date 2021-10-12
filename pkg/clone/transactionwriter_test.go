@@ -375,6 +375,89 @@ func TestTransactionSetAppend(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "two non-causal transactions then a spanning transaction",
+			input: []Transaction{
+				{
+					Mutations: []Mutation{{
+						Type:  Insert,
+						Table: table,
+						Rows: [][]interface{}{
+							{1, "Customer #1"},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Update,
+						Table: table,
+						Rows: [][]interface{}{
+							{1, "Updated Customer #1"},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Insert,
+						Table: table,
+						Rows: [][]interface{}{
+							{2, "Customer #2"},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Update,
+						Table: table,
+						Rows: [][]interface{}{
+							{1, "Updated Customer #1"},
+							{2, "Updated Customer #2"},
+						},
+					}},
+				},
+			},
+			output: [][]Transaction{
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Insert,
+							Table: table,
+							Rows: [][]interface{}{
+								{1, "Customer #1"},
+							},
+						}},
+					},
+					{
+						Mutations: []Mutation{{
+							Type:  Update,
+							Table: table,
+							Rows: [][]interface{}{
+								{1, "Updated Customer #1"},
+							},
+						}},
+					},
+					{
+						Mutations: []Mutation{{
+							Type:  Insert,
+							Table: table,
+							Rows: [][]interface{}{
+								{2, "Customer #2"},
+							},
+						}},
+					},
+					{
+						Mutations: []Mutation{{
+							Type:  Update,
+							Table: table,
+							Rows: [][]interface{}{
+								{1, "Updated Customer #1"},
+								{2, "Updated Customer #2"},
+							},
+						}},
+					},
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -384,7 +467,11 @@ func TestTransactionSetAppend(t *testing.T) {
 			}
 			require.Equal(t, len(test.output), len(transactionSet.sequences))
 			for i, sequence := range test.output {
-				require.Equal(t, sequence, transactionSet.sequences[i].transactions)
+				var actualTransactions []Transaction
+				for _, t := range transactionSet.sequences[i].transactions {
+					actualTransactions = append(actualTransactions, t.transaction)
+				}
+				require.Equal(t, sequence, actualTransactions)
 			}
 		})
 	}

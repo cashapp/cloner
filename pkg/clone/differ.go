@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
@@ -335,6 +336,33 @@ func coerceString(value interface{}) (string, error) {
 	default:
 		return "", errors.Errorf("can't (yet?) coerce %v to string: %v", reflect.TypeOf(value), value)
 	}
+}
+
+func coerceRaw(value interface{}) ([]byte, error) {
+	switch value := value.(type) {
+	case []byte:
+		return value, nil
+	case string:
+		return []byte(value), nil
+	case int64:
+		b := make([]byte, 8)
+		binary.LittleEndian.PutUint64(b, uint64(value))
+		return b, nil
+	default:
+		return nil, errors.Errorf("can't (yet?) coerce %v to []byte: %v", reflect.TypeOf(value), value)
+	}
+}
+
+func coerceRawArray(vals []interface{}) ([][]byte, error) {
+	var err error
+	raw := make([][]byte, len(vals))
+	for i, val := range vals {
+		raw[i], err = coerceRaw(val)
+		if err != nil {
+			return raw, err
+		}
+	}
+	return raw, err
 }
 
 // readChunk reads a chunk without diffing producing only insert diffs

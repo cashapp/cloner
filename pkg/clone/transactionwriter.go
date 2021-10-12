@@ -166,11 +166,27 @@ func (s *pkSet) AddRow(row []interface{}) {
 }
 
 func (s *pkSet) AddPK(pks []interface{}) {
+	if s.ContainsPK(pks) {
+		// We already got it
+		return
+	}
 	hash, err := hashstructure.Hash(pks, hashstructure.FormatV2, nil)
 	if err != nil {
 		panic(err)
 	}
 	s.m[hash] = append(s.m[hash], pks)
+}
+
+func (s *pkSet) String() string {
+	var vals []string
+	for _, pks := range s.m {
+		for _, pk := range pks {
+			for _, val := range pk {
+				vals = append(vals, fmt.Sprintf("%v", val))
+			}
+		}
+	}
+	return strings.Join(vals, " ")
 }
 
 type transactionSequence struct {
@@ -183,11 +199,19 @@ type transactionSequence struct {
 }
 
 func (s *transactionSequence) Print(ctx context.Context) {
-	writer := &printingWriter{db: s.writer.target}
+	fmt.Printf("%v\n", s.PKSetString())
 	for _, transaction := range s.transactions {
+		if len(transaction.Mutations) == 0 {
+			continue
+		}
 		fmt.Printf("---\n")
 		for _, mutation := range transaction.Mutations {
-			_ = mutation.Write(ctx, writer)
+			if mutation.Type == Repair {
+				fmt.Printf("repair %v-%v\n", mutation.Chunk.Start, mutation.Chunk.End)
+			} else {
+				writer := &printingWriter{db: s.writer.target}
+				_ = mutation.Write(ctx, writer)
+			}
 		}
 	}
 }
@@ -284,6 +308,23 @@ func (s *transactionSequence) Run(ctx context.Context) error {
 	return nil
 }
 
+func (s *transactionSequence) PKSetString() string {
+	var result []string
+	for _, c := range s.chunks {
+		result = append(result, fmt.Sprintf("%s: [%d - %d]", c.Table.Name, c.Start, c.End))
+	}
+	for table, pks := range s.primaryKeys {
+		result = append(result, fmt.Sprintf("%s: [%v]", table, pks))
+	}
+	return strings.Join(result, " ")
+}
+
+func PKSetString(t Transaction) string {
+	seq := transactionSequence{primaryKeys: make(map[string]*pkSet)}
+	seq.Append(t)
+	return seq.PKSetString()
+}
+
 type transactionSet struct {
 	writer *TransactionWriter
 
@@ -329,10 +370,14 @@ func (s *transactionSet) Start(parent context.Context) {
 			err = sequence.Run(ctx)
 			if err != nil {
 				if isWriteConflict(err) {
+					fmt.Printf("#################################\n")
 					fmt.Printf("write conflict when committing this sequence:\n")
-					sequence.Print(parent)
+					fmt.Println(sequence.PKSetString())
 					fmt.Printf("all sequences:\n")
-					s.Print(parent)
+					for _, sq := range s.sequences {
+						fmt.Println(sq.PKSetString())
+					}
+					fmt.Printf("#################################\n")
 				}
 				return errors.WithStack(err)
 			}

@@ -119,7 +119,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {
@@ -271,7 +271,7 @@ func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Ti
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
 }

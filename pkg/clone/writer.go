@@ -13,6 +13,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
+	"strconv"
 	"strings"
 )
 
@@ -47,7 +48,7 @@ var (
 			Name: "writes_errors",
 			Help: "How many writes (rows) have failed irrecoverably, partitioned by table and type (insert, update, delete).",
 		},
-		[]string{"table", "type"},
+		[]string{"table", "type", "code"},
 	)
 	constraintViolationErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -192,6 +193,7 @@ func isConstraintViolation(err error) bool {
 
 // isWriteConflict are errors caused by a write-write conflict between two parallel transactions:
 //   https://docs.pingcap.com/tidb/stable/error-codes
+//nolint:deadcode,unused
 func isWriteConflict(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
@@ -262,7 +264,13 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 				if err == nil {
 					writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 				} else {
-					writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
+					mySQLError := mysqlError(err)
+					var errorCode uint16
+					if mySQLError != nil {
+						errorCode = mySQLError.Number
+					}
+					writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type), strconv.Itoa(int(errorCode))).
+						Add(float64(len(batch.Rows)))
 				}
 			}()
 

@@ -17,6 +17,7 @@ import (
 	_ "net/http/pprof"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -550,7 +551,13 @@ func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 		if err == nil {
 			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
+			mySQLError := mysqlError(err)
+			var errorCode uint16
+			if mySQLError != nil {
+				errorCode = mySQLError.Number
+			}
+			writesFailed.WithLabelValues(tableName, writeType, strconv.Itoa(int(errorCode))).
+				Add(float64(len(m.Rows)))
 		}
 	}()
 	var questionMarks strings.Builder
@@ -595,7 +602,13 @@ func (m *Mutation) delete(ctx context.Context, tx DBWriter) (err error) {
 		if err == nil {
 			writesSucceeded.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
 		} else {
-			writesFailed.WithLabelValues(tableName, writeType).Add(float64(len(m.Rows)))
+			mySQLError := mysqlError(err)
+			var errorCode uint16
+			if mySQLError != nil {
+				errorCode = mySQLError.Number
+			}
+			writesFailed.WithLabelValues(tableName, writeType, strconv.Itoa(int(errorCode))).
+				Add(float64(len(m.Rows)))
 		}
 	}()
 	var stmt strings.Builder

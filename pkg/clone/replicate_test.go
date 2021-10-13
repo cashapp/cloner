@@ -22,6 +22,8 @@ import (
 
 const heartbeatFrequency = 100 * time.Millisecond
 
+var rollbackErr = fmt.Errorf("expected rollback")
+
 // TODO test for rollback
 
 func TestReplicateSingleThreaded(t *testing.T) {
@@ -107,30 +109,35 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	require.NoError(t, err)
 
 	// Write rows in a separate thread
-	g.Go(func() error {
-		db, err := source.DB()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		for {
-			if doWrite.Load() {
-				err := write(ctx, db)
-				if err != nil {
-					return errors.WithStack(err)
+	writerCount := 5
+	writerDelay := 200 * time.Millisecond
+	for i := 0; i < writerCount; i++ {
+		time.Sleep(writerDelay / 2)
+		g.Go(func() error {
+			db, err := source.DB()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			for {
+				if doWrite.Load() {
+					err := write(ctx, db)
+					if err != nil && err != rollbackErr {
+						return errors.WithStack(err)
+					}
+				}
+
+				// Sleep a bit to make sure the replicator can keep up
+				time.Sleep(writerDelay)
+
+				// Check if we were cancelled
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
 				}
 			}
-
-			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(200 * time.Millisecond)
-
-			// Check if we were cancelled
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-		}
-	})
+		})
+	}
 
 	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
 	time.Sleep(5 * time.Second)
@@ -316,6 +323,12 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 					return errors.WithStack(err)
 				}
 			}
+		}
+
+		// 10% of transactions are rollbacks
+		doRollback := rand.Intn(10) == 0
+		if doRollback {
+			return rollbackErr
 		}
 
 		return nil

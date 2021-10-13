@@ -338,6 +338,7 @@ func coerceString(value interface{}) (string, error) {
 	}
 }
 
+//nolint:deadcode,unused
 func coerceRaw(value interface{}) ([]byte, error) {
 	switch value := value.(type) {
 	case []byte:
@@ -353,6 +354,7 @@ func coerceRaw(value interface{}) ([]byte, error) {
 	}
 }
 
+//nolint:deadcode,unused
 func coerceRawArray(vals []interface{}) ([][]byte, error) {
 	var err error
 	raw := make([][]byte, len(vals))

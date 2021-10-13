@@ -42,6 +42,28 @@ var (
 		},
 		[]string{"task"},
 	)
+	replicationParallelism = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "replication_parallelism",
+			Help: "How many serial sequences were we able to split a batch of transactions into",
+		},
+		[]string{"task"},
+	)
+	replicationParallelismBatchSize = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "replication_parallelism_batch_size",
+			Help: "The actual size of a batch of transactions when they are applied",
+		},
+		[]string{"task"},
+	)
+	replicationParallelismApplyDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "replication_parallelism_apply_duration",
+			Help:    "How long did it take do apply one batch of transactions",
+			Buckets: defaultBuckets,
+		},
+		[]string{"task"},
+	)
 	heartbeatsRead = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "heartbeats_read",
@@ -65,6 +87,9 @@ func init() {
 	prometheus.MustRegister(replicationLag)
 	prometheus.MustRegister(heartbeatsRead)
 	prometheus.MustRegister(chunksSnapshotted)
+	prometheus.MustRegister(replicationParallelism)
+	prometheus.MustRegister(replicationParallelismBatchSize)
+	prometheus.MustRegister(replicationParallelismApplyDuration)
 }
 
 type Replicate struct {

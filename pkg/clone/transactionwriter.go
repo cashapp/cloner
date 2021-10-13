@@ -340,6 +340,7 @@ type transactionSet struct {
 	ordinal       int64
 	finalPosition Position
 	g             *errgroup.Group
+	timer         *prometheus.Timer
 }
 
 func (s *transactionSet) Append(t Transaction) {
@@ -396,6 +397,7 @@ func (s *transactionSet) Append(t Transaction) {
 }
 
 func (s *transactionSet) Wait() error {
+	defer s.timer.ObserveDuration()
 	return errors.WithStack(s.g.Wait())
 }
 
@@ -404,7 +406,9 @@ func (s *transactionSet) Start(parent context.Context) {
 		panic("can't start twice")
 	}
 
-	// TODO should we have metrics for this?
+	s.timer = prometheus.NewTimer(replicationParallelismApplyDuration.WithLabelValues(s.writer.config.TaskName))
+	replicationParallelism.WithLabelValues(s.writer.config.TaskName).Set(float64(len(s.sequences)))
+	replicationParallelismBatchSize.WithLabelValues(s.writer.config.TaskName).Set(float64(s.ordinal))
 	logrus.WithContext(parent).WithField("task", "replicate").
 		Debugf("starting a batch of %d transactions run in %d parallel sequences with actual parallelism of %d",
 			s.ordinal, len(s.sequences), s.writer.config.ReplicationParallelism)

@@ -110,7 +110,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 
 	// Write rows in a separate thread
 	writerCount := 5
-	writerDelay := 200 * time.Millisecond
+	writerDelay := 500 * time.Millisecond
 	for i := 0; i < writerCount; i++ {
 		time.Sleep(writerDelay / 2)
 		g.Go(func() error {
@@ -325,8 +325,8 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 			}
 		}
 
-		// 10% of transactions are rollbacks
-		doRollback := rand.Intn(10) == 0
+		// Roll back a few transactions
+		doRollback := rand.Intn(20) == 0
 		if doRollback {
 			return rollbackErr
 		}

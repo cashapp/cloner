@@ -421,16 +421,6 @@ func (s *transactionSet) Start(parent context.Context) {
 			defer writerParallelism.Release(1)
 			err = sequence.Run(ctx)
 			if err != nil {
-				if isWriteConflict(err) {
-					fmt.Printf("#################################\n")
-					fmt.Printf("write conflict when committing this sequence:\n")
-					fmt.Println(sequence.PKSetString())
-					fmt.Printf("all sequences:\n")
-					for _, sq := range s.sequences {
-						fmt.Println(sq.PKSetString())
-					}
-					fmt.Printf("#################################\n")
-				}
 				return errors.WithStack(err)
 			}
 			return nil

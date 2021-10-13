@@ -75,14 +75,17 @@ type Replicate struct {
 
 	ChunkParallelism int `help:"Number of chunks to snapshot concurrently" default:"10"`
 
-	CheckpointTable        string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`
-	WatermarkTable         string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
-	HeartbeatTable         string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
-	HeartbeatFrequency     time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
-	CreateTables           bool          `help:"Create the required tables if they do not exist" default:"true"`
-	ChunkBufferSize        int           `help:"Size of internal queues" default:"100"`
-	ReconnectTimeout       time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
-	ReplicationParallelism int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
+	CheckpointTable    string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`
+	WatermarkTable     string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
+	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
+	CreateTables       bool          `help:"Create the required tables if they do not exist" default:"true"`
+	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
+	ReconnectTimeout   time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
+
+	ReplicationParallelism          int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
+	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
+	ParallelTransactionBatchTimeout time.Duration `help:"How long to wait for a batch of transactions to fill up before executing them anyway" default:"5s"`
 }
 
 // Run replicates from source to target

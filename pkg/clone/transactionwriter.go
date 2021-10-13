@@ -488,12 +488,9 @@ func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, 
 
 func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions chan Transaction) (*transactionSet, error) {
 	// TODO these should probably be configurable? or auto tuning?
-	transactionSetTimeoutDuration := 5 * time.Second
-	transactionSetMaxSize := 100
-
 	size := 0
 	nextTransactionSet := &transactionSet{writer: w}
-	transactionSetTimeout := time.After(transactionSetTimeoutDuration)
+	transactionSetTimeout := time.After(w.config.ParallelTransactionBatchTimeout)
 
 	// Fill the next transaction set before the transaction set timeout expires
 	for {
@@ -501,13 +498,13 @@ func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions
 		case transaction := <-transactions:
 			size++
 			nextTransactionSet.Append(transaction)
-			if size >= transactionSetMaxSize {
+			if size >= w.config.ParallelTransactionBatchMaxSize {
 				return nextTransactionSet, nil
 			}
 		case <-transactionSetTimeout:
 			if size == 0 {
 				// We have no transactions so we might as well wait a bit longer
-				transactionSetTimeout = time.After(transactionSetTimeoutDuration)
+				transactionSetTimeout = time.After(w.config.ParallelTransactionBatchTimeout)
 				continue
 			}
 			return nextTransactionSet, nil

@@ -44,7 +44,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err := startAll()
 	require.NoError(t, err)
 
-	rowCount := 1000
+	rowCount := 5000
 	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
 	require.NoError(t, err)
 
@@ -295,8 +295,8 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 			return errors.WithStack(err)
 		}
 
-		// Do 5 random updates
-		for i := 0; i < 5; i++ {
+		// Do some random updates
+		for i := 0; i < 2; i++ {
 			// Randomly update or delete rows
 			var randomCustomerId int64
 			row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)

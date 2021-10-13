@@ -119,7 +119,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 			}
 
 			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 
 			// Check if we were cancelled
 			select {

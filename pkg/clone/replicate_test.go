@@ -32,7 +32,7 @@ func TestReplicateSingleThreaded(t *testing.T) {
 
 func TestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
-		replicate.ParallelTransactionBatchTimeout = 2 * heartbeatFrequency
+		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50
 		replicate.ReplicationParallelism = 10
 	})

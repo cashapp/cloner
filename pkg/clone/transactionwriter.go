@@ -11,6 +11,7 @@ import (
 	"github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
@@ -401,6 +402,12 @@ func (s *transactionSet) Start(parent context.Context) {
 	if s.g != nil {
 		panic("can't start twice")
 	}
+
+	// TODO should we have metrics for this?
+	logrus.WithContext(parent).WithField("task", "replicate").
+		Debugf("starting a batch of %d transactions run in %d parallel sequences with actual parallelism of %d",
+			s.ordinal, len(s.sequences), s.writer.config.ReplicationParallelism)
+
 	g, ctx := errgroup.WithContext(parent)
 	s.g = g
 	writerParallelism := semaphore.NewWeighted(s.writer.config.ReplicationParallelism)

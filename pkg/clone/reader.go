@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	"math/rand"
+	"time"
 )
 
 var (
@@ -62,20 +63,41 @@ func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	g, ctx := errgroup.WithContext(ctx)
 
+	chunkCh := make(chan Chunk)
+
 	// Generate chunks of source table
-	logger := log.WithContext(ctx).WithField("task", "chunking")
-	logger = logger.WithField("table", r.table.Name)
-	logger.Infof("'%s' chunking start", r.table.Name)
-	chunks, err := generateTableChunks(ctx, r.table, r.source, r.sourceRetry)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	rand.Shuffle(len(chunks), func(i, j int) { chunks[i], chunks[j] = chunks[j], chunks[i] })
-	logger.Infof("'%s' chunking done", r.table.Name)
+	g.Go(func() error {
+		logger := log.WithContext(ctx).WithField("task", "chunking")
+		logger = logger.WithField("table", r.table.Name)
+		logger.Infof("'%s' chunking start", r.table.Name)
+		startTime := time.Now()
+		if r.config.ShuffleChunks {
+			chunks, err := generateTableChunks(ctx, r.table, r.source, r.sourceRetry)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			rand.Shuffle(len(chunks), func(i, j int) { chunks[i], chunks[j] = chunks[j], chunks[i] })
+			for _, chunk := range chunks {
+				select {
+				case chunkCh <- chunk:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		} else {
+			err := generateTableChunksAsync(ctx, r.table, r.source, chunkCh, r.sourceRetry)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		close(chunkCh)
+		logger.Infof("'%s' chunking done, took %vs", r.table.Name, time.Since(startTime).Seconds())
+		return nil
+	})
 
 	// Generate diffs from all chunks
 	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
-	for _, c := range chunks {
+	for c := range chunkCh {
 		chunk := c
 		err := readerParallelism.Acquire(ctx, 1)
 		if err != nil {
@@ -83,48 +105,53 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 		}
 		g.Go(func() (err error) {
 			defer readerParallelism.Release(1)
-			var diffs []Diff
-			if diff {
-				diffs, err = r.diffChunk(ctx, chunk)
-			} else {
-				diffs, err = r.readChunk(ctx, chunk)
-			}
 
-			if err != nil {
-				if r.config.Consistent {
-					return errors.WithStack(err)
-				}
-
-				log.WithField("table", chunk.Table.Name).
-					WithError(err).
-					WithContext(ctx).
-					Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
-						"since this is a best effort clone we just give up: %+v",
-						chunk.Table.Name, chunk.Start, chunk.End, err)
-				return nil
-			}
-
-			if len(diffs) > 0 {
-				chunksWithDiffs.WithLabelValues(chunk.Table.Name).Inc()
-			}
-
-			chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
-
-			for _, diff := range diffs {
-				select {
-				case diffsCh <- diff:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-
-			return nil
+			return r.processChunk(ctx, diffsCh, diff, chunk)
 		})
 	}
 
-	err = g.Wait()
+	err := g.Wait()
 	if err != nil {
 		return errors.WithStack(err)
+	}
+
+	return nil
+}
+
+func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool, chunk Chunk) (err error) {
+	var diffs []Diff
+	if diff {
+		diffs, err = r.diffChunk(ctx, chunk)
+	} else {
+		diffs, err = r.readChunk(ctx, chunk)
+	}
+
+	if err != nil {
+		if r.config.Consistent {
+			return errors.WithStack(err)
+		}
+
+		log.WithField("table", chunk.Table.Name).
+			WithError(err).
+			WithContext(ctx).
+			Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
+				"since this is a best effort clone we just give up: %+v",
+				chunk.Table.Name, chunk.Start, chunk.End, err)
+		return nil
+	}
+
+	if len(diffs) > 0 {
+		chunksWithDiffs.WithLabelValues(chunk.Table.Name).Inc()
+	}
+
+	chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+
+	for _, diff := range diffs {
+		select {
+		case diffsCh <- diff:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	return nil

@@ -32,7 +32,8 @@ type Config struct {
 type ReaderConfig struct {
 	SourceTargetConfig
 
-	ChunkSize int `help:"Default size of the chunks to diff (can also be overridden per table)" default:"5000"`
+	ChunkSize     int  `help:"Default size of the chunks to diff (can also be overridden per table)" default:"5000"`
+	ShuffleChunks bool `help:"Process chunks in a random order, spreads out the write load but writing will be delayed because all chunks are read before writing starts" default:"false"`
 
 	TableParallelism  int64         `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount       int           `help:"Number of reader connections" default:"20"`

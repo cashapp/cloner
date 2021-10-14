@@ -42,6 +42,28 @@ var (
 		},
 		[]string{"task"},
 	)
+	replicationParallelism = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "replication_parallelism",
+			Help: "How many serial sequences were we able to split a batch of transactions into",
+		},
+		[]string{"task"},
+	)
+	replicationParallelismBatchSize = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "replication_parallelism_batch_size",
+			Help: "The actual size of a batch of transactions when they are applied",
+		},
+		[]string{"task"},
+	)
+	replicationParallelismApplyDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "replication_parallelism_apply_duration",
+			Help:    "How long did it take do apply one batch of transactions",
+			Buckets: defaultBuckets,
+		},
+		[]string{"task"},
+	)
 	heartbeatsRead = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "heartbeats_read",
@@ -65,6 +87,9 @@ func init() {
 	prometheus.MustRegister(replicationLag)
 	prometheus.MustRegister(heartbeatsRead)
 	prometheus.MustRegister(chunksSnapshotted)
+	prometheus.MustRegister(replicationParallelism)
+	prometheus.MustRegister(replicationParallelismBatchSize)
+	prometheus.MustRegister(replicationParallelismApplyDuration)
 }
 
 type Replicate struct {
@@ -82,6 +107,10 @@ type Replicate struct {
 	CreateTables       bool          `help:"Create the required tables if they do not exist" default:"true"`
 	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
 	ReconnectTimeout   time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
+
+	ReplicationParallelism          int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
+	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
+	ParallelTransactionBatchTimeout time.Duration `help:"How long to wait for a batch of transactions to fill up before executing them anyway" default:"5s"`
 }
 
 // Run replicates from source to target
@@ -145,7 +174,7 @@ type Replicator struct {
 	config Replicate
 
 	snapshotter         *Snapshotter
-	heartbeater         *Heartbeater
+	heartbeat           *Heartbeat
 	transactionStreamer *TransactionStream
 	transactionWriter   *TransactionWriter
 }
@@ -161,7 +190,7 @@ func NewReplicator(config Replicate) (*Replicator, error) {
 		return nil, errors.WithStack(err)
 	}
 
-	r.heartbeater, err = NewHeartbeater(r.config)
+	r.heartbeat, err = NewHeartbeat(r.config)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -203,7 +232,7 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	if r.config.HeartbeatFrequency > 0 {
 		g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
-			return r.heartbeater.Run(ctx, b)
+			return r.heartbeat.Run(ctx, b)
 		}))
 	}
 	err = g.Wait()
@@ -245,7 +274,7 @@ func (r *Replicator) init(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 
-	err = r.heartbeater.Init(ctx)
+	err = r.heartbeat.Init(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}

@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-// Heartbeater receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
-type Heartbeater struct {
+// Heartbeat receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
+type Heartbeat struct {
 	config Replicate
 	source *sql.DB
 	target *sql.DB
@@ -22,9 +22,9 @@ type Heartbeater struct {
 	targetRetry RetryOptions
 }
 
-func NewHeartbeater(config Replicate) (*Heartbeater, error) {
+func NewHeartbeat(config Replicate) (*Heartbeat, error) {
 	var err error
-	r := Heartbeater{
+	r := Heartbeat{
 		config: config,
 		sourceRetry: RetryOptions{
 			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
@@ -55,7 +55,7 @@ func NewHeartbeater(config Replicate) (*Heartbeater, error) {
 	return &r, nil
 }
 
-func (h *Heartbeater) Init(ctx context.Context) error {
+func (h *Heartbeat) Init(ctx context.Context) error {
 	err := h.source.PingContext(ctx)
 	if err != nil {
 		return errors.WithStack(err)
@@ -66,7 +66,7 @@ func (h *Heartbeater) Init(ctx context.Context) error {
 	}
 
 	if h.config.CreateTables {
-		err = h.createHeartbeatTable(ctx)
+		err = h.createTable(ctx)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -75,17 +75,17 @@ func (h *Heartbeater) Init(ctx context.Context) error {
 	return nil
 }
 
-func (h *Heartbeater) Run(ctx context.Context, b backoff.BackOff) error {
+func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(h.config.HeartbeatFrequency):
-			err := h.writeHeartbeat(ctx)
+			err := h.write(ctx)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			err = h.readHeartbeat(ctx)
+			err = h.read(ctx)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -94,7 +94,7 @@ func (h *Heartbeater) Run(ctx context.Context, b backoff.BackOff) error {
 	}
 }
 
-func (h *Heartbeater) createHeartbeatTable(ctx context.Context) error {
+func (h *Heartbeat) createTable(ctx context.Context) error {
 	// TODO retries with backoff?
 	timeoutCtx, cancel := context.WithTimeout(ctx, h.config.WriteTimeout)
 	defer cancel()
@@ -105,7 +105,7 @@ func (h *Heartbeater) createHeartbeatTable(ctx context.Context) error {
 		  count BIGINT(20) NOT NULL,
 		  PRIMARY KEY (name)
 		)
-		`, h.config.HeartbeatTable)
+		`, "`"+h.config.HeartbeatTable+"`")
 	_, err := h.source.ExecContext(timeoutCtx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not create heartbeat table in source database:\n%s", stmt)
@@ -117,7 +117,7 @@ func (h *Heartbeater) createHeartbeatTable(ctx context.Context) error {
 	return nil
 }
 
-func (h *Heartbeater) writeHeartbeat(ctx context.Context) error {
+func (h *Heartbeat) write(ctx context.Context) error {
 	err := Retry(ctx, h.sourceRetry, func(ctx context.Context) error {
 		return autotx.Transact(ctx, h.source, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, "SET time_zone = \"+00:00\"")
@@ -149,7 +149,7 @@ func (h *Heartbeater) writeHeartbeat(ctx context.Context) error {
 	return errors.WithStack(err)
 }
 
-func (h *Heartbeater) readHeartbeat(ctx context.Context) error {
+func (h *Heartbeat) read(ctx context.Context) error {
 	logger := logrus.WithContext(ctx).WithField("task", "heartbeat")
 
 	err := Retry(ctx, h.targetRetry, func(ctx context.Context) error {

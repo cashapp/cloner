@@ -183,7 +183,7 @@ func (s *Snapshotter) createWatermarkTable(ctx context.Context) error {
 			high       TINYINT      DEFAULT 0,
 			PRIMARY KEY (id)
 		)
-		`, s.config.WatermarkTable)
+		`, "`"+s.config.WatermarkTable+"`")
 	_, err := s.source.ExecContext(timeoutCtx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)

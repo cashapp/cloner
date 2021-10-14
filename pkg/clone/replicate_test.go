@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -21,13 +22,29 @@ import (
 
 const heartbeatFrequency = 100 * time.Millisecond
 
+var rollbackErr = fmt.Errorf("expected rollback")
+
 // TODO test for rollback
 
-func TestReplicate(t *testing.T) {
+func TestReplicateSingleThreaded(t *testing.T) {
+	doTestReplicate(t, func(replicate *Replicate) {
+		replicate.ReplicationParallelism = 1
+	})
+}
+
+func TestReplicateParallel(t *testing.T) {
+	doTestReplicate(t, func(replicate *Replicate) {
+		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
+		replicate.ParallelTransactionBatchMaxSize = 50
+		replicate.ReplicationParallelism = 10
+	})
+}
+
+func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err := startAll()
 	require.NoError(t, err)
 
-	rowCount := 1000
+	rowCount := 5000
 	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
 	require.NoError(t, err)
 
@@ -70,10 +87,12 @@ func TestReplicate(t *testing.T) {
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
-		TaskName:           "customer/-80",
-		HeartbeatFrequency: heartbeatFrequency,
-		CreateTables:       true,
+		TaskName:               "customer/-80",
+		HeartbeatFrequency:     heartbeatFrequency,
+		CreateTables:           true,
+		ReplicationParallelism: 10,
 	}
+	replicateConfig(replicate)
 	err = kong.ApplyDefaults(replicate)
 	require.NoError(t, err)
 
@@ -90,30 +109,35 @@ func TestReplicate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write rows in a separate thread
-	g.Go(func() error {
-		db, err := source.DB()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		for i := 0; ; i++ {
-			if doWrite.Load() {
-				err := write(ctx, db, i%5 == 0)
-				if err != nil {
-					return errors.WithStack(err)
+	writerCount := 5
+	writerDelay := 500 * time.Millisecond
+	for i := 0; i < writerCount; i++ {
+		time.Sleep(writerDelay / 2)
+		g.Go(func() error {
+			db, err := source.DB()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			for {
+				if doWrite.Load() {
+					err := write(ctx, db)
+					if err != nil && err != rollbackErr {
+						return errors.WithStack(err)
+					}
+				}
+
+				// Sleep a bit to make sure the replicator can keep up
+				time.Sleep(writerDelay)
+
+				// Check if we were cancelled
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
 				}
 			}
-
-			// Sleep a bit to make sure the replicator can keep up
-			time.Sleep(50 * time.Millisecond)
-
-			// Check if we were cancelled
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-		}
-	})
+		})
+	}
 
 	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
 	time.Sleep(5 * time.Second)
@@ -192,7 +216,14 @@ func TestReplicate(t *testing.T) {
 
 	if len(diffs) > 0 {
 		for _, diff := range diffs {
-			fmt.Printf("diff %v id=%v should=%v actual=%v\n", diff.Type, diff.Row.ID, diff.Row, diff.Target)
+			should, err := coerceString(diff.Row.Data[1])
+			assert.NoError(t, err)
+			var actual string
+			if diff.Target != nil {
+				actual, err = coerceString(diff.Target.Data[1])
+				assert.NoError(t, err)
+			}
+			fmt.Printf("diff %v id=%v should=%s actual=%s\n", diff.Type, diff.Row.ID, should, actual)
 		}
 		assert.Fail(t, "there were diffs (see above)")
 	}
@@ -229,7 +260,7 @@ func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
 			return errors.WithStack(err)
 		}
 		if lag > expectedLag {
-			return errors.Errorf("replication lag did not drop yet")
+			return errors.Errorf("replication lag did not drop yet, it's still %v", lag)
 		}
 		return nil
 	}
@@ -249,236 +280,57 @@ func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Ti
 }
 
 func waitFor(ctx context.Context, condition func() error) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	return backoff.Retry(condition, backoff.WithContext(backoff.NewConstantBackOff(heartbeatFrequency), ctx))
 }
 
-func write(ctx context.Context, db *sql.DB, delete bool) (err error) {
-	// Insert a new row
-	_, err = db.ExecContext(ctx, `
+func write(ctx context.Context, db *sql.DB) (err error) {
+	return autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		// Insert a new row
+		_, err = tx.ExecContext(ctx, `
 				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
 			`)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Randomly update a row
-	var randomCustomerId int64
-	row := db.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-	err = row.Scan(&randomCustomerId)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	// Every five iterations randomly delete a row
-	if delete {
-		_, err = db.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-	} else {
-		// Otherwise update it
-		_, err = db.ExecContext(ctx, ` 
+
+		// Do some random updates
+		for i := 0; i < 2; i++ {
+			// Randomly update or delete rows
+			var randomCustomerId int64
+			row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
+			err = row.Scan(&randomCustomerId)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			// For every five inserted rows we randomly delete one
+			doDelete := rand.Intn(25) == 0
+
+			if doDelete {
+				_, err = tx.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			} else {
+				// Otherwise update it
+				_, err = tx.ExecContext(ctx, ` 
 					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 					WHERE id = ?
 				`, randomCustomerId)
-		if err != nil {
-			return errors.WithStack(err)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+			}
 		}
-	}
-	return nil
-}
 
-func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
-	tests := []struct {
-		name         string
-		chunk        testChunk
-		start        int64
-		end          int64
-		eventType    MutationType
-		startingRows [][]interface{}
-		eventRows    [][]interface{}
-		resultRows   [][]interface{}
-	}{
-		{
-			name:  "delete outside chunk range",
-			start: 5,  // inclusive
-			end:   11, // exclusive
-			startingRows: [][]interface{}{
-				{5, "customer name"},
-			},
+		// Roll back a few transactions
+		doRollback := rand.Intn(20) == 0
+		if doRollback {
+			return rollbackErr
+		}
 
-			eventType: Delete,
-			eventRows: [][]interface{}{
-				{11, "other customer name"},
-			},
-
-			resultRows: [][]interface{}{
-				{5, "customer name"},
-			},
-		},
-		{
-			name:  "delete inside chunk range",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{5, "customer name"},
-			},
-
-			eventType: Delete,
-			eventRows: [][]interface{}{
-				{5, "customer name"},
-			},
-
-			resultRows: [][]interface{}{},
-		},
-		{
-			name:  "insert after",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{5, "customer name"},
-			},
-
-			eventType: Insert,
-			eventRows: [][]interface{}{
-				{6, "other customer name"},
-			},
-
-			resultRows: [][]interface{}{
-				{5, "customer name"},
-				{6, "other customer name"},
-			},
-		},
-		{
-			name:  "insert before",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{6, "customer name"},
-			},
-
-			eventType: Insert,
-			eventRows: [][]interface{}{
-				{5, "other customer name"},
-			},
-
-			resultRows: [][]interface{}{
-				{5, "other customer name"},
-				{6, "customer name"},
-			},
-		},
-		{
-			name:  "insert middle",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{5, "customer name #5"},
-				{7, "customer name #7"},
-			},
-
-			eventType: Insert,
-			eventRows: [][]interface{}{
-				{6, "customer name #6"},
-			},
-
-			resultRows: [][]interface{}{
-				{5, "customer name #5"},
-				{6, "customer name #6"},
-				{7, "customer name #7"},
-			},
-		},
-		{
-			name:  "multiple rows mixed insert and update",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{5, "customer name #5"},
-				{7, "customer name #7"},
-			},
-
-			eventType: Insert,
-			eventRows: [][]interface{}{
-				{6, "customer name #6"},
-				{7, "customer name #7 updated"},
-			},
-
-			resultRows: [][]interface{}{
-				{5, "customer name #5"},
-				{6, "customer name #6"},
-				{7, "customer name #7 updated"},
-			},
-		},
-		{
-			name:  "update",
-			start: 5,
-			end:   11,
-			startingRows: [][]interface{}{
-				{6, "customer name"},
-				{7, "other customer name"},
-			},
-
-			eventType: Update,
-			eventRows: [][]interface{}{
-				{6, "updated customer name"},
-				{11, "outside of chunk range"},
-			},
-
-			resultRows: [][]interface{}{
-				{6, "updated customer name"},
-				{7, "other customer name"},
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tableName := "customer"
-			tableSchema := &schema.Table{
-				Name:      tableName,
-				PKColumns: []int{0},
-				Columns: []schema.TableColumn{
-					{Name: "id"},
-					{Name: "name"},
-				},
-			}
-			table := &Table{
-				Name:       tableName,
-				MysqlTable: tableSchema,
-			}
-			inputRows := make([]*Row, len(test.startingRows))
-			for i, row := range test.startingRows {
-				inputRows[i] = &Row{
-					Table: table,
-					ID:    int64(row[0].(int)),
-					Data:  row,
-				}
-			}
-			chunk := &ChunkSnapshot{
-				InsideWatermarks: true,
-				Rows:             inputRows,
-				Chunk: Chunk{
-					Start: test.start,
-					End:   test.end,
-					Table: table,
-				},
-			}
-			err := chunk.reconcileBinlogEvent(
-				Mutation{
-					Type:  test.eventType,
-					Table: table,
-					Rows:  test.eventRows,
-				},
-			)
-			require.NoError(t, err)
-
-			assert.Equal(t, len(test.resultRows), len(chunk.Rows))
-			for i, expectedRow := range test.resultRows {
-				actualRow := chunk.Rows[i]
-				for j, cell := range expectedRow {
-					assert.Equal(t, cell, actualRow.Data[j])
-				}
-			}
-		})
-	}
+		return nil
+	})
 }

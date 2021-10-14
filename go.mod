@@ -10,6 +10,7 @@ require (
 	github.com/go-mysql-org/go-mysql v1.3.0
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/mightyguava/autotx v0.1.1
+	github.com/mitchellh/hashstructure/v2 v2.0.2
 	github.com/ory/dockertest/v3 v3.6.1
 	github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1

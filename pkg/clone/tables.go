@@ -282,19 +282,8 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		tableConfig.WriteBatchSize = config.WriteBatchSize
 	}
 
-	pkColumn := mysqlTable.GetPKColumn(0)
-	idColumn := pkColumn.Name
-	idColumnIndex := -1
-	for i, column := range columnNames {
-		if column == idColumn {
-			idColumnIndex = i
-		}
-	}
-
-	return &Table{
+	table := &Table{
 		Name:          tableName,
-		IDColumn:      idColumn,
-		IDColumnIndex: idColumnIndex,
 		Columns:       columnNames,
 		ColumnsQuoted: columnNamesQuoted,
 		CRC32Columns:  columnNamesCRC32,
@@ -302,7 +291,19 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		EstimatedRows: estimatedRows,
 		Config:        tableConfig,
 		MysqlTable:    mysqlTable,
-	}, nil
+	}
+
+	if len(mysqlTable.PKColumns) == 1 {
+		pkColumn := mysqlTable.GetPKColumn(0)
+		table.IDColumn = pkColumn.Name
+		for i, column := range columnNames {
+			if column == table.IDColumn {
+				table.IDColumnIndex = i
+			}
+		}
+	}
+
+	return table, nil
 }
 
 func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBReader, schema string, tableName string) (int64, error) {

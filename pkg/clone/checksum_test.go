@@ -26,7 +26,7 @@ func TestChecksum(t *testing.T) {
 	assert.NoError(t, err)
 
 	rowCount := 1000
-	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
+	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)
 	assert.NoError(t, err)
 
 	err = deleteAllData(tidbContainer.Config())

@@ -2,7 +2,8 @@ package clone
 
 import (
 	"context"
-	"fmt"
+	"database/sql"
+	"github.com/mightyguava/autotx"
 	"testing"
 	"vitess.io/vitess/go/vt/proto/topodata"
 
@@ -12,7 +13,7 @@ import (
 	"vitess.io/vitess/go/vt/key"
 )
 
-func insertBunchaData(config DBConfig, namePrefix string, rowCount int) error {
+func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error {
 	err := deleteAllData(config)
 	if err != nil {
 		return errors.WithStack(err)
@@ -21,11 +22,38 @@ func insertBunchaData(config DBConfig, namePrefix string, rowCount int) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	for i := 0; i < rowCount; i++ {
-		_, err = db.Exec(`
-		INSERT INTO customers (name) VALUES (?)
-	`, fmt.Sprintf("%s %d", namePrefix, i))
-	}
+
+	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		for i := 0; i < rowCount; i++ {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
+			`)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			var randomCustomerId int64
+			row := db.QueryRow(`SELECT id FROM customers ORDER BY rand() LIMIT 1`)
+			err = row.Scan(&randomCustomerId)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					return errors.WithStack(err)
+				}
+			}
+
+			// Insert a new row
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO transactions (customer_id, amount_cents, description) 
+				VALUES (?, RAND()*99+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
+			`, randomCustomerId)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -98,14 +126,14 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 	target := tidbContainer.Config()
 
 	rowCount := 1000
-	err = insertBunchaData(source, "Name", rowCount)
+	err = insertBunchaData(context.Background(), source, rowCount)
 	assert.NoError(t, err)
 
 	// Insert some stuff that matches
-	err = insertBunchaData(target, "Name", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// Insert some stuff that DOES NOT match to trigger updates
-	err = insertBunchaData(target, "AnotherName", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
 	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
@@ -124,6 +152,12 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 					// equivalent to -80
 					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
 					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+				"transactions": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(customer_id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+					ChunkColumns:   []string{"customer_id", "id"},
 				},
 			},
 		},
@@ -176,14 +210,14 @@ func TestUnshardedClone(t *testing.T) {
 	target := tidbContainer.Config()
 
 	rowCount := 1000
-	err = insertBunchaData(source, "Name", rowCount)
+	err = insertBunchaData(context.Background(), source, rowCount)
 	assert.NoError(t, err)
 
 	// Insert some stuff that matches
-	err = insertBunchaData(target, "Name", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// Insert some stuff that DOES NOT match to trigger updates
-	err = insertBunchaData(target, "AnotherName", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 
 	source.Database = "@replica"
@@ -229,14 +263,14 @@ func TestCloneNoDiff(t *testing.T) {
 	target := tidbContainer.Config()
 
 	rowCount := 1000
-	err = insertBunchaData(source, "Name", rowCount)
+	err = insertBunchaData(context.Background(), source, rowCount)
 	assert.NoError(t, err)
 
 	// Insert some stuff that matches
-	err = insertBunchaData(target, "Name", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// Insert some stuff that DOES NOT match to trigger updates
-	err = insertBunchaData(target, "AnotherName", 50)
+	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
 	rightRowCountBefore, err := countRowsShardFilter(target, "80-")

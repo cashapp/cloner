@@ -158,27 +158,75 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	table := chunk.Table
 	columns := table.ColumnList
 
-	where := chunkWhere(chunk, extraWhereClause)
+	where, params := chunkWhere(chunk, extraWhereClause)
 	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
-	rows, err := conn.QueryContext(ctx, stmt)
+	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return newRowStream(table, rows)
 }
 
-func chunkWhere(chunk Chunk, extraWhereClause string) string {
+func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 	table := chunk.Table
+
 	var clauses []string
+	var params []interface{}
 	if extraWhereClause != "" {
 		clauses = append(clauses, "("+extraWhereClause+")")
 	}
-	clauses = append(clauses,
-		fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
-		fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
-	if len(clauses) == 0 {
-		return ""
+
+	if len(table.ChunkColumns) == 1 {
+		// If we only have a single column then life is so simple...
+		clauses = append(clauses,
+			fmt.Sprintf("%s >= ?", table.ChunkColumns[0]),
+			fmt.Sprintf("%s < ?", table.ChunkColumns[0]))
+		params = append(params, chunk.Start[0], chunk.End[0])
+
 	} else {
-		return "where " + strings.Join(clauses, " and ")
+		// If we have more than a single column then things gets hairy
+		// First we compare by each column separately to maximize index efficiency
+		// but for this to work the comparison on the end will be closed rather than open
+		// which means we include more rows than the chunk might contain if you look like a sequence like this
+		// (1,1) (1,2) (chunk ends here) (1,3) (1,4)
+		// In order to not also select the last two rows we need to compare by a concatenation of the columns
+		// This would be enough but it seems very unlikely that a query planner would be clever enough to
+		// be able to use indexes for that
+
+		// First each columns separately
+		for i, column := range table.ChunkColumns {
+			clauses = append(clauses,
+				fmt.Sprintf("%s >= ?", column),
+				fmt.Sprintf("%s <= ?", column))
+			params = append(params, chunk.Start[i], chunk.End[i])
+		}
+
+		// Then the concatenation of columns
+		var questionMarks strings.Builder
+		var chunkColumnList strings.Builder
+		for i, column := range table.ChunkColumns {
+			questionMarks.WriteString("?")
+			chunkColumnList.WriteString("`")
+			chunkColumnList.WriteString(column)
+			chunkColumnList.WriteString("`")
+			if i < len(table.ChunkColumns)-1 {
+				questionMarks.WriteString(", ")
+				chunkColumnList.WriteString(", ")
+			}
+		}
+
+		clauses = append(clauses,
+			fmt.Sprintf("concat(%s) >= concat(%s)", chunkColumnList.String(), questionMarks.String()))
+		params = append(params, chunk.Start...)
+
+		clauses = append(clauses,
+			fmt.Sprintf("concat(%s) < concat(%s)", chunkColumnList.String(), questionMarks.String()))
+		params = append(params, chunk.End...)
+	}
+
+	if len(clauses) == 0 {
+		return "", []interface{}{}
+	} else {
+		return "where " + strings.Join(clauses, " and "), params
 	}
 }

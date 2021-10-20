@@ -10,10 +10,11 @@ func TestTransactionSetAppend(t *testing.T) {
 	// TODO write a test for a set of transactions where the first transactions are non causal so that they create two
 	//  separate parallel sequences and then a new transaction is added which spans the two previous sequences
 
-	table := &Table{Name: "customers", MysqlTable: &mysqlschema.Table{
-		PKColumns: []int{0},
-		Columns:   []mysqlschema.TableColumn{{Name: "id"}, {Name: "name"}},
-	}}
+	table := &Table{Name: "customers", ChunkColumns: []string{"id"},
+		MysqlTable: &mysqlschema.Table{
+			PKColumns: []int{0},
+			Columns:   []mysqlschema.TableColumn{{Name: "id"}, {Name: "name"}},
+		}}
 	tests := []struct {
 		name   string
 		input  []Transaction
@@ -153,8 +154,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 0,
-							End:   10,
+							Start: []interface{}{0},
+							End:   []interface{}{10},
 						},
 					}},
 				},
@@ -176,8 +177,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 0,
-								End:   10,
+								Start: []interface{}{0},
+								End:   []interface{}{10},
 							},
 						}},
 					},
@@ -202,8 +203,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 0,
-							End:   10,
+							Start: []interface{}{0},
+							End:   []interface{}{10},
 						},
 					}},
 				},
@@ -225,8 +226,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 0,
-								End:   10,
+								Start: []interface{}{0},
+								End:   []interface{}{10},
 							},
 						}},
 					},
@@ -254,8 +255,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 0,
-							End:   10,
+							Start: []interface{}{0},
+							End:   []interface{}{10},
 						},
 					}},
 				},
@@ -265,8 +266,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 10,
-							End:   20,
+							Start: []interface{}{10},
+							End:   []interface{}{20},
 						},
 					}},
 				},
@@ -279,8 +280,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 0,
-								End:   10,
+								Start: []interface{}{0},
+								End:   []interface{}{10},
 							},
 						}},
 					},
@@ -292,8 +293,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 10,
-								End:   20,
+								Start: []interface{}{10},
+								End:   []interface{}{20},
 							},
 						}},
 					},
@@ -311,8 +312,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 0,
-							End:   10,
+							Start: []interface{}{0},
+							End:   []interface{}{10},
 						},
 					}},
 				},
@@ -332,8 +333,8 @@ func TestTransactionSetAppend(t *testing.T) {
 						Table: table,
 						Chunk: Chunk{
 							Table: table,
-							Start: 10,
-							End:   20,
+							Start: []interface{}{10},
+							End:   []interface{}{20},
 						},
 					}},
 				},
@@ -346,8 +347,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 0,
-								End:   10,
+								Start: []interface{}{0},
+								End:   []interface{}{10},
 							},
 						}},
 					},
@@ -367,8 +368,8 @@ func TestTransactionSetAppend(t *testing.T) {
 							Table: table,
 							Chunk: Chunk{
 								Table: table,
-								Start: 10,
-								End:   20,
+								Start: []interface{}{10},
+								End:   []interface{}{20},
 							},
 						}},
 					},

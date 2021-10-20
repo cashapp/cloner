@@ -333,6 +333,8 @@ func coerceString(value interface{}) (string, error) {
 	switch value := value.(type) {
 	case []byte:
 		return string(value), nil
+	case int64:
+		return fmt.Sprintf("%d", value), nil
 	default:
 		return "", errors.Errorf("can't (yet?) coerce %v to string: %v", reflect.TypeOf(value), value)
 	}
@@ -414,7 +416,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 			}
 			if len(diffs) == 0 {
 				if tries > 1 {
-					log.Infof("chunk %s[%d-%d) had no diffs after %d retries",
+					log.Infof("chunk %s[%v-%v) had no diffs after %d retries",
 						chunk.Table.Name, chunk.Start, chunk.End, tries)
 				}
 				// Yay! Chunk had no diffs!!
@@ -422,6 +424,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 			} else {
 				log.Infof("chunk %s[%d-%d) had diffs, retrying %d more times",
 					chunk.Table.Name, chunk.Start, chunk.End, r.config.FailedChunkRetryCount-tries)
+				tries++
 				return errors.Errorf("chunk %s[%d-%d) had diffs",
 					chunk.Table.Name, chunk.Start, chunk.End)
 			}
@@ -489,9 +492,10 @@ func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader 
 			extraWhereClause = chunk.Table.Config.SourceWhere
 			hint = chunk.Table.Config.SourceHint
 		}
+		where, params := chunkWhere(chunk, extraWhereClause)
 		sql := fmt.Sprintf("SELECT %s BIT_XOR(%s) FROM `%s` %s",
-			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, chunkWhere(chunk, extraWhereClause))
-		rows, err := reader.QueryContext(ctx, sql)
+			hint, strings.Join(chunk.Table.CRC32Columns, " ^ "), chunk.Table.Name, where)
+		rows, err := reader.QueryContext(ctx, sql, params...)
 		if err != nil {
 			return errors.WithStack(err)
 		}

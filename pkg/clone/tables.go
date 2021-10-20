@@ -20,6 +20,9 @@ type Table struct {
 	// ShardingColumnIndex is the index of the ID column in the Columns field
 	IDColumnIndex int
 
+	// ChunkColumns is the columns the table is chunked by, by default the primary key columns
+	ChunkColumns []string
+
 	Config TableConfig
 
 	Columns       []string
@@ -293,7 +296,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		MysqlTable:    mysqlTable,
 	}
 
-	if len(mysqlTable.PKColumns) == 1 {
+	if len(mysqlTable.PKColumns) >= 1 {
 		pkColumn := mysqlTable.GetPKColumn(0)
 		table.IDColumn = pkColumn.Name
 		for i, column := range columnNames {
@@ -301,6 +304,11 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 				table.IDColumnIndex = i
 			}
 		}
+	}
+
+	table.ChunkColumns = table.Config.ChunkColumns
+	if len(table.ChunkColumns) == 0 {
+		table.ChunkColumns = []string{table.IDColumn}
 	}
 
 	return table, nil

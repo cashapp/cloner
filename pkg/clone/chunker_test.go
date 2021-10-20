@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -17,16 +18,16 @@ type testChunk struct {
 
 func TestChunker(t *testing.T) {
 	err := startVitess()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	source := vitessContainer.Config()
 
 	err = deleteAllData(source)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	rowCount := 100
-	err = insertBunchaData(source, "Name", rowCount)
-	assert.NoError(t, err)
+	err = insertBunchaData(context.Background(), source, rowCount)
+	require.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
 
@@ -34,14 +35,14 @@ func TestChunker(t *testing.T) {
 	config := ReaderConfig{ReadTimeout: time.Second, ChunkSize: 10, SourceTargetConfig: SourceTargetConfig{Source: source}}
 
 	tables, err := LoadTables(ctx, config)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 10, tables[0].Config.ChunkSize)
 
 	db, err := config.Source.DB()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer db.Close()
 	chunks, err := generateTableChunks(ctx, tables[0], db, RetryOptions{Timeout: time.Second, MaxRetries: 1})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	result := make([]testChunk, len(chunks))
 	for i, chunk := range chunks {
@@ -50,7 +51,7 @@ func TestChunker(t *testing.T) {
 
 	assert.Equal(t, []testChunk{
 		{
-			Start: 0,
+			Start: 2,
 			End:   21,
 			First: true,
 		},
@@ -120,7 +121,7 @@ func TestChunkerSingleRow(t *testing.T) {
 	err = deleteAllData(source)
 	assert.NoError(t, err)
 
-	err = insertBunchaData(source, "Jon", 1)
+	err = insertBunchaData(context.Background(), source, 1)
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
@@ -150,7 +151,7 @@ func TestChunkerSingleRow(t *testing.T) {
 
 	assert.Equal(t, []testChunk{
 		{
-			Start: 0,
+			Start: 3,
 			End:   3,
 			First: true,
 			Last:  true,
@@ -160,8 +161,8 @@ func TestChunkerSingleRow(t *testing.T) {
 
 func toTestChunk(chunk Chunk) testChunk {
 	return testChunk{
-		Start: chunk.Start,
-		End:   chunk.End,
+		Start: chunk.Start[0].(int64),
+		End:   chunk.End[0].(int64),
 		First: chunk.First,
 		Last:  chunk.Last,
 	}

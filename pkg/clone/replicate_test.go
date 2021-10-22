@@ -220,11 +220,11 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 
 	if len(diffs) > 0 {
 		for _, diff := range diffs {
-			should, err := coerceString(diff.Row.Data[1])
+			should, err := rowToString(diff.Row.Data)
 			assert.NoError(t, err)
 			var actual string
 			if diff.Target != nil {
-				actual, err = coerceString(diff.Target.Data[1])
+				actual, err = rowToString(diff.Target.Data)
 				assert.NoError(t, err)
 			}
 			fmt.Printf("diff %v %v id=%v should=%s actual=%s\n",
@@ -232,6 +232,21 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		}
 		assert.Fail(t, "there were diffs (see above)")
 	}
+}
+
+func rowToString(data []interface{}) (string, error) {
+	var result strings.Builder
+	for i, datum := range data {
+		s, err := coerceString(datum)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		result.WriteString(s)
+		if i < len(data)-1 {
+			result.WriteString(",")
+		}
+	}
+	return result.String(), nil
 }
 
 func isCancelledError(err error) bool {
@@ -310,7 +325,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		// Insert a new row
 		_, err = tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
-				VALUES (?, RAND()*99+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
+				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
 			`, randomCustomerId)
 		if err != nil {
 			return errors.WithStack(err)

@@ -14,7 +14,13 @@ func deleteAllData(config DBConfig) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	defer db.Close()
+
 	_, err = db.Exec("DELETE FROM customers")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = db.Exec("DELETE FROM transactions")
 	if err != nil {
 		return errors.WithStack(err)
 	}

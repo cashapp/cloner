@@ -43,6 +43,12 @@ func (c *Chunk) ContainsRow(row []interface{}) bool {
 }
 
 func (c *Chunk) ContainsPK(id int64) bool {
+	// TODO This is very odd because we support chunking by multiple columns but we don't support multiple primary keys. I
+	//  think the path forward is to simply support multiple primary keys everywhere. That would require us to implement a
+	//  composite key ordering function. I haven't thought this through deeply but I think we can simply do a multi value
+	//  compare in Golang? It would become problematic for varchar columns with non-standard collations (those damn
+	//  germans!) but I think we might be able to force utf8mb4 binary collation in the chunk select clause? I think as
+	//  long as the ordering function is the same in the database as it is in Golang it's all good?
 	pkColumn := c.Table.MysqlTable.GetPKColumn(0)
 	for i, column := range c.Table.ChunkColumns {
 		if pkColumn.Name == column {
@@ -194,31 +200,31 @@ func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOpt
 		currentIndex: 0,
 		chunkColumns: table.ChunkColumns,
 	}
-	var chunkColumnList strings.Builder
+	var chunkColumns strings.Builder
 	var params strings.Builder
 	var comparison strings.Builder
 	for i, column := range table.ChunkColumns {
-		chunkColumnList.WriteString("`")
-		chunkColumnList.WriteString(column)
-		chunkColumnList.WriteString("`")
+		chunkColumns.WriteString("`")
+		chunkColumns.WriteString(column)
+		chunkColumns.WriteString("`")
 		params.WriteString("?")
 		comparison.WriteString("`")
 		comparison.WriteString(column)
 		comparison.WriteString("`")
 		comparison.WriteString(" >= ?")
 		if i < len(table.ChunkColumns)-1 {
-			chunkColumnList.WriteString(", ")
+			chunkColumns.WriteString(", ")
 			params.WriteString(", ")
 			comparison.WriteString(" and ")
 		}
 	}
 
 	p.firstStatement = fmt.Sprintf("select %s from %s order by %s limit %d",
-		chunkColumnList.String(), table.Name, chunkColumnList.String(), p.pageSize)
+		chunkColumns.String(), table.Name, chunkColumns.String(), p.pageSize)
 
 	// We both compare by the columns directly so that indexes can be used and then by the concatenation for correctness
-	p.offsetStatement = fmt.Sprintf("select %s from %s where %s and concat(%s) > concat(%s) order by %s",
-		chunkColumnList.String(), table.Name, comparison.String(), chunkColumnList.String(), params.String(), chunkColumnList.String())
+	p.offsetStatement = fmt.Sprintf("select %s from %s where %s and (%s) > (%s) order by %s",
+		chunkColumns.String(), table.Name, comparison.String(), chunkColumns.String(), params.String(), chunkColumns.String())
 
 	return p
 }
@@ -375,7 +381,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	if currentChunkSize > 0 {
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
 		// Make sure the End position is _after_ the final row by "adding one" to it
-		incChunkPosition(id)
+		id = incChunkPosition(id)
 		select {
 		case chunks <- Chunk{
 			Table: table,
@@ -393,12 +399,15 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	return nil
 }
 
-func incChunkPosition(pos []interface{}) {
-	inc, err := increment(pos[len(pos)-1])
+func incChunkPosition(pos []interface{}) []interface{} {
+	result := make([]interface{}, len(pos))
+	copy(result, pos)
+	inc, err := increment(result[len(result)-1])
 	if err != nil {
 		panic(err)
 	}
-	pos[len(pos)-1] = inc
+	result[len(result)-1] = inc
+	return result
 }
 
 func increment(value interface{}) (interface{}, error) {

@@ -25,27 +25,22 @@ func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error 
 
 	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 		for i := 0; i < rowCount; i++ {
-			_, err = tx.ExecContext(ctx, `
-				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
+			result, err := tx.ExecContext(ctx, `
+				INSERT INTO customers (name) VALUES (CONCAT('Customer ', LEFT(MD5(RAND()), 8)))
 			`)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-
-			var randomCustomerId int64
-			row := db.QueryRow(`SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-			err = row.Scan(&randomCustomerId)
+			customerId, err := result.LastInsertId()
 			if err != nil {
-				if !errors.Is(err, sql.ErrNoRows) {
-					return errors.WithStack(err)
-				}
+				return errors.WithStack(err)
 			}
 
 			// Insert a new row
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
-				VALUES (?, RAND()*99+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
-			`, randomCustomerId)
+				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
+			`, customerId)
 			if err != nil {
 				return errors.WithStack(err)
 			}

@@ -203,24 +203,24 @@ func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 
 		// Then the concatenation of columns
 		var questionMarks strings.Builder
-		var chunkColumnList strings.Builder
+		var columns strings.Builder
 		for i, column := range table.ChunkColumns {
 			questionMarks.WriteString("?")
-			chunkColumnList.WriteString("`")
-			chunkColumnList.WriteString(column)
-			chunkColumnList.WriteString("`")
+			columns.WriteString("`")
+			columns.WriteString(column)
+			columns.WriteString("`")
 			if i < len(table.ChunkColumns)-1 {
 				questionMarks.WriteString(", ")
-				chunkColumnList.WriteString(", ")
+				columns.WriteString(", ")
 			}
 		}
 
 		clauses = append(clauses,
-			fmt.Sprintf("concat(%s) >= concat(%s)", chunkColumnList.String(), questionMarks.String()))
+			fmt.Sprintf("(%s) >= (%s)", columns.String(), questionMarks.String()))
 		params = append(params, chunk.Start...)
 
 		clauses = append(clauses,
-			fmt.Sprintf("concat(%s) < concat(%s)", chunkColumnList.String(), questionMarks.String()))
+			fmt.Sprintf("(%s) < (%s)", columns.String(), questionMarks.String()))
 		params = append(params, chunk.End...)
 	}
 

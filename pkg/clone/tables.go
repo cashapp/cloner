@@ -15,13 +15,15 @@ import (
 type Table struct {
 	Name string
 
-	// ShardingColumn is the name of the ID column
+	// IDColumn is the name of the ID column
 	IDColumn string
-	// ShardingColumnIndex is the index of the ID column in the Columns field
+	// IDColumnIndex is the index of the ID column in the Columns field
 	IDColumnIndex int
 
 	// ChunkColumns is the columns the table is chunked by, by default the primary key columns
 	ChunkColumns []string
+	// IDColumnInChunkColumns is the index of the ID column in the ChunkColumns
+	IDColumnInChunkColumns int
 
 	Config TableConfig
 
@@ -297,18 +299,29 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 
 	if len(mysqlTable.PKColumns) >= 1 {
+		// TODO we should be really close to supporting multiple pk columns now
 		pkColumn := mysqlTable.GetPKColumn(0)
 		table.IDColumn = pkColumn.Name
 		for i, column := range columnNames {
 			if column == table.IDColumn {
 				table.IDColumnIndex = i
+				break
 			}
 		}
-	}
-
-	table.ChunkColumns = table.Config.ChunkColumns
-	if len(table.ChunkColumns) == 0 {
-		table.ChunkColumns = []string{table.IDColumn}
+		table.ChunkColumns = table.Config.ChunkColumns
+		if len(table.ChunkColumns) == 0 {
+			table.ChunkColumns = []string{table.IDColumn}
+		}
+		table.IDColumnInChunkColumns = -1
+		for i, column := range table.ChunkColumns {
+			if pkColumn.Name == column {
+				table.IDColumnInChunkColumns = i
+				break
+			}
+		}
+		if table.IDColumnInChunkColumns == -1 {
+			panic("chunk columns does not contain the pk column")
+		}
 	}
 
 	return table, nil

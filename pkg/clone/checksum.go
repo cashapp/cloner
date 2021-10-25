@@ -186,5 +186,10 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		return nil
 	})
 
-	return foundDiffs, g.Wait()
+	err = g.Wait()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return foundDiffs, err
 }

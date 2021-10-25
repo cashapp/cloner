@@ -173,60 +173,52 @@ func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 	var clauses []string
 	var params []interface{}
 	if extraWhereClause != "" {
-		clauses = append(clauses, "("+extraWhereClause+")")
+		clauses = append(clauses, extraWhereClause)
 	}
 
-	if len(table.ChunkColumns) == 1 {
-		// If we only have a single column then life is so simple...
-		clauses = append(clauses,
-			fmt.Sprintf("%s >= ?", table.ChunkColumns[0]),
-			fmt.Sprintf("%s < ?", table.ChunkColumns[0]))
-		params = append(params, chunk.Start[0], chunk.End[0])
+	c, p := expandRowConstructorComparison(table.ChunkColumns, ">=", chunk.Start)
+	clauses = append(clauses, c)
+	params = append(params, p...)
 
-	} else {
-		// If we have more than a single column then things gets hairy
-		// First we compare by each column separately to maximize index efficiency
-		// but for this to work the comparison on the end will be closed rather than open
-		// which means we include more rows than the chunk might contain if you look like a sequence like this
-		// (1,1) (1,2) (chunk ends here) (1,3) (1,4)
-		// In order to not also select the last two rows we need to compare by a concatenation of the columns
-		// This would be enough but it seems very unlikely that a query planner would be clever enough to
-		// be able to use indexes for that
-
-		// First each columns separately
-		for i, column := range table.ChunkColumns {
-			clauses = append(clauses,
-				fmt.Sprintf("%s >= ?", column),
-				fmt.Sprintf("%s <= ?", column))
-			params = append(params, chunk.Start[i], chunk.End[i])
-		}
-
-		// Then the concatenation of columns
-		var questionMarks strings.Builder
-		var columns strings.Builder
-		for i, column := range table.ChunkColumns {
-			questionMarks.WriteString("?")
-			columns.WriteString("`")
-			columns.WriteString(column)
-			columns.WriteString("`")
-			if i < len(table.ChunkColumns)-1 {
-				questionMarks.WriteString(", ")
-				columns.WriteString(", ")
-			}
-		}
-
-		clauses = append(clauses,
-			fmt.Sprintf("(%s) >= (%s)", columns.String(), questionMarks.String()))
-		params = append(params, chunk.Start...)
-
-		clauses = append(clauses,
-			fmt.Sprintf("(%s) < (%s)", columns.String(), questionMarks.String()))
-		params = append(params, chunk.End...)
-	}
+	c, p = expandRowConstructorComparison(table.ChunkColumns, "<", chunk.End)
+	clauses = append(clauses, c)
+	params = append(params, p...)
 
 	if len(clauses) == 0 {
 		return "", []interface{}{}
 	} else {
-		return "where " + strings.Join(clauses, " and "), params
+		return "where (" + strings.Join(clauses, ") and (") + ")", params
 	}
+}
+
+// expandRowConstructorComparison expands a row constructor comparison to make sure we use indexes properly,
+//   see this link for more detail: https://dev.mysql.com/doc/refman/5.7/en/row-constructor-optimization.html
+//   more recent versions of mysql might handle this better but TiDB doesn't yet:
+//   https://github.com/pingcap/tidb/issues/28789
+func expandRowConstructorComparison(left []string, operator string, right []interface{}) (string, []interface{}) {
+	if len(left) != len(right) {
+		panic("left hand should be same size as right hand")
+	}
+
+	if len(left) == 1 {
+		return fmt.Sprintf("%s %s ?", left[0], operator), right
+	}
+	if len(left) > 2 {
+		// TODO I'm just too tired to figure out how to expand this with more than two columns
+		panic("currently only support two operands")
+	}
+	if operator == "=" {
+		return fmt.Sprintf("%s = ? and %s = ?", left[0], left[1]), right
+	}
+	parentOperator := operator
+	switch operator {
+	case ">=":
+		parentOperator = ">"
+	case "<=":
+		parentOperator = "<"
+	}
+	// a > ? or (a = ? and b > ?)
+	return fmt.Sprintf("%s %s ? or (%s = ? and %s %s ?)",
+			left[0], parentOperator, left[0], left[1], operator),
+		[]interface{}{right[0], right[0], right[1]}
 }

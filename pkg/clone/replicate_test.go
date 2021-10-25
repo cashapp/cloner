@@ -46,9 +46,6 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)
 	require.NoError(t, err)
 
-	err = deleteAllData(tidbContainer.Config())
-	require.NoError(t, err)
-
 	source := vitessContainer.Config()
 	// We connect directly to the underlying MySQL database as vtgate does not support binlog streaming
 	sourceDirect := DBConfig{
@@ -207,7 +204,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err = kong.ApplyDefaults(checksum)
 	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
-	checksum.FailedChunkRetryCount = 5
+	checksum.FailedChunkRetryCount = 10
 	require.NoError(t, err)
 	diffs, err := checksum.run(ctx)
 	require.NoError(t, err)
@@ -323,7 +320,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		}
 
 		// Insert a new row
-		_, err = tx.ExecContext(ctx, `
+		_, err := tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
 				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
 			`, randomCustomerId)

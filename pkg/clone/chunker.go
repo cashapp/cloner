@@ -49,13 +49,7 @@ func (c *Chunk) ContainsPK(id int64) bool {
 	//  compare in Golang? It would become problematic for varchar columns with non-standard collations (those damn
 	//  germans!) but I think we might be able to force utf8mb4 binary collation in the chunk select clause? I think as
 	//  long as the ordering function is the same in the database as it is in Golang it's all good?
-	pkColumn := c.Table.MysqlTable.GetPKColumn(0)
-	for i, column := range c.Table.ChunkColumns {
-		if pkColumn.Name == column {
-			return genericCompare(id, c.Start[i]) >= 0 && genericCompare(id, c.End[i]) < 0
-		}
-	}
-	panic("chunk columns does not contain the pk column")
+	return genericCompare(id, c.Start[c.Table.IDColumnInChunkColumns]) >= 0 && genericCompare(id, c.End[c.Table.IDColumnInChunkColumns]) < 0
 }
 
 func genericCompare(a interface{}, b interface{}) int {
@@ -135,6 +129,8 @@ func (c *Chunk) ContainsPKs(pk []interface{}) bool {
 type PeekingIdStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) ([]interface{}, bool, error)
+	// Peek returns the id ahead of the current, Next above has to be called first
+	Peek() []interface{}
 }
 
 type peekingIdStreamer struct {
@@ -172,6 +168,10 @@ func (p *peekingIdStreamer) Next(ctx context.Context) ([]interface{}, bool, erro
 	return next, hasNext, nil
 }
 
+func (p *peekingIdStreamer) Peek() []interface{} {
+	return p.peeked
+}
+
 type IdStreamer interface {
 	Next(context.Context) ([]interface{}, error)
 }
@@ -184,10 +184,8 @@ type pagingStreamer struct {
 	pageSize     int
 	retry        RetryOptions
 
+	table        string
 	chunkColumns []string
-
-	firstStatement  string
-	offsetStatement string
 }
 
 func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOptions) *pagingStreamer {
@@ -199,32 +197,8 @@ func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOpt
 		currentPage:  nil,
 		currentIndex: 0,
 		chunkColumns: table.ChunkColumns,
+		table:        table.Name,
 	}
-	var chunkColumns strings.Builder
-	var params strings.Builder
-	var comparison strings.Builder
-	for i, column := range table.ChunkColumns {
-		chunkColumns.WriteString("`")
-		chunkColumns.WriteString(column)
-		chunkColumns.WriteString("`")
-		params.WriteString("?")
-		comparison.WriteString("`")
-		comparison.WriteString(column)
-		comparison.WriteString("`")
-		comparison.WriteString(" >= ?")
-		if i < len(table.ChunkColumns)-1 {
-			chunkColumns.WriteString(", ")
-			params.WriteString(", ")
-			comparison.WriteString(" and ")
-		}
-	}
-
-	p.firstStatement = fmt.Sprintf("select %s from %s order by %s limit %d",
-		chunkColumns.String(), table.Name, chunkColumns.String(), p.pageSize)
-
-	// We both compare by the columns directly so that indexes can be used and then by the concatenation for correctness
-	p.offsetStatement = fmt.Sprintf("select %s from %s where %s and (%s) > (%s) order by %s",
-		chunkColumns.String(), table.Name, comparison.String(), chunkColumns.String(), params.String(), chunkColumns.String())
 
 	return p
 }
@@ -259,9 +233,12 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 		var rows *sql.Rows
 		if p.first {
 			p.first = false
-			rows, err = p.conn.QueryContext(ctx, p.firstStatement)
+			chunkColumns := strings.Join(p.chunkColumns, ", ")
+			stmt := fmt.Sprintf("select %s from %s order by %s limit %d",
+				chunkColumns, p.table, chunkColumns, p.pageSize)
+			rows, err = p.conn.QueryContext(ctx, stmt)
 			if err != nil {
-				return errors.Wrapf(err, "could not execute query: %v", p.firstStatement)
+				return errors.Wrapf(err, "could not execute query: %v", stmt)
 			}
 			defer rows.Close()
 		} else {
@@ -271,26 +248,29 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 				return backoff.Permanent(io.EOF)
 			}
 			lastItem := p.currentPage[len(p.currentPage)-1]
-			params := make([]interface{}, 0, 2*len(p.currentPage))
-			// First for the per column comparison for index use efficiency
-			params = append(params, lastItem...)
-			// Then for the concatenation for correctness
-			params = append(params, lastItem...)
-			rows, err = p.conn.QueryContext(ctx, p.offsetStatement, params...)
+			comparison, params := expandRowConstructorComparison(p.chunkColumns, ">", lastItem)
+			chunkColumns := strings.Join(p.chunkColumns, ", ")
+			stmt := fmt.Sprintf("select %s from %s where %s order by %s limit %d",
+				chunkColumns, p.table, comparison, chunkColumns, p.pageSize)
+			rows, err = p.conn.QueryContext(ctx, stmt, params...)
 			if err != nil {
-				return errors.Wrapf(err, "could not execute query: %v", p.offsetStatement)
+				return errors.Wrapf(err, "could not execute query: %v", stmt)
 			}
 			defer rows.Close()
 		}
 		for rows.Next() {
-			item := make([]interface{}, len(p.chunkColumns))
-			scanArgs := make([]interface{}, len(item))
-			for i := range item {
-				scanArgs[i] = &item[i]
+			scanArgs := make([]interface{}, len(p.chunkColumns))
+			for i := range scanArgs {
+				// TODO support other types here
+				scanArgs[i] = new(int64)
 			}
 			err := rows.Scan(scanArgs...)
 			if err != nil {
 				return errors.WithStack(err)
+			}
+			item := make([]interface{}, len(p.chunkColumns))
+			for i := range scanArgs {
+				item[i] = *scanArgs[i].(*int64)
 			}
 			result = append(result, item)
 		}
@@ -355,12 +335,16 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
+			nextId := ids.Peek()
+			if !hasNext {
+				nextId = nextChunkPosition(id)
+			}
 			select {
 			case chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
-				End:   id,
+				End:   nextId,
 				First: first,
 				Last:  !hasNext,
 				Size:  currentChunkSize,
@@ -370,7 +354,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			}
 			seq++
 			// Next id should be the next start id
-			startId = id
+			startId = nextId
 			// We are no longer the first chunk
 			first = false
 			// We have no rows in the next chunk yet
@@ -380,14 +364,13 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	// Send any partial chunk we might have
 	if currentChunkSize > 0 {
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
-		// Make sure the End position is _after_ the final row by "adding one" to it
-		id = incChunkPosition(id)
 		select {
 		case chunks <- Chunk{
 			Table: table,
 			Seq:   seq,
 			Start: startId,
-			End:   id,
+			// Make sure the End position is _after_ the final row by "adding one" to it
+			End:   nextChunkPosition(id),
 			First: first,
 			Last:  true,
 			Size:  currentChunkSize,
@@ -399,7 +382,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	return nil
 }
 
-func incChunkPosition(pos []interface{}) []interface{} {
+func nextChunkPosition(pos []interface{}) []interface{} {
 	result := make([]interface{}, len(pos))
 	copy(result, pos)
 	inc, err := increment(result[len(result)-1])

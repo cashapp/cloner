@@ -43,7 +43,9 @@ func TestChecksum(t *testing.T) {
 	source.Database = "customer/-80@replica"
 
 	// Check how many rows end up in the -80 shard
-	shardRowCount, err := countRows(source, "customers")
+	customerCount, err := countRows(source, "customers")
+	assert.NoError(t, err)
+	transactionCount, err := countRows(source, "transactions")
 	assert.NoError(t, err)
 
 	checksum := &Checksum{
@@ -53,11 +55,17 @@ func TestChecksum(t *testing.T) {
 				Target: target,
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+			Config: Config{
+				Tables: map[string]TableConfig{
+					"customers":    {},
+					"transactions": {ChunkColumns: []string{"customer_id", "id"}},
+				},
+			},
 		},
 	}
 	err = kong.ApplyDefaults(checksum)
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, shardRowCount, len(diffs))
+	assert.Equal(t, customerCount+transactionCount, len(diffs))
 }

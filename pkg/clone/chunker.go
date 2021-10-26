@@ -184,8 +184,8 @@ type pagingStreamer struct {
 	pageSize     int
 	retry        RetryOptions
 
-	table        string
-	chunkColumns []string
+	table      string
+	keyColumns []string
 }
 
 func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOptions) *pagingStreamer {
@@ -196,7 +196,7 @@ func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOpt
 		pageSize:     pageSize,
 		currentPage:  nil,
 		currentIndex: 0,
-		chunkColumns: table.ChunkColumns,
+		keyColumns:   table.KeyColumns,
 		table:        table.Name,
 	}
 
@@ -233,9 +233,9 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 		var rows *sql.Rows
 		if p.first {
 			p.first = false
-			chunkColumns := strings.Join(p.chunkColumns, ", ")
+			keyColumns := strings.Join(p.keyColumns, ", ")
 			stmt := fmt.Sprintf("select %s from %s order by %s limit %d",
-				chunkColumns, p.table, chunkColumns, p.pageSize)
+				keyColumns, p.table, keyColumns, p.pageSize)
 			rows, err = p.conn.QueryContext(ctx, stmt)
 			if err != nil {
 				return errors.Wrapf(err, "could not execute query: %v", stmt)
@@ -248,10 +248,10 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 				return backoff.Permanent(io.EOF)
 			}
 			lastItem := p.currentPage[len(p.currentPage)-1]
-			comparison, params := expandRowConstructorComparison(p.chunkColumns, ">", lastItem)
-			chunkColumns := strings.Join(p.chunkColumns, ", ")
+			comparison, params := expandRowConstructorComparison(p.keyColumns, ">", lastItem)
+			keyColumns := strings.Join(p.keyColumns, ", ")
 			stmt := fmt.Sprintf("select %s from %s where %s order by %s limit %d",
-				chunkColumns, p.table, comparison, chunkColumns, p.pageSize)
+				keyColumns, p.table, comparison, keyColumns, p.pageSize)
 			rows, err = p.conn.QueryContext(ctx, stmt, params...)
 			if err != nil {
 				return errors.Wrapf(err, "could not execute query: %v", stmt)
@@ -259,7 +259,7 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 			defer rows.Close()
 		}
 		for rows.Next() {
-			scanArgs := make([]interface{}, len(p.chunkColumns))
+			scanArgs := make([]interface{}, len(p.keyColumns))
 			for i := range scanArgs {
 				// TODO support other types here
 				scanArgs[i] = new(int64)
@@ -268,7 +268,7 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			item := make([]interface{}, len(p.chunkColumns))
+			item := make([]interface{}, len(p.keyColumns))
 			for i := range scanArgs {
 				item[i] = *scanArgs[i].(*int64)
 			}

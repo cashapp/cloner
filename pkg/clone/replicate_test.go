@@ -216,19 +216,29 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	}
 
 	if len(diffs) > 0 {
-		for _, diff := range diffs {
-			should, err := rowToString(diff.Row.Data)
-			assert.NoError(t, err)
-			var actual string
-			if diff.Target != nil {
-				actual, err = rowToString(diff.Target.Data)
-				assert.NoError(t, err)
-			}
-			fmt.Printf("diff %v %v id=%v should=%s actual=%s\n",
-				diff.Row.Table.Name, diff.Type, diff.Row.ID, should, actual)
-		}
+		err := reportDiffs(diffs)
+		assert.NoError(t, err)
 		assert.Fail(t, "there were diffs (see above)")
 	}
+}
+
+func reportDiffs(diffs []Diff) error {
+	for _, diff := range diffs {
+		should, err := rowToString(diff.Row.Data)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		var actual string
+		if diff.Target != nil {
+			actual, err = rowToString(diff.Target.Data)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		fmt.Printf("diff %v %v id=%v should=%s actual=%s\n",
+			diff.Row.Table.Name, diff.Type, diff.Row.ID, should, actual)
+	}
+	return nil
 }
 
 func rowToString(data []interface{}) (string, error) {

@@ -160,9 +160,9 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 				},
 			}
 			table := &Table{
-				Name:         tableName,
-				MysqlTable:   tableSchema,
-				ChunkColumns: []string{"id"},
+				Name:       tableName,
+				MysqlTable: tableSchema,
+				KeyColumns: []string{"id"},
 			}
 			inputRows := make([]*Row, len(test.startingRows))
 			for i, row := range test.startingRows {

@@ -14,10 +14,6 @@ import (
 )
 
 func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error {
-	err := deleteAllData(config)
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	db, err := config.DB()
 	if err != nil {
 		return errors.WithStack(err)
@@ -191,6 +187,8 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 	clone.UseCRC32Checksum = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
+	assert.NoError(t, err)
+	err = reportDiffs(diffs)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }

@@ -155,6 +155,8 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 			g.Go(func() error {
 				defer tableParallelism.Release(1)
 
+				var err error
+
 				reader := NewReader(
 					cmd.ReaderConfig,
 					table,
@@ -163,9 +165,6 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 					targetReader,
 					targetLimiter,
 				)
-				if err != nil {
-					return errors.WithStack(err)
-				}
 
 				err = reader.Diff(ctx, diffs)
 				if err != nil {

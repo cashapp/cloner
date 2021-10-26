@@ -20,9 +20,13 @@ type Table struct {
 	// IDColumnIndex is the index of the ID column in the Columns field
 	IDColumnIndex int
 
-	// ChunkColumns is the columns the table is chunked by, by default the primary key columns
-	ChunkColumns []string
-	// IDColumnInChunkColumns is the index of the ID column in the ChunkColumns
+	// KeyColumns is the columns the table is chunked by, by default the primary key columns
+	KeyColumns []string
+	// KeyColumnList is KeyColumns quoted and comma separated
+	KeyColumnList string
+	// KeyColumnIndexes is KeyColumns quoted and comma separated
+	KeyColumnIndexes []int
+	// IDColumnInChunkColumns is the index of the ID column in the KeyColumns
 	IDColumnInChunkColumns int
 
 	Config TableConfig
@@ -308,21 +312,40 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 				break
 			}
 		}
-		table.ChunkColumns = table.Config.ChunkColumns
-		if len(table.ChunkColumns) == 0 {
-			table.ChunkColumns = []string{table.IDColumn}
+		table.KeyColumns = table.Config.ChunkColumns
+		if len(table.KeyColumns) == 0 {
+			table.KeyColumns = []string{table.IDColumn}
 		}
 		table.IDColumnInChunkColumns = -1
-		for i, column := range table.ChunkColumns {
-			if pkColumn.Name == column {
-				table.IDColumnInChunkColumns = i
-				break
+		for keyIndex, keyColumn := range table.KeyColumns {
+			if pkColumn.Name == keyColumn {
+				table.IDColumnInChunkColumns = keyIndex
+			}
+			for columnIndex, column := range table.Columns {
+				if column == keyColumn {
+					table.KeyColumnIndexes = append(table.KeyColumnIndexes, columnIndex)
+				}
 			}
 		}
 		if table.IDColumnInChunkColumns == -1 {
-			panic("chunk columns does not contain the pk column")
+			return nil, errors.Errorf("chunk columns does not contain the pk column")
+		}
+		if len(table.KeyColumns) != len(table.KeyColumnIndexes) {
+			return nil, errors.Errorf("did not find all the key columns %v in column list %v",
+				table.KeyColumns, table.Columns)
 		}
 	}
+
+	var chunkColumnList strings.Builder
+	for i, column := range table.KeyColumns {
+		chunkColumnList.WriteString("`")
+		chunkColumnList.WriteString(column)
+		chunkColumnList.WriteString("`")
+		if i < len(table.KeyColumns)-1 {
+			chunkColumnList.WriteString(", ")
+		}
+	}
+	table.KeyColumnList = chunkColumnList.String()
 
 	return table, nil
 }

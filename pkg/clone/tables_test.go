@@ -34,7 +34,7 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 			Name:          "customers",
 			IDColumn:      "id",
 			IDColumnIndex: 0,
-			ChunkColumns:  []string{"id"},
+			KeyColumns:    []string{"id"},
 			Columns:       []string{"id", "name"},
 			ColumnsQuoted: []string{"`id`", "`name`"},
 			CRC32Columns: []string{

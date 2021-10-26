@@ -318,28 +318,34 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 func (w *Writer) deleteBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx, batch Batch) error {
 	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
+	table := batch.Table
 	logger.Debugf("deleting %d rows", len(rows))
 
-	table := batch.Table
-	questionMarks := make([]string, 0, len(rows))
-	for range rows {
-		questionMarks = append(questionMarks, "?")
-	}
+	// We don't use batch statements for deletes, instead we prepare a single statement and do all the updates
+	// in the same transaction
 
-	valueArgs := make([]interface{}, 0, len(rows))
-	for _, post := range rows {
-		valueArgs = append(valueArgs, post.ID)
-	}
-	stmt := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
-		table.Name, table.IDColumn, strings.Join(questionMarks, ","))
-	result, err := tx.ExecContext(ctx, stmt, valueArgs...)
+	comparison, _ := expandRowConstructorComparison(table.KeyColumns, "=",
+		make([]interface{}, len(table.KeyColumns)))
+	stmt := fmt.Sprintf("DELETE FROM `%s` WHERE %s",
+		table.Name, comparison)
+	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {
-		return errors.Wrapf(err, "could not execute: %s", stmt)
+		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
-	rowsAffected, err := result.RowsAffected()
-	// If we get an error we'll just ignore that...
-	if err != nil {
-		writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+	defer prepared.Close()
+
+	for _, row := range rows {
+		args := row.KeyValues()
+
+		result, err := prepared.ExecContext(ctx, args...)
+		if err != nil {
+			return errors.Wrapf(err, "could not execute: %s", stmt)
+		}
+		rowsAffected, err := result.RowsAffected()
+		// If we get an error we'll just ignore that...
+		if err != nil {
+			writesRowsAffected.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(rowsAffected))
+		}
 	}
 	return nil
 }
@@ -369,8 +375,6 @@ func (w *Writer) replaceBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx
 				valueArgs = append(valueArgs, row.Data[i])
 			}
 		}
-		//stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
-		//	table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		stmt := fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES %s",
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
 		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
@@ -450,17 +454,22 @@ func (w *Writer) updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx,
 	columnValues := make([]string, 0, len(columns))
 
 	for _, column := range columns {
-		if column != table.IDColumn {
-			c := fmt.Sprintf("`%s` = ?", column)
-			columnValues = append(columnValues, c)
+		for _, keyColumn := range table.KeyColumns {
+			if column == keyColumn {
+				continue
+			}
 		}
+		c := fmt.Sprintf("`%s` = ?", column)
+		columnValues = append(columnValues, c)
 	}
 
 	// We don't use batch statements for updates, instead we prepare a single statement and do all the updates
 	// in the same transaction
 
-	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE `%s` = ?",
-		table.Name, strings.Join(columnValues, ","), table.IDColumn)
+	comparison, _ := expandRowConstructorComparison(table.KeyColumns, "=",
+		make([]interface{}, len(table.KeyColumns)))
+	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s",
+		table.Name, strings.Join(columnValues, ","), comparison)
 	prepared, err := tx.PrepareContext(ctx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
@@ -470,11 +479,14 @@ func (w *Writer) updateBatch(ctx context.Context, logger *log.Entry, tx *sql.Tx,
 	for _, row := range rows {
 		args := make([]interface{}, 0, len(columns))
 		for i, column := range columns {
-			if column != table.IDColumn {
-				args = append(args, row.Data[i])
+			for _, keyColumn := range table.KeyColumns {
+				if column == keyColumn {
+					continue
+				}
 			}
+			args = append(args, row.Data[i])
 		}
-		args = append(args, row.ID)
+		args = row.AppendKeyValues(args)
 
 		result, err := prepared.ExecContext(ctx, args...)
 		if err != nil {

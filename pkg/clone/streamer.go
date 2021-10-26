@@ -41,6 +41,21 @@ func (r *Row) Updated(row []interface{}) *Row {
 	}
 }
 
+func (r *Row) KeyValues() []interface{} {
+	values := make([]interface{}, len(r.Table.KeyColumns))
+	for i, index := range r.Table.KeyColumnIndexes {
+		values[i] = r.Data[index]
+	}
+	return values
+}
+
+func (r *Row) AppendKeyValues(values []interface{}) []interface{} {
+	for _, i := range r.Table.KeyColumnIndexes {
+		values = append(values, r.Data[i])
+	}
+	return values
+}
+
 type bufferStream struct {
 	rows []*Row
 }
@@ -159,7 +174,8 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	columns := table.ColumnList
 
 	where, params := chunkWhere(chunk, extraWhereClause)
-	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where,
+		table.KeyColumnList)
 	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -176,11 +192,12 @@ func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 		clauses = append(clauses, extraWhereClause)
 	}
 
-	c, p := expandRowConstructorComparison(table.ChunkColumns, ">=", chunk.Start)
+	// Expanding the row constructor comparisons
+	c, p := expandRowConstructorComparison(table.KeyColumns, ">=", chunk.Start)
 	clauses = append(clauses, c)
 	params = append(params, p...)
 
-	c, p = expandRowConstructorComparison(table.ChunkColumns, "<", chunk.End)
+	c, p = expandRowConstructorComparison(table.KeyColumns, "<", chunk.End)
 	clauses = append(clauses, c)
 	params = append(params, p...)
 
@@ -201,14 +218,14 @@ func expandRowConstructorComparison(left []string, operator string, right []inte
 	}
 
 	if len(left) == 1 {
-		return fmt.Sprintf("%s %s ?", left[0], operator), right
+		return fmt.Sprintf("`%s` %s ?", left[0], operator), right
 	}
 	if len(left) > 2 {
 		// TODO I'm just too tired to figure out how to expand this with more than two columns
 		panic("currently only support two operands")
 	}
 	if operator == "=" {
-		return fmt.Sprintf("%s = ? and %s = ?", left[0], left[1]), right
+		return fmt.Sprintf("`%s` = ? and `%s` = ?", left[0], left[1]), right
 	}
 	parentOperator := operator
 	switch operator {
@@ -218,7 +235,7 @@ func expandRowConstructorComparison(left []string, operator string, right []inte
 		parentOperator = "<"
 	}
 	// a > ? or (a = ? and b > ?)
-	return fmt.Sprintf("%s %s ? or (%s = ? and %s %s ?)",
+	return fmt.Sprintf("`%s` %s ? or (`%s` = ? and `%s` %s ?)",
 			left[0], parentOperator, left[0], left[1], operator),
 		[]interface{}{right[0], right[0], right[1]}
 }

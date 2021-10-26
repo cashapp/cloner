@@ -38,18 +38,21 @@ func (c *Chunk) String() string {
 }
 
 func (c *Chunk) ContainsRow(row []interface{}) bool {
-	id := c.Table.PkOfRow(row)
-	return c.ContainsPK(id)
+	return c.ContainsKeys(c.Table.KeysOfRow(row))
 }
 
-func (c *Chunk) ContainsPK(id int64) bool {
-	// TODO This is very odd because we support chunking by multiple columns but we don't support multiple primary keys. I
-	//  think the path forward is to simply support multiple primary keys everywhere. That would require us to implement a
-	//  composite key ordering function. I haven't thought this through deeply but I think we can simply do a multi value
-	//  compare in Golang? It would become problematic for varchar columns with non-standard collations (those damn
-	//  germans!) but I think we might be able to force utf8mb4 binary collation in the chunk select clause? I think as
-	//  long as the ordering function is the same in the database as it is in Golang it's all good?
-	return genericCompare(id, c.Start[c.Table.IDColumnInChunkColumns]) >= 0 && genericCompare(id, c.End[c.Table.IDColumnInChunkColumns]) < 0
+func (c *Chunk) ContainsKeys(keys []interface{}) bool {
+	return genericCompareKeys(keys, c.Start) >= 0 && genericCompareKeys(keys, c.End) < 0
+}
+
+func genericCompareKeys(a []interface{}, b []interface{}) int {
+	for i := range a {
+		compare := genericCompare(a[i], b[i])
+		if compare != 0 {
+			return compare
+		}
+	}
+	return 0
 }
 
 func genericCompare(a interface{}, b interface{}) int {
@@ -112,18 +115,6 @@ func genericCompare(a interface{}, b interface{}) int {
 		panic(fmt.Sprintf("type combination %v -> %v not supported yet: source=%v target=%v",
 			aType, bType, a, b))
 	}
-}
-
-func (c *Chunk) ContainsPKs(pk []interface{}) bool {
-	// TODO when we support arbitrary primary keys this logic has to change
-	if len(pk) != 1 {
-		panic("currently only supported single integer pk")
-	}
-	i, err := coerceInt64(pk[0])
-	if err != nil {
-		panic(err)
-	}
-	return c.ContainsPK(i)
 }
 
 type PeekingIdStreamer interface {

@@ -26,8 +26,6 @@ type Table struct {
 	KeyColumnList string
 	// KeyColumnIndexes is KeyColumns quoted and comma separated
 	KeyColumnIndexes []int
-	// IDColumnInChunkColumns is the index of the ID column in the KeyColumns
-	IDColumnInChunkColumns int
 
 	Config TableConfig
 
@@ -73,6 +71,14 @@ func (t *Table) ToRow(raw []interface{}) *Row {
 		ID:    t.PkOfRow(raw),
 		Data:  raw,
 	}
+}
+
+func (t *Table) KeysOfRow(row []interface{}) []interface{} {
+	keys := make([]interface{}, len(t.KeyColumnIndexes))
+	for i, index := range t.KeyColumnIndexes {
+		keys[i] = row[index]
+	}
+	return keys
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
@@ -316,19 +322,12 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		if len(table.KeyColumns) == 0 {
 			table.KeyColumns = []string{table.IDColumn}
 		}
-		table.IDColumnInChunkColumns = -1
-		for keyIndex, keyColumn := range table.KeyColumns {
-			if pkColumn.Name == keyColumn {
-				table.IDColumnInChunkColumns = keyIndex
-			}
+		for _, keyColumn := range table.KeyColumns {
 			for columnIndex, column := range table.Columns {
 				if column == keyColumn {
 					table.KeyColumnIndexes = append(table.KeyColumnIndexes, columnIndex)
 				}
 			}
-		}
-		if table.IDColumnInChunkColumns == -1 {
-			return nil, errors.Errorf("chunk columns does not contain the pk column")
 		}
 		if len(table.KeyColumns) != len(table.KeyColumnIndexes) {
 			return nil, errors.Errorf("did not find all the key columns %v in column list %v",

@@ -318,7 +318,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 				break
 			}
 		}
-		table.KeyColumns = table.Config.ChunkColumns
+		table.KeyColumns = table.Config.KeyColumns
 		if len(table.KeyColumns) == 0 {
 			table.KeyColumns = []string{table.IDColumn}
 		}
@@ -335,16 +335,16 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		}
 	}
 
-	var chunkColumnList strings.Builder
+	var keyColumnList strings.Builder
 	for i, column := range table.KeyColumns {
-		chunkColumnList.WriteString("`")
-		chunkColumnList.WriteString(column)
-		chunkColumnList.WriteString("`")
+		keyColumnList.WriteString("`")
+		keyColumnList.WriteString(column)
+		keyColumnList.WriteString("`")
 		if i < len(table.KeyColumns)-1 {
-			chunkColumnList.WriteString(", ")
+			keyColumnList.WriteString(", ")
 		}
 	}
-	table.KeyColumnList = chunkColumnList.String()
+	table.KeyColumnList = keyColumnList.String()
 
 	return table, nil
 }

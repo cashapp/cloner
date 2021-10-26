@@ -58,7 +58,7 @@ func TestChecksum(t *testing.T) {
 			Config: Config{
 				Tables: map[string]TableConfig{
 					"customers":    {},
-					"transactions": {ChunkColumns: []string{"customer_id", "id"}},
+					"transactions": {KeyColumns: []string{"customer_id", "id"}},
 				},
 			},
 		},

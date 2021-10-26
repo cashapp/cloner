@@ -22,7 +22,7 @@ type TableConfig struct {
 	ChunkSize      int      `toml:"chunk_size" help:"Global chunk size if chunk size not specified on the table"`
 	WriteBatchSize int      `toml:"write_batch_size" help:"Global chunk size if chunk size not specified on the table"`
 	WriteTimout    duration `toml:"write_timeout" help:"Global chunk size if chunk size not specified on the table"`
-	ChunkColumns   []string `toml:"chunk_columns" help:"Generate and select chunks by these columns, defaults to primary key columns"`
+	KeyColumns     []string `toml:"keys" help:"Use these columns as a unique key for this table, defaults to primary key columns"`
 }
 
 type Config struct {

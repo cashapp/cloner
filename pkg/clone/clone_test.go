@@ -148,7 +148,7 @@ func TestShardedCloneWithTargetData(t *testing.T) {
 					// equivalent to -80
 					TargetWhere:    "(vitess_hash(customer_id) >> 56) < 128",
 					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
-					ChunkColumns:   []string{"customer_id", "id"},
+					KeyColumns:     []string{"customer_id", "id"},
 				},
 			},
 		},

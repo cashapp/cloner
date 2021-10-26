@@ -96,14 +96,14 @@ func TestChunker(t *testing.T) {
 		{
 			name:   "two columns empty table",
 			table:  "transactions",
-			config: TableConfig{ChunkColumns: []string{"customer_id", "id"}, ChunkSize: 10},
+			config: TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 10},
 			rows:   nil,
 			chunks: nil,
 		},
 		{
 			name:    "two columns one row",
 			table:   "transactions",
-			config:  TableConfig{ChunkColumns: []string{"customer_id", "id"}, ChunkSize: 10},
+			config:  TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 10},
 			columns: []string{"customer_id", "id", "description", "amount_cents"},
 			rows: [][]interface{}{
 				{1, 1, "Description #1", 1000},
@@ -115,7 +115,7 @@ func TestChunker(t *testing.T) {
 		{
 			name:    "two columns page in middle of parent",
 			table:   "transactions",
-			config:  TableConfig{ChunkColumns: []string{"customer_id", "id"}, ChunkSize: 3},
+			config:  TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 3},
 			columns: []string{"customer_id", "id", "description", "amount_cents"},
 			rows: [][]interface{}{
 				{1, 1, "Description #1", 1000},
@@ -133,7 +133,7 @@ func TestChunker(t *testing.T) {
 		{
 			name:    "two columns ids in other order",
 			table:   "transactions",
-			config:  TableConfig{ChunkColumns: []string{"customer_id", "id"}, ChunkSize: 3},
+			config:  TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 3},
 			columns: []string{"customer_id", "id", "description", "amount_cents"},
 			rows: [][]interface{}{
 				{1, 3, "Description #3", 3000},
@@ -151,7 +151,7 @@ func TestChunker(t *testing.T) {
 		{
 			name:    "two columns 95 rows",
 			table:   "transactions",
-			config:  TableConfig{ChunkColumns: []string{"customer_id", "id"}, ChunkSize: 10},
+			config:  TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 10},
 			columns: []string{"customer_id", "id", "description", "amount_cents"},
 			rows:    transactionRows(95, 3),
 			chunks: []testChunk{
@@ -228,18 +228,18 @@ func TestChunker(t *testing.T) {
 					assert.Equal(t, tables[0].Config.ChunkSize, len(rows))
 				}
 			}
-			chunkColumns := test.config.ChunkColumns
-			if chunkColumns == nil {
-				chunkColumns = []string{"id"}
+			keyColumns := test.config.KeyColumns
+			if keyColumns == nil {
+				keyColumns = []string{"id"}
 			}
 			rows, err := db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM %s ORDER BY %s",
-				strings.Join(chunkColumns, ","),
+				strings.Join(keyColumns, ","),
 				test.table,
-				strings.Join(chunkColumns, ",")))
+				strings.Join(keyColumns, ",")))
 			require.NoError(t, err)
 			var idsInDB []int64
-			row := make([]int64, len(chunkColumns))
-			scanArgs := make([]interface{}, len(chunkColumns))
+			row := make([]int64, len(keyColumns))
+			scanArgs := make([]interface{}, len(keyColumns))
 			for i := range row {
 				scanArgs[i] = &row[i]
 			}

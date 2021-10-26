@@ -14,6 +14,13 @@ func TestTransactionSetAppend(t *testing.T) {
 			PKColumns: []int{0},
 			Columns:   []mysqlschema.TableColumn{{Name: "id"}, {Name: "name"}},
 		}}
+	multiKeyTable := &Table{Name: "transaction",
+		KeyColumns:       []string{"customer_id", "id"},
+		KeyColumnIndexes: []int{1, 0},
+		MysqlTable: &mysqlschema.Table{
+			PKColumns: []int{1, 0},
+			Columns:   []mysqlschema.TableColumn{{Name: "id"}, {Name: "customer_id"}, {Name: "amount_cents"}},
+		}}
 	tests := []struct {
 		name   string
 		input  []Transaction
@@ -369,6 +376,188 @@ func TestTransactionSetAppend(t *testing.T) {
 								Table: table,
 								Start: []interface{}{10},
 								End:   []interface{}{20},
+							},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "multi keys one chunk and one transaction outside the chunk",
+			input: []Transaction{
+				{
+					Mutations: []Mutation{{
+						Type:  Repair,
+						Table: multiKeyTable,
+						Chunk: Chunk{
+							Table: multiKeyTable,
+							Start: []interface{}{0, 0},
+							End:   []interface{}{10, 0},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Insert,
+						Table: multiKeyTable,
+						Rows: [][]interface{}{
+							{0, 11, "11"},
+						},
+					}},
+				},
+			},
+			output: [][]Transaction{
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Repair,
+							Table: multiKeyTable,
+							Chunk: Chunk{
+								Table: multiKeyTable,
+								Start: []interface{}{0, 0},
+								End:   []interface{}{10, 0},
+							},
+						}},
+					},
+				},
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Insert,
+							Table: multiKeyTable,
+							Rows: [][]interface{}{
+								{0, 11, "11"},
+							},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "multi keys two chunks",
+			// chunks can in general apply in parallel since chunks never overlap
+			input: []Transaction{
+				{
+					Mutations: []Mutation{{
+						Type:  Repair,
+						Table: multiKeyTable,
+						Chunk: Chunk{
+							Table: multiKeyTable,
+							Start: []interface{}{0, 0},
+							End:   []interface{}{10, 0},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Repair,
+						Table: multiKeyTable,
+						Chunk: Chunk{
+							Table: multiKeyTable,
+							Start: []interface{}{10, 0},
+							End:   []interface{}{20, 0},
+						},
+					}},
+				},
+			},
+			output: [][]Transaction{
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Repair,
+							Table: multiKeyTable,
+							Chunk: Chunk{
+								Table: multiKeyTable,
+								Start: []interface{}{0, 0},
+								End:   []interface{}{10, 0},
+							},
+						}},
+					},
+				},
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Repair,
+							Table: multiKeyTable,
+							Chunk: Chunk{
+								Table: multiKeyTable,
+								Start: []interface{}{10, 0},
+								End:   []interface{}{20, 0},
+							},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "multi key two chunks and a spanning transaction",
+			// this test shows two chunks and a transaction in between that has rows from both chunks
+			// this forces the chunks to apply sequentially even if chunks usually can apply in parallel
+			input: []Transaction{
+				{
+					Mutations: []Mutation{{
+						Type:  Repair,
+						Table: multiKeyTable,
+						Chunk: Chunk{
+							Table: multiKeyTable,
+							Start: []interface{}{0, 0},
+							End:   []interface{}{10, 0},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Insert,
+						Table: multiKeyTable,
+						Rows: [][]interface{}{
+							{1, 5, 500},
+							{2, 15, 1500},
+						},
+					}},
+				},
+				{
+					Mutations: []Mutation{{
+						Type:  Repair,
+						Table: multiKeyTable,
+						Chunk: Chunk{
+							Table: multiKeyTable,
+							Start: []interface{}{10, 0},
+							End:   []interface{}{20, 0},
+						},
+					}},
+				},
+			},
+			output: [][]Transaction{
+				{
+					{
+						Mutations: []Mutation{{
+							Type:  Repair,
+							Table: multiKeyTable,
+							Chunk: Chunk{
+								Table: multiKeyTable,
+								Start: []interface{}{0, 0},
+								End:   []interface{}{10, 0},
+							},
+						}},
+					},
+					{
+						Mutations: []Mutation{{
+							Type:  Insert,
+							Table: multiKeyTable,
+							Rows: [][]interface{}{
+								{1, 5, 500},
+								{2, 15, 1500},
+							},
+						}},
+					},
+					{
+						Mutations: []Mutation{{
+							Type:  Repair,
+							Table: multiKeyTable,
+							Chunk: Chunk{
+								Table: multiKeyTable,
+								Start: []interface{}{10, 0},
+								End:   []interface{}{20, 0},
 							},
 						}},
 					},

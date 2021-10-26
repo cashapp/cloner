@@ -63,6 +63,18 @@ func genericCompare(a interface{}, b interface{}) int {
 	// If they do NOT have same type, we coerce the target type to the source type and then compare
 	// We only support the combinations we've encountered in the wild here
 	switch a := a.(type) {
+	case int:
+		coerced, err := coerceInt64(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == int(coerced) {
+			return 0
+		} else if a < int(coerced) {
+			return -1
+		} else {
+			return 1
+		}
 	case int64:
 		coerced, err := coerceInt64(b)
 		if err != nil {

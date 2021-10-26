@@ -7,10 +7,9 @@ import (
 )
 
 func TestTransactionSetAppend(t *testing.T) {
-	// TODO write a test for a set of transactions where the first transactions are non causal so that they create two
-	//  separate parallel sequences and then a new transaction is added which spans the two previous sequences
-
-	table := &Table{Name: "customers", KeyColumns: []string{"id"},
+	table := &Table{Name: "customers",
+		KeyColumns:       []string{"id"},
+		KeyColumnIndexes: []int{0},
 		MysqlTable: &mysqlschema.Table{
 			PKColumns: []int{0},
 			Columns:   []mysqlschema.TableColumn{{Name: "id"}, {Name: "name"}},

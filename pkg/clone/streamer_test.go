@@ -19,7 +19,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			left:      []string{"id"},
 			operator:  ">",
 			right:     []interface{}{1000},
-			expansion: "id > ?",
+			expansion: "`id` > ?",
 			params:    []interface{}{1000},
 		},
 		{
@@ -27,7 +27,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			left:      []string{"customer_id", "id"},
 			operator:  "=",
 			right:     []interface{}{1000, 2000},
-			expansion: "customer_id = ? and id = ?",
+			expansion: "`customer_id` = ? and `id` = ?",
 			params:    []interface{}{1000, 2000},
 		},
 		{
@@ -35,7 +35,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			left:      []string{"customer_id", "id"},
 			operator:  ">=",
 			right:     []interface{}{1000, 2000},
-			expansion: "customer_id > ? or (customer_id = ? and id >= ?)",
+			expansion: "`customer_id` > ? or (`customer_id` = ? and `id` >= ?)",
 			params:    []interface{}{1000, 1000, 2000},
 		},
 		{
@@ -43,7 +43,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			left:      []string{"customer_id", "id"},
 			operator:  "<",
 			right:     []interface{}{1000, 2000},
-			expansion: "customer_id < ? or (customer_id = ? and id < ?)",
+			expansion: "`customer_id` < ? or (`customer_id` = ? and `id` < ?)",
 			params:    []interface{}{1000, 1000, 2000},
 		},
 		{
@@ -51,7 +51,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			left:      []string{"customer_id", "id"},
 			operator:  "<=",
 			right:     []interface{}{1000, 2000},
-			expansion: "customer_id < ? or (customer_id = ? and id <= ?)",
+			expansion: "`customer_id` < ? or (`customer_id` = ? and `id` <= ?)",
 			params:    []interface{}{1000, 1000, 2000},
 		},
 	}

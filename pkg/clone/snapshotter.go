@@ -345,7 +345,7 @@ func (s *Snapshotter) removeOngoingChunk(chunk *ChunkSnapshot) {
 	s.ongoingChunks = s.ongoingChunks[:n]
 	if chunk.Chunk.Last {
 		logger.WithField("table", chunk.Chunk.Table.Name).
-			Infof("'%s' snapshot done", chunk.Chunk.Table.Name)
+			Infof("'%s' snapshot read done", chunk.Chunk.Table.Name)
 	}
 }
 
@@ -467,7 +467,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	}
 
 	err = g.Wait()
-	logger.Infof("table chunking done")
+	logger.Infof("all tables chunking done")
 
 	close(chunks)
 	return errors.WithStack(err)

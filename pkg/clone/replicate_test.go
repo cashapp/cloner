@@ -24,8 +24,6 @@ const heartbeatFrequency = 100 * time.Millisecond
 
 var rollbackErr = fmt.Errorf("expected rollback")
 
-// TODO test for rollback
-
 func TestReplicateSingleThreaded(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
 		replicate.ReplicationParallelism = 1
@@ -45,10 +43,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	require.NoError(t, err)
 
 	rowCount := 5000
-	err = insertBunchaData(vitessContainer.Config(), "Name", rowCount)
-	require.NoError(t, err)
-
-	err = deleteAllData(tidbContainer.Config())
+	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)
 	require.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -76,6 +71,12 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 					// equivalent to -80
 					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
 					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+				"transactions": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(customer_id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+					KeyColumns:     []string{"customer_id", "id"},
 				},
 			},
 		},
@@ -203,7 +204,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	err = kong.ApplyDefaults(checksum)
 	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
-	checksum.FailedChunkRetryCount = 20
+	checksum.FailedChunkRetryCount = 10
 	require.NoError(t, err)
 	diffs, err := checksum.run(ctx)
 	require.NoError(t, err)
@@ -215,18 +216,44 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	}
 
 	if len(diffs) > 0 {
-		for _, diff := range diffs {
-			should, err := coerceString(diff.Row.Data[1])
-			assert.NoError(t, err)
-			var actual string
-			if diff.Target != nil {
-				actual, err = coerceString(diff.Target.Data[1])
-				assert.NoError(t, err)
-			}
-			fmt.Printf("diff %v id=%v should=%s actual=%s\n", diff.Type, diff.Row.ID, should, actual)
-		}
+		err := reportDiffs(diffs)
+		assert.NoError(t, err)
 		assert.Fail(t, "there were diffs (see above)")
 	}
+}
+
+func reportDiffs(diffs []Diff) error {
+	for _, diff := range diffs {
+		should, err := rowToString(diff.Row.Data)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		var actual string
+		if diff.Target != nil {
+			actual, err = rowToString(diff.Target.Data)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+		fmt.Printf("diff %v %v id=%v should=%s actual=%s\n",
+			diff.Row.Table.Name, diff.Type, diff.Row.ID, should, actual)
+	}
+	return nil
+}
+
+func rowToString(data []interface{}) (string, error) {
+	var result strings.Builder
+	for i, datum := range data {
+		s, err := coerceString(datum)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		result.WriteString(s)
+		if i < len(data)-1 {
+			result.WriteString(",")
+		}
+	}
+	return result.String(), nil
 }
 
 func isCancelledError(err error) bool {
@@ -291,6 +318,22 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		_, err = tx.ExecContext(ctx, `
 				INSERT INTO customers (name) VALUES (CONCAT('New customer ', LEFT(MD5(RAND()), 8)))
 			`)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		var randomCustomerId int64
+		row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
+		err = row.Scan(&randomCustomerId)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		// Insert a new row
+		_, err := tx.ExecContext(ctx, `
+				INSERT INTO transactions (customer_id, amount_cents, description) 
+				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
+			`, randomCustomerId)
 		if err != nil {
 			return errors.WithStack(err)
 		}

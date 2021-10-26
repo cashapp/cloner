@@ -17,6 +17,18 @@
         "column": "id",
         "sequence": "main.customers_seq"
       }
+    },
+    "transactions": {
+      "column_vindexes": [
+        {
+          "column": "customer_id",
+          "name": "hash"
+        }
+      ],
+      "auto_increment": {
+        "column": "id",
+        "sequence": "main.transactions_seq"
+      }
     }
   }
 }

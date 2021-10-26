@@ -2,7 +2,6 @@ package clone
 
 import (
 	"context"
-	"github.com/alecthomas/kong"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -226,78 +225,4 @@ func TestRowsEqual(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	assert.True(t, isEqual)
-}
-
-func TestDiffWithChecksum(t *testing.T) {
-	err := startAll()
-	assert.NoError(t, err)
-
-	source := vitessContainer.Config()
-	source.Database = "customer/-80@replica"
-	target := tidbContainer.Config()
-
-	config := &ReaderConfig{
-		SourceTargetConfig: SourceTargetConfig{
-			Source: source,
-			Target: target,
-		},
-	}
-	err = kong.ApplyDefaults(config)
-	config.UseCRC32Checksum = true
-
-	tables, err := LoadTables(context.Background(), *config)
-	assert.NoError(t, err)
-
-	sourceReader, err := config.Source.DB()
-	assert.NoError(t, err)
-	defer sourceReader.Close()
-	targetReader, err := config.Target.DB()
-	assert.NoError(t, err)
-	defer targetReader.Close()
-	r := NewReader(*config, tables[0], sourceReader, nil, targetReader, nil)
-
-	type row struct {
-		id   int64
-		name string
-	}
-	type diff struct {
-		diffType MutationType
-		row      row
-	}
-	tests := []struct {
-		name   string
-		source []row
-		target []row
-		diff   []diff
-	}{
-		{
-			name:   "empty",
-			source: nil,
-			target: nil,
-			diff:   nil,
-		},
-		// TODO add more tests
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err = deleteAllData(source)
-			assert.NoError(t, err)
-			err = deleteAllData(target)
-			assert.NoError(t, err)
-
-			// TODO insert data, how can I make sure they end up in -80?
-
-			ctx := context.Background()
-			chunk := Chunk{
-				Table: tables[0],
-			}
-			diffs, err := r.diffChunk(ctx, chunk)
-			assert.NoError(t, err)
-			var result []diff
-			for _, d := range diffs {
-				result = append(result, diff{d.Type, row{d.Row.ID, d.Row.Data[0].(string)}})
-			}
-			assert.Equal(t, test.diff, result)
-		})
-	}
 }

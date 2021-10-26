@@ -15,10 +15,17 @@ import (
 type Table struct {
 	Name string
 
-	// ShardingColumn is the name of the ID column
+	// IDColumn is the name of the ID column
 	IDColumn string
-	// ShardingColumnIndex is the index of the ID column in the Columns field
+	// IDColumnIndex is the index of the ID column in the Columns field
 	IDColumnIndex int
+
+	// KeyColumns is the columns the table is chunked by, by default the primary key columns
+	KeyColumns []string
+	// KeyColumnList is KeyColumns quoted and comma separated
+	KeyColumnList string
+	// KeyColumnIndexes is KeyColumns quoted and comma separated
+	KeyColumnIndexes []int
 
 	Config TableConfig
 
@@ -64,6 +71,14 @@ func (t *Table) ToRow(raw []interface{}) *Row {
 		ID:    t.PkOfRow(raw),
 		Data:  raw,
 	}
+}
+
+func (t *Table) KeysOfRow(row []interface{}) []interface{} {
+	keys := make([]interface{}, len(t.KeyColumnIndexes))
+	for i, index := range t.KeyColumnIndexes {
+		keys[i] = row[index]
+	}
+	return keys
 }
 
 func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
@@ -293,15 +308,43 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		MysqlTable:    mysqlTable,
 	}
 
-	if len(mysqlTable.PKColumns) == 1 {
+	if len(mysqlTable.PKColumns) >= 1 {
+		// TODO we should be really close to supporting multiple pk columns now
 		pkColumn := mysqlTable.GetPKColumn(0)
 		table.IDColumn = pkColumn.Name
 		for i, column := range columnNames {
 			if column == table.IDColumn {
 				table.IDColumnIndex = i
+				break
 			}
 		}
+		table.KeyColumns = table.Config.KeyColumns
+		if len(table.KeyColumns) == 0 {
+			table.KeyColumns = []string{table.IDColumn}
+		}
+		for _, keyColumn := range table.KeyColumns {
+			for columnIndex, column := range table.Columns {
+				if column == keyColumn {
+					table.KeyColumnIndexes = append(table.KeyColumnIndexes, columnIndex)
+				}
+			}
+		}
+		if len(table.KeyColumns) != len(table.KeyColumnIndexes) {
+			return nil, errors.Errorf("did not find all the key columns %v in column list %v",
+				table.KeyColumns, table.Columns)
+		}
 	}
+
+	var keyColumnList strings.Builder
+	for i, column := range table.KeyColumns {
+		keyColumnList.WriteString("`")
+		keyColumnList.WriteString(column)
+		keyColumnList.WriteString("`")
+		if i < len(table.KeyColumns)-1 {
+			keyColumnList.WriteString(", ")
+		}
+	}
+	table.KeyColumnList = keyColumnList.String()
 
 	return table, nil
 }

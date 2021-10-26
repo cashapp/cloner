@@ -3,7 +3,7 @@ targets:
   - type: lint
   - type: test
     glob: "./**/*_test.go"
-    retry_count: 3
+    retry_count: 1
   - type: sanity
   - type: docker
     retry_count: 3

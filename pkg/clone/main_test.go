@@ -15,12 +15,12 @@ func testMain(m *testing.M) int {
 	log.SetLevel(log.DebugLevel)
 
 	defer func() {
-		//if vitessContainer != nil {
-		//	vitessContainer.Close()
-		//}
-		//if tidbContainer != nil {
-		//	tidbContainer.Close()
-		//}
+		if vitessContainer != nil {
+			vitessContainer.Close()
+		}
+		if tidbContainer != nil {
+			tidbContainer.Close()
+		}
 	}()
 
 	// call flag.Parse() here if TestMain uses flags

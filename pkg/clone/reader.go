@@ -134,7 +134,7 @@ func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool,
 		log.WithField("table", chunk.Table.Name).
 			WithError(err).
 			WithContext(ctx).
-			Warnf("failed to read chunk %s[%d - %d] after retries and backoff, "+
+			Warnf("failed to read chunk %s[%v - %v] after retries and backoff, "+
 				"since this is a best effort clone we just give up: %+v",
 				chunk.Table.Name, chunk.Start, chunk.End, err)
 		return nil

@@ -41,6 +41,21 @@ func (r *Row) Updated(row []interface{}) *Row {
 	}
 }
 
+func (r *Row) KeyValues() []interface{} {
+	values := make([]interface{}, len(r.Table.KeyColumns))
+	for i, index := range r.Table.KeyColumnIndexes {
+		values[i] = r.Data[index]
+	}
+	return values
+}
+
+func (r *Row) AppendKeyValues(values []interface{}) []interface{} {
+	for _, i := range r.Table.KeyColumnIndexes {
+		values = append(values, r.Data[i])
+	}
+	return values
+}
+
 type bufferStream struct {
 	rows []*Row
 }
@@ -158,27 +173,69 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	table := chunk.Table
 	columns := table.ColumnList
 
-	where := chunkWhere(chunk, extraWhereClause)
-	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where, table.IDColumn)
-	rows, err := conn.QueryContext(ctx, stmt)
+	where, params := chunkWhere(chunk, extraWhereClause)
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where,
+		table.KeyColumnList)
+	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	return newRowStream(table, rows)
 }
 
-func chunkWhere(chunk Chunk, extraWhereClause string) string {
+func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 	table := chunk.Table
+
 	var clauses []string
+	var params []interface{}
 	if extraWhereClause != "" {
-		clauses = append(clauses, "("+extraWhereClause+")")
+		clauses = append(clauses, extraWhereClause)
 	}
-	clauses = append(clauses,
-		fmt.Sprintf("%s >= %d", table.IDColumn, chunk.Start),
-		fmt.Sprintf("%s < %d", table.IDColumn, chunk.End))
+
+	// Expanding the row constructor comparisons
+	c, p := expandRowConstructorComparison(table.KeyColumns, ">=", chunk.Start)
+	clauses = append(clauses, c)
+	params = append(params, p...)
+
+	c, p = expandRowConstructorComparison(table.KeyColumns, "<", chunk.End)
+	clauses = append(clauses, c)
+	params = append(params, p...)
+
 	if len(clauses) == 0 {
-		return ""
+		return "", []interface{}{}
 	} else {
-		return "where " + strings.Join(clauses, " and ")
+		return "where (" + strings.Join(clauses, ") and (") + ")", params
 	}
+}
+
+// expandRowConstructorComparison expands a row constructor comparison to make sure we use indexes properly,
+//   see this link for more detail: https://dev.mysql.com/doc/refman/5.7/en/row-constructor-optimization.html
+//   more recent versions of mysql might handle this better but TiDB doesn't yet:
+//   https://github.com/pingcap/tidb/issues/28789
+func expandRowConstructorComparison(left []string, operator string, right []interface{}) (string, []interface{}) {
+	if len(left) != len(right) {
+		panic("left hand should be same size as right hand")
+	}
+
+	if len(left) == 1 {
+		return fmt.Sprintf("`%s` %s ?", left[0], operator), right
+	}
+	if len(left) > 2 {
+		// TODO I'm just too tired to figure out how to expand this with more than two columns
+		panic("currently only support two operands")
+	}
+	if operator == "=" {
+		return fmt.Sprintf("`%s` = ? and `%s` = ?", left[0], left[1]), right
+	}
+	parentOperator := operator
+	switch operator {
+	case ">=":
+		parentOperator = ">"
+	case "<=":
+		parentOperator = "<"
+	}
+	// a > ? or (a = ? and b > ?)
+	return fmt.Sprintf("`%s` %s ? or (`%s` = ? and `%s` %s ?)",
+			left[0], parentOperator, left[0], left[1], operator),
+		[]interface{}{right[0], right[0], right[1]}
 }

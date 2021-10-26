@@ -119,15 +119,16 @@ func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff
 }
 
 type pkSet struct {
-	table *mysqlschema.Table
-	m     map[uint64][][]interface{}
+	table      *Table
+	mysqlTable *mysqlschema.Table
+	m          map[uint64][][]interface{}
 }
 
 // Intersects checks if any PKs in the set belong to the chunk
 func (s *pkSet) Intersects(chunk Chunk) bool {
 	for _, pks := range s.m {
 		for _, pk := range pks {
-			if chunk.ContainsPKs(pk) {
+			if chunk.ContainsKeys(pk) {
 				return true
 			}
 		}
@@ -136,15 +137,22 @@ func (s *pkSet) Intersects(chunk Chunk) bool {
 }
 
 func (s *pkSet) ContainsRow(row []interface{}) bool {
-	pkValues, err := s.table.GetPKValues(row)
+	pkValues, err := s.keysOfRow(row)
 	if err != nil {
 		panic(err)
 	}
-	return s.ContainsPK(pkValues)
+	return s.ContainsKeys(pkValues)
 }
 
-func (s *pkSet) ContainsPK(pks []interface{}) bool {
-	hash, err := hashstructure.Hash(pks, hashstructure.FormatV2, nil)
+func (s *pkSet) keysOfRow(row []interface{}) ([]interface{}, error) {
+	if s.table != nil {
+		return s.table.KeysOfRow(row), nil
+	}
+	return s.mysqlTable.GetPKValues(row)
+}
+
+func (s *pkSet) ContainsKeys(keys []interface{}) bool {
+	hash, err := hashstructure.Hash(keys, hashstructure.FormatV2, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -153,7 +161,7 @@ func (s *pkSet) ContainsPK(pks []interface{}) bool {
 		return false
 	}
 	for _, val := range vals {
-		if reflect.DeepEqual(pks, val) {
+		if reflect.DeepEqual(keys, val) {
 			return true
 		}
 	}
@@ -161,23 +169,23 @@ func (s *pkSet) ContainsPK(pks []interface{}) bool {
 }
 
 func (s *pkSet) AddRow(row []interface{}) {
-	pkValues, err := s.table.GetPKValues(row)
+	keys, err := s.keysOfRow(row)
 	if err != nil {
 		panic(err)
 	}
-	s.AddPK(pkValues)
+	s.AddKeys(keys)
 }
 
-func (s *pkSet) AddPK(pks []interface{}) {
-	if s.ContainsPK(pks) {
+func (s *pkSet) AddKeys(keys []interface{}) {
+	if s.ContainsKeys(keys) {
 		// We already got it
 		return
 	}
-	hash, err := hashstructure.Hash(pks, hashstructure.FormatV2, nil)
+	hash, err := hashstructure.Hash(keys, hashstructure.FormatV2, nil)
 	if err != nil {
 		panic(err)
 	}
-	s.m[hash] = append(s.m[hash], pks)
+	s.m[hash] = append(s.m[hash], keys)
 }
 
 func (s *pkSet) String() string {
@@ -283,8 +291,9 @@ func (s *transactionSequence) Append(transaction orderedTransaction) {
 			pks, exists := s.primaryKeys[mutation.Table.Name]
 			if !exists {
 				pks = &pkSet{
-					table: mutation.Table.MysqlTable,
-					m:     make(map[uint64][][]interface{}),
+					table:      mutation.Table,
+					mysqlTable: mutation.Table.MysqlTable,
+					m:          make(map[uint64][][]interface{}),
 				}
 				s.primaryKeys[mutation.Table.Name] = pks
 			}
@@ -524,6 +533,13 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 	err := mutation.Write(ctx, tx)
 	if err != nil {
 		return errors.WithStack(err)
+	}
+
+	if mutation.Type == Repair && mutation.Chunk.Last {
+		logrus.WithContext(ctx).
+			WithField("task", "replicate").
+			WithField("table", mutation.Table.Name).
+			Infof("'%v' snapshot write done", mutation.Table.Name)
 	}
 
 	return nil

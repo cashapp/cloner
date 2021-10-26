@@ -7,6 +7,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -18,9 +20,9 @@ type Chunk struct {
 	Seq int64
 
 	// Start is the first id of the chunk inclusive
-	Start int64
+	Start []interface{}
 	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
-	End int64 // exclusive
+	End []interface{} // exclusive
 
 	// First chunk of a table
 	First bool
@@ -31,39 +33,116 @@ type Chunk struct {
 	Size int
 }
 
+func (c *Chunk) String() string {
+	return fmt.Sprintf("%s[%v-%v]", c.Table.Name, c.Start, c.End)
+}
+
 func (c *Chunk) ContainsRow(row []interface{}) bool {
-	id := c.Table.PkOfRow(row)
-	return c.ContainsPK(id)
+	return c.ContainsKeys(c.Table.KeysOfRow(row))
 }
 
-func (c *Chunk) ContainsPK(id int64) bool {
-	return id >= c.Start && id < c.End
+func (c *Chunk) ContainsKeys(keys []interface{}) bool {
+	return genericCompareKeys(keys, c.Start) >= 0 && genericCompareKeys(keys, c.End) < 0
 }
 
-func (c *Chunk) ContainsPKs(pk []interface{}) bool {
-	// TODO when we support arbitrary primary keys this logic has to change
-	if len(pk) != 1 {
-		panic("currently only supported single integer pk")
+func genericCompareKeys(a []interface{}, b []interface{}) int {
+	for i := range a {
+		compare := genericCompare(a[i], b[i])
+		if compare != 0 {
+			return compare
+		}
 	}
-	i, err := coerceInt64(pk[0])
-	if err != nil {
-		panic(err)
+	return 0
+}
+
+func genericCompare(a interface{}, b interface{}) int {
+	// Different database drivers interpret SQL types differently (it seems)
+	aType := reflect.TypeOf(a)
+	bType := reflect.TypeOf(b)
+
+	// If they do NOT have same type, we coerce the target type to the source type and then compare
+	// We only support the combinations we've encountered in the wild here
+	switch a := a.(type) {
+	case int:
+		coerced, err := coerceInt64(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == int(coerced) {
+			return 0
+		} else if a < int(coerced) {
+			return -1
+		} else {
+			return 1
+		}
+	case int64:
+		coerced, err := coerceInt64(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == coerced {
+			return 0
+		} else if a < coerced {
+			return -1
+		} else {
+			return 1
+		}
+	case uint64:
+		coerced, err := coerceUint64(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == coerced {
+			return 0
+		} else if a < coerced {
+			return -1
+		} else {
+			return 1
+		}
+	case float64:
+		coerced, err := coerceFloat64(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == coerced {
+			return 0
+		} else if a < coerced {
+			return -1
+		} else {
+			return 1
+		}
+	case string:
+		coerced, err := coerceString(b)
+		if err != nil {
+			panic(err)
+		}
+		if a == coerced {
+			return 0
+		} else if a < coerced {
+			return -1
+		} else {
+			return 1
+		}
+	default:
+		panic(fmt.Sprintf("type combination %v -> %v not supported yet: source=%v target=%v",
+			aType, bType, a, b))
 	}
-	return c.ContainsPK(i)
 }
 
 type PeekingIdStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
-	Next(context.Context) (int64, bool, error)
+	Next(context.Context) ([]interface{}, bool, error)
+	// Peek returns the id ahead of the current, Next above has to be called first
+	Peek() []interface{}
 }
 
 type peekingIdStreamer struct {
 	wrapped   IdStreamer
-	peeked    int64
+	peeked    []interface{}
 	hasPeeked bool
 }
 
-func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
+func (p *peekingIdStreamer) Next(ctx context.Context) ([]interface{}, bool, error) {
 	var err error
 	if !p.hasPeeked {
 		// first time round load the first entry
@@ -92,54 +171,77 @@ func (p *peekingIdStreamer) Next(ctx context.Context) (int64, bool, error) {
 	return next, hasNext, nil
 }
 
+func (p *peekingIdStreamer) Peek() []interface{} {
+	return p.peeked
+}
+
 type IdStreamer interface {
-	Next(context.Context) (int64, error)
+	Next(context.Context) ([]interface{}, error)
 }
 
 type pagingStreamer struct {
 	conn         DBReader
 	first        bool
-	currentPage  []int64
+	currentPage  [][]interface{}
 	currentIndex int
-	table        *Table
 	pageSize     int
 	retry        RetryOptions
+
+	table      string
+	keyColumns []string
 }
 
-func (p *pagingStreamer) Next(ctx context.Context) (int64, error) {
+func newPagingStreamer(conn DBReader, table *Table, pageSize int, retry RetryOptions) *pagingStreamer {
+	p := &pagingStreamer{
+		conn:         conn,
+		retry:        retry,
+		first:        true,
+		pageSize:     pageSize,
+		currentPage:  nil,
+		currentIndex: 0,
+		keyColumns:   table.KeyColumns,
+		table:        table.Name,
+	}
+
+	return p
+}
+
+func (p *pagingStreamer) Next(ctx context.Context) ([]interface{}, error) {
 	if p.currentIndex == len(p.currentPage) {
 		var err error
 		p.currentPage, err = p.loadPage(ctx)
 		if errors.Is(err, io.EOF) {
 			// Race condition, the table was emptied
-			return 0, io.EOF
+			return nil, io.EOF
 		}
 		if err != nil {
-			return 0, errors.WithStack(err)
+			return nil, errors.WithStack(err)
 		}
 		p.currentIndex = 0
 	}
 	if len(p.currentPage) == 0 {
-		return 0, io.EOF
+		return nil, io.EOF
 	}
 	next := p.currentPage[p.currentIndex]
 	p.currentIndex++
 	return next, nil
 }
 
-func (p *pagingStreamer) loadPage(ctx context.Context) ([]int64, error) {
-	var result []int64
+func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) {
+	var result [][]interface{}
 	err := Retry(ctx, p.retry, func(ctx context.Context) error {
 		var err error
 
-		result = make([]int64, 0, p.pageSize)
+		result = make([][]interface{}, 0, p.pageSize)
 		var rows *sql.Rows
 		if p.first {
 			p.first = false
-			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s order by %s asc limit %d",
-				p.table.IDColumn, p.table.Name, p.table.IDColumn, p.pageSize))
+			keyColumns := strings.Join(p.keyColumns, ", ")
+			stmt := fmt.Sprintf("select %s from %s order by %s limit %d",
+				keyColumns, p.table, keyColumns, p.pageSize)
+			rows, err = p.conn.QueryContext(ctx, stmt)
 			if err != nil {
-				return errors.WithStack(err)
+				return errors.Wrapf(err, "could not execute query: %v", stmt)
 			}
 			defer rows.Close()
 		} else {
@@ -148,21 +250,32 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([]int64, error) {
 				// Race condition, the table was emptied
 				return backoff.Permanent(io.EOF)
 			}
-			lastId := p.currentPage[len(p.currentPage)-1]
-			rows, err = p.conn.QueryContext(ctx, fmt.Sprintf("select %s from %s where %s > %d order by %s asc limit %d",
-				p.table.IDColumn, p.table.Name, p.table.IDColumn, lastId, p.table.IDColumn, p.pageSize))
+			lastItem := p.currentPage[len(p.currentPage)-1]
+			comparison, params := expandRowConstructorComparison(p.keyColumns, ">", lastItem)
+			keyColumns := strings.Join(p.keyColumns, ", ")
+			stmt := fmt.Sprintf("select %s from %s where %s order by %s limit %d",
+				keyColumns, p.table, comparison, keyColumns, p.pageSize)
+			rows, err = p.conn.QueryContext(ctx, stmt, params...)
 			if err != nil {
-				return errors.WithStack(err)
+				return errors.Wrapf(err, "could not execute query: %v", stmt)
 			}
 			defer rows.Close()
 		}
 		for rows.Next() {
-			var id int64
-			err := rows.Scan(&id)
+			scanArgs := make([]interface{}, len(p.keyColumns))
+			for i := range scanArgs {
+				// TODO support other types here
+				scanArgs[i] = new(int64)
+			}
+			err := rows.Scan(scanArgs...)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			result = append(result, id)
+			item := make([]interface{}, len(p.keyColumns))
+			for i := range scanArgs {
+				item[i] = *scanArgs[i].(*int64)
+			}
+			result = append(result, item)
 		}
 		return err
 	})
@@ -172,15 +285,7 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([]int64, error) {
 
 func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) PeekingIdStreamer {
 	return &peekingIdStreamer{
-		wrapped: &pagingStreamer{
-			conn:         conn,
-			retry:        retry,
-			first:        true,
-			pageSize:     pageSize,
-			currentPage:  nil,
-			currentIndex: 0,
-			table:        table,
-		},
+		wrapped: newPagingStreamer(conn, table, pageSize, retry),
 	}
 }
 
@@ -213,9 +318,9 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	var err error
 	currentChunkSize := 0
 	first := true
-	startId := int64(0)
+	var startId []interface{}
 	seq := int64(0)
-	var id int64
+	var id []interface{}
 	hasNext := true
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
@@ -227,14 +332,22 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		}
 		currentChunkSize++
 
+		if startId == nil {
+			startId = id
+		}
+
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
+			nextId := ids.Peek()
+			if !hasNext {
+				nextId = nextChunkPosition(id)
+			}
 			select {
 			case chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: startId,
-				End:   id,
+				End:   nextId,
 				First: first,
 				Last:  !hasNext,
 				Size:  currentChunkSize,
@@ -244,7 +357,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			}
 			seq++
 			// Next id should be the next start id
-			startId = id
+			startId = nextId
 			// We are no longer the first chunk
 			first = false
 			// We have no rows in the next chunk yet
@@ -253,17 +366,14 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	}
 	// Send any partial chunk we might have
 	if currentChunkSize > 0 {
-		if first {
-			// This is the first AND last chunk, the startId doesn't make sense because we never got a second chunk
-			startId = 0
-		}
 		chunksEnqueued.WithLabelValues(table.Name).Inc()
 		select {
 		case chunks <- Chunk{
 			Table: table,
 			Seq:   seq,
 			Start: startId,
-			End:   id + 1,
+			// Make sure the End position is _after_ the final row by "adding one" to it
+			End:   nextChunkPosition(id),
 			First: first,
 			Last:  true,
 			Size:  currentChunkSize,
@@ -273,4 +383,24 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		}
 	}
 	return nil
+}
+
+func nextChunkPosition(pos []interface{}) []interface{} {
+	result := make([]interface{}, len(pos))
+	copy(result, pos)
+	inc, err := increment(result[len(result)-1])
+	if err != nil {
+		panic(err)
+	}
+	result[len(result)-1] = inc
+	return result
+}
+
+func increment(value interface{}) (interface{}, error) {
+	switch value := value.(type) {
+	case int64:
+		return value + 1, nil
+	default:
+		return 0, errors.Errorf("can't (yet?) increment %v: %v", reflect.TypeOf(value), value)
+	}
 }

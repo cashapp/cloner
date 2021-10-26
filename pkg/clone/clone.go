@@ -145,6 +145,8 @@ func (cmd *Clone) run() error {
 		g.Go(func() error {
 			defer tableParallelism.Release(1)
 
+			var err error
+
 			diffs := make(chan Diff)
 
 			writer := NewWriter(cmd.WriterConfig, table, writer, writerLimiter)
@@ -158,9 +160,6 @@ func (cmd *Clone) run() error {
 				targetReader,
 				targetLimiter,
 			)
-			if err != nil {
-				return errors.WithStack(err)
-			}
 
 			if cmd.NoDiff {
 				err = reader.Read(ctx, diffs)

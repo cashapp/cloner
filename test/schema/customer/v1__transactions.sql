@@ -1,0 +1,7 @@
+CREATE TABLE transactions (
+  id BIGINT(20) NOT NULL AUTO_INCREMENT,
+  customer_id BIGINT(20) NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  description VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -174,6 +175,7 @@ func (s *Snapshotter) createWatermarkTable(ctx context.Context) error {
 	// TODO retries with backoff?
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.config.WriteTimeout)
 	defer cancel()
+	// TODO we should probably have a "task VARCHAR" column as well so we can run multiple snapshots from the same database
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
@@ -359,7 +361,13 @@ func (s *Snapshotter) snapshot(ctx context.Context) error {
 
 	go func() {
 		logger := logrus.WithContext(ctx).WithField("task", "chunking")
-		err := s.chunkTables(ctx)
+		err := s.clearWatermarkTable(ctx)
+		if err != nil {
+			logger.WithError(err).Errorf("failed to clear watermark table ahead of snapshot: %v", err)
+			return
+		}
+
+		err = s.chunkTables(ctx)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
 		}
@@ -550,4 +558,18 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context, chunkCh chan Chun
 	}
 	done := closed.Load()
 	return done, nil
+}
+
+func (s *Snapshotter) clearWatermarkTable(ctx context.Context) error {
+	retry := s.sourceRetry
+	// wiping the watermark table might take quite a long time after a failed snapshot,
+	// let's use a much longer read timeout here
+	retry.Timeout = 10 * retry.Timeout
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		return errors.WithStack(autotx.Transact(ctx, s.source, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s", s.config.WatermarkTable))
+			return errors.WithStack(err)
+		}))
+	})
+	return errors.WithStack(err)
 }

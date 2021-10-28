@@ -108,6 +108,9 @@ type Replicate struct {
 	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
 	ReconnectTimeout   time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
 
+	DoSnapshot      bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
+	DoSnapshotDelay time.Duration `help:"How long to wait until running a snapshot" default:"60s"`
+
 	ReplicationParallelism          int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
 	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
 	ParallelTransactionBatchTimeout time.Duration `help:"How long to wait for a batch of transactions to fill up before executing them anyway" default:"5s"`
@@ -157,6 +160,15 @@ func (cmd *Replicate) run(ctx context.Context) error {
 		// TODO return status/errors back to the caller?
 		_, _ = writer.Write([]byte(""))
 	})
+	if cmd.DoSnapshot {
+		go func() {
+			time.Sleep(cmd.DoSnapshotDelay)
+			err := replicator.snapshot(context.Background())
+			if err != nil {
+				logrus.Errorf("failed to snapshot: %v", err)
+			}
+		}()
+	}
 
 	return replicator.run(ctx)
 }

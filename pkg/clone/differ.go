@@ -422,9 +422,11 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 				// Yay! Chunk had no diffs!!
 				return nil
 			} else {
-				log.Infof("chunk %s[%d-%d) had diffs, retrying %d more times",
-					chunk.Table.Name, chunk.Start, chunk.End, r.config.FailedChunkRetryCount-tries)
-				tries++
+				if r.config.FailedChunkRetryCount-tries > 0 {
+					log.Infof("chunk %s[%d-%d) had diffs, retrying %d more times",
+						chunk.Table.Name, chunk.Start, chunk.End, r.config.FailedChunkRetryCount-tries)
+					tries++
+				}
 				return errors.Errorf("chunk %s[%d-%d) had diffs",
 					chunk.Table.Name, chunk.Start, chunk.End)
 			}

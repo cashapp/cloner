@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"fmt"
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
@@ -137,6 +138,8 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	var foundDiffs []Diff
 	g.Go(func() error {
 		for diff := range diffs {
+			fmt.Printf("diff %v %v id=%v\n",
+				diff.Row.Table.Name, diff.Type, diff.Row.ID)
 			foundDiffs = append(foundDiffs, diff)
 		}
 		return nil

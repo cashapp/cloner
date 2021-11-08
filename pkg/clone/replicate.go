@@ -98,6 +98,7 @@ type Replicate struct {
 	TaskName string `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" required:""`
 	ServerID uint32 `help:"Unique identifier of this server, defaults to a hash of the TaskName" optional:""`
 
+	// TODO should this just be ReadParallelism
 	ChunkParallelism int `help:"Number of chunks to snapshot concurrently" default:"10"`
 
 	CheckpointTable    string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`

@@ -2,7 +2,6 @@ package clone
 
 import (
 	"context"
-	"fmt"
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
@@ -48,27 +47,45 @@ func (cmd *Checksum) Run() error {
 	}
 
 	if len(diffs) > 0 {
-		inserts := 0
-		deletes := 0
-		updates := 0
-		for _, diff := range diffs {
-			switch diff.Type {
-			case Update:
-				updates++
-			case Delete:
-				deletes++
-			case Insert:
-				inserts++
-			}
-			logrus.WithField("table", diff.Row.Table.Name).
-				WithField("diff_type", diff.Type).
-				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
-		}
-		return errors.Errorf("found diffs inserts=%d deletes=%d updates=%d", inserts, deletes, updates)
+		cmd.reportDiffs(diffs)
+		return errors.Errorf("found diffs")
 	} else {
 		logger.Infof("no diffs found")
 	}
 	return errors.WithStack(err)
+}
+
+func (cmd *Checksum) reportDiffs(diffs []Diff) {
+	type stats struct {
+		inserts int64
+		deletes int64
+		updates int64
+	}
+	var totalStats stats
+	statsByTable := make(map[string]stats)
+	for _, diff := range diffs {
+		byTable := statsByTable[diff.Row.Table.Name]
+		switch diff.Type {
+		case Update:
+			totalStats.updates++
+			byTable.updates++
+		case Delete:
+			totalStats.deletes++
+			byTable.deletes++
+		case Insert:
+			totalStats.inserts++
+			byTable.inserts++
+		}
+		statsByTable[diff.Row.Table.Name] = byTable
+		logrus.WithField("table", diff.Row.Table.Name).
+			WithField("diff_type", diff.Type.String()).
+			Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
+	}
+	logrus.Errorf("total diffs inserts=%d deletes=%d updates=%d", totalStats.inserts, totalStats.deletes, totalStats.updates)
+	for table, stat := range statsByTable {
+		logrus.WithField("table", table).
+			Errorf("'%s' diffs inserts=%d deletes=%d updates=%d", table, stat.inserts, stat.deletes, stat.updates)
+	}
 }
 
 func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
@@ -138,8 +155,10 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	var foundDiffs []Diff
 	g.Go(func() error {
 		for diff := range diffs {
-			fmt.Printf("diff %v %v id=%v\n",
-				diff.Row.Table.Name, diff.Type, diff.Row.ID)
+			logrus.WithField("table", diff.Row.Table.Name).
+				WithField("diff_type", diff.Type.String()).
+				WithField("id", diff.Row.ID).
+				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
 			foundDiffs = append(foundDiffs, diff)
 		}
 		return nil

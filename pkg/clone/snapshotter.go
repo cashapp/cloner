@@ -152,7 +152,7 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				newMutations, err = s.handleWatermark(mutation, newMutations)
+				newMutations, err = s.handleWatermark(ctx, mutation, newMutations)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -176,6 +176,7 @@ func (s *Snapshotter) createWatermarkTable(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.config.WriteTimeout)
 	defer cancel()
 	// TODO we should probably have a "task VARCHAR" column as well so we can run multiple snapshots from the same database
+	// TODO primary key here should probably be (task,table_name,chunk_seq)
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
@@ -376,31 +377,31 @@ func (s *Snapshotter) snapshot(ctx context.Context) error {
 	return nil
 }
 
-func (s *Snapshotter) handleWatermark(mutation Mutation, result []Mutation) ([]Mutation, error) {
-	if mutation.Table.Name != s.config.WatermarkTable {
+func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, result []Mutation) ([]Mutation, error) {
+	if watermark.Table.Name != s.config.WatermarkTable {
 		// Nothing to do, we just add the mutation untouched and return
-		result = append(result, mutation)
+		result = append(result, watermark)
 		return result, nil
 	}
-	if mutation.Type == Delete {
+	if watermark.Type == Delete {
 		// Someone is probably just cleaning out the watermark table
 		// Watermark mutations aren't replicated so we don't bother adding it
 		return result, nil
 	}
-	if len(mutation.Rows) != 1 {
+	if len(watermark.Rows) != 1 {
 		return result, errors.Errorf("more than a single row was written to the watermark table at the same time")
 	}
-	row := mutation.Rows[0]
-	low, err := mutation.Table.MysqlTable.GetColumnValue("low", row)
+	row := watermark.Rows[0]
+	low, err := watermark.Table.MysqlTable.GetColumnValue("low", row)
 	if err != nil {
 		return result, errors.WithStack(err)
 	}
-	high, err := mutation.Table.MysqlTable.GetColumnValue("high", row)
+	high, err := watermark.Table.MysqlTable.GetColumnValue("high", row)
 	if err != nil {
 		return result, errors.WithStack(err)
 	}
 	if low.(int8) == 1 {
-		ongoingChunk, err := s.findOngoingChunkFromWatermark(mutation)
+		ongoingChunk, err := s.findOngoingChunkFromWatermark(watermark)
 		if err != nil {
 			return result, errors.WithStack(err)
 		}
@@ -410,7 +411,7 @@ func (s *Snapshotter) handleWatermark(mutation Mutation, result []Mutation) ([]M
 		ongoingChunk.InsideWatermarks = true
 	}
 	if high.(int8) == 1 {
-		ongoingChunk, err := s.findOngoingChunkFromWatermark(mutation)
+		ongoingChunk, err := s.findOngoingChunkFromWatermark(watermark)
 		if err != nil {
 			return result, errors.WithStack(err)
 		}
@@ -430,6 +431,10 @@ func (s *Snapshotter) handleWatermark(mutation Mutation, result []Mutation) ([]M
 			Chunk: ongoingChunk.Chunk,
 		})
 		s.removeOngoingChunk(ongoingChunk)
+		err = s.deleteWatermark(ctx, watermark)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return result, nil
 }
@@ -572,4 +577,24 @@ func (s *Snapshotter) clearWatermarkTable(ctx context.Context) error {
 		}))
 	})
 	return errors.WithStack(err)
+}
+
+func (s *Snapshotter) deleteWatermark(ctx context.Context, mutation Mutation) error {
+	tableSchema := mutation.Table.MysqlTable
+	tableNameI, err := tableSchema.GetColumnValue("table_name", mutation.Rows[0])
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	tableName := tableNameI.(string)
+	chunkSeqI, err := tableSchema.GetColumnValue("chunk_seq", mutation.Rows[0])
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	chunkSeq := chunkSeqI.(int64)
+	return Retry(ctx, s.sourceRetry, func(ctx context.Context) error {
+		_, err := s.source.ExecContext(ctx,
+			fmt.Sprintf("DELETE FROM %s WHERE table_name = ? AND chunk_seq = ?", s.config.WatermarkTable),
+			tableName, chunkSeq)
+		return err
+	})
 }

@@ -379,11 +379,17 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 					WHERE id = ?
 				`, randomCustomerId)
+				if err != nil {
+					return errors.WithStack(err)
+				}
 				if doMultipleUpdates {
 					_, err = tx.ExecContext(ctx, ` 
 						UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 						WHERE id = ?
 					`, randomCustomerId)
+					if err != nil {
+						return errors.WithStack(err)
+					}
 				}
 			}
 		}

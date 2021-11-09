@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type MutationType byte
@@ -329,12 +330,19 @@ func coerceFloat64(value interface{}) (float64, error) {
 	}
 }
 
+// mysqlTimeFormat is the standard time format recognized by MySQL
+// note that it does not contain timezone, it will be interpreted in the configured timezone of the server
+// if this is used to copy data between databases we need to make sure they are using the same timezone
+const mysqlTimeFormat = "2006-01-02 15:04:05"
+
 func coerceString(value interface{}) (string, error) {
 	switch value := value.(type) {
 	case []byte:
 		return string(value), nil
 	case int64:
 		return fmt.Sprintf("%d", value), nil
+	case time.Time:
+		return value.Format(mysqlTimeFormat), nil
 	default:
 		return "", errors.Errorf("can't (yet?) coerce %v to string: %v", reflect.TypeOf(value), value)
 	}

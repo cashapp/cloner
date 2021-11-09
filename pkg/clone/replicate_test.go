@@ -329,13 +329,30 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 			return errors.WithStack(err)
 		}
 
+		// Sometimes we randomly update as well to exercise multiple updates in the same transaction
+		doMultipleUpdates := rand.Intn(25) == 0
+
 		// Insert a new row
-		_, err := tx.ExecContext(ctx, `
+		insterted, err := tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
 				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
 			`, randomCustomerId)
 		if err != nil {
 			return errors.WithStack(err)
+		}
+
+		if doMultipleUpdates {
+			transactionId, err := insterted.LastInsertId()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			// and update it immediately to exercise insert and update in the same transaction
+			_, err = tx.ExecContext(ctx, `
+				UPDATE transactions SET description = CONCAT('Description ', LEFT(MD5(RAND()), 8)) WHERE id = ?				
+			`, transactionId)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 		}
 
 		// Do some random updates
@@ -357,13 +374,22 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 					return errors.WithStack(err)
 				}
 			} else {
-				// Otherwise update it
+				// Otherwise update it, several times to exercise multiple updates in a single transaction
 				_, err = tx.ExecContext(ctx, ` 
 					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 					WHERE id = ?
 				`, randomCustomerId)
 				if err != nil {
 					return errors.WithStack(err)
+				}
+				if doMultipleUpdates {
+					_, err = tx.ExecContext(ctx, ` 
+						UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
+						WHERE id = ?
+					`, randomCustomerId)
+					if err != nil {
+						return errors.WithStack(err)
+					}
 				}
 			}
 		}

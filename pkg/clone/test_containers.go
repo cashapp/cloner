@@ -105,7 +105,7 @@ func startVitess() error {
 	}
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "vitess/base",
-		Tag:        "v7.0.2",
+		Tag:        "v12.0.0",
 		Cmd: []string{
 			"vttestserver",
 			"-port=15000",

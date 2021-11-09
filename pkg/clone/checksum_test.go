@@ -67,5 +67,6 @@ func TestChecksum(t *testing.T) {
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
+	checksum.reportDiffs(diffs)
 	assert.Equal(t, customerCount+transactionCount, len(diffs))
 }

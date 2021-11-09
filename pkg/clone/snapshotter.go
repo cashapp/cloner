@@ -9,7 +9,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
@@ -40,14 +39,11 @@ type Snapshotter struct {
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
 
-	// chunks receives a channel of chunks when a snapshot starts
-	chunks chan chan Chunk
+	// chunks receives chunks from the chunker, they are processed on the main replication thread and appended to ongoingChunks below
+	chunks chan Chunk
 
 	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
 	ongoingChunks []*ChunkSnapshot
-
-	// snapshotRunning is true while a snapshot is running
-	snapshotRunning *atomic.Bool
 }
 
 func NewSnapshotter(config Replicate) (*Snapshotter, error) {
@@ -66,8 +62,7 @@ func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		snapshotRunning: atomic.NewBool(false),
-		chunks:          make(chan chan Chunk),
+		chunks: make(chan Chunk, config.ChunkParallelism),
 	}
 	r.sourceSchema, err = r.config.Source.Schema()
 	if err != nil {
@@ -110,31 +105,10 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 }
 
 func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
-	logger := logrus.WithField("task", "snapshotter")
-
-	var chunks chan Chunk
 	for {
-		select {
-		case chunks = <-s.chunks:
-			logger.Infof("snapshot starting")
-		default:
-		}
-		if chunks != nil {
-			done, err := s.maybeSnapshotChunks(ctx, chunks)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			if done {
-				chunks = nil
-			}
-		}
-		if chunks == nil && len(s.ongoingChunks) == 0 && s.snapshotRunning.Load() {
-			logger.Infof("snapshot done")
-			chunksEnqueued.Reset()
-			chunksProcessed.Reset()
-			rowsProcessed.Reset()
-			chunksWithDiffs.Reset()
-			s.snapshotRunning.Store(false)
+		err := s.maybeSnapshotChunks(ctx)
+		if err != nil {
+			return errors.WithStack(err)
 		}
 
 		var transaction Transaction
@@ -354,12 +328,6 @@ func (s *Snapshotter) removeOngoingChunk(chunk *ChunkSnapshot) {
 
 // snapshot runs a snapshot asynchronously unless a snapshot is already running
 func (s *Snapshotter) snapshot(ctx context.Context) error {
-	succeeded := s.snapshotRunning.CAS(false, true)
-	if !succeeded {
-		// Someone else won the race
-		return nil
-	}
-
 	go func() {
 		logger := logrus.WithContext(ctx).WithField("task", "chunking")
 		err := s.clearWatermarkTable(ctx)
@@ -440,8 +408,6 @@ func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, r
 }
 
 func (s *Snapshotter) chunkTables(ctx context.Context) error {
-	chunks := make(chan Chunk, s.config.ChunkBufferSize)
-
 	tables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
 	if err != nil {
 		return errors.WithStack(err)
@@ -452,11 +418,6 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	tableParallelism := semaphore.NewWeighted(s.config.TableParallelism)
 
 	logger := logrus.WithContext(ctx).WithField("task", "chunking")
-
-	g.Go(func() error {
-		s.chunks <- chunks
-		return nil
-	})
 
 	for _, t := range tables {
 		table := t
@@ -469,7 +430,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 
 			logger := logger.WithField("table", table.Name)
 			logger.Infof("'%s' chunking start", table.Name)
-			err := generateTableChunksAsync(ctx, table, s.source, chunks, s.sourceRetry)
+			err := generateTableChunksAsync(ctx, table, s.source, s.chunks, s.sourceRetry)
 			logger.Infof("'%s' chunking done", table.Name)
 			if err != nil {
 				return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
@@ -481,8 +442,6 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 
 	err = g.Wait()
 	logger.Infof("all tables chunking done")
-
-	close(chunks)
 	return errors.WithStack(err)
 }
 
@@ -522,47 +481,58 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	return snapshot, nil
 }
 
-func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context, chunkCh chan Chunk) (bool, error) {
-	// We read new snapshot when we have finished processing all of the ongoing chunks
+func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
+	// We read new snapshots when we have finished processing all of the ongoing chunks
 	if len(s.ongoingChunks) > 0 {
-		return false, nil
+		return nil
+	}
+
+	// Grab as many chunks as is available
+	var chunks []Chunk
+	for i := 0; i < s.config.ChunkParallelism; i++ {
+		select {
+		case chunk := <-s.chunks:
+			chunks = append(chunks, chunk)
+		default:
+			if i == 0 {
+				// There are no chunks queued up, let's bail fast
+				return nil
+			}
+		}
+	}
+
+	if len(chunks) == 0 {
+		return nil
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	snapshotCh := make(chan *ChunkSnapshot, s.config.ChunkParallelism)
 
-	closed := atomic.NewBool(false)
-
-	for i := 0; i < s.config.ChunkParallelism; i++ {
+	for _, c := range chunks {
+		chunk := c
 		g.Go(func() error {
-			select {
-			case chunk, isOpen := <-chunkCh:
-				if !isOpen {
-					// Channel is closed, we're done with all the chunks
-					closed.Store(true)
-					return nil
-				}
-				snapshot, err := s.snapshotChunk(ctx, chunk)
-				snapshotCh <- snapshot
+			snapshot, err := s.snapshotChunk(ctx, chunk)
+			if err != nil {
 				return errors.WithStack(err)
-			case <-ctx.Done():
-				return ctx.Err()
 			}
+			snapshotCh <- snapshot
+			return nil
 		})
 	}
 
 	err := g.Wait()
 	if err != nil {
-		return false, errors.WithStack(err)
+		return errors.WithStack(err)
 	}
 	close(snapshotCh)
 
-	for chunk := range snapshotCh {
-		s.ongoingChunks = append(s.ongoingChunks, chunk)
+	snapshots := make([]*ChunkSnapshot, 0, s.config.ChunkParallelism)
+	for snapshot := range snapshotCh {
+		snapshots = append(snapshots, snapshot)
 	}
-	done := closed.Load()
-	return done, nil
+	s.ongoingChunks = snapshots
+	return nil
 }
 
 func (s *Snapshotter) clearWatermarkTable(ctx context.Context) error {

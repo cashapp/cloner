@@ -142,15 +142,9 @@ func (s *rowStream) Next() (*Row, error) {
 
 	row := make([]interface{}, len(cols))
 
-	var id int64
-
 	scanArgs := make([]interface{}, len(row))
 	for i := range row {
-		if i == s.table.IDColumnIndex {
-			scanArgs[i] = &id
-		} else {
-			scanArgs[i] = &row[i]
-		}
+		scanArgs[i] = &row[i]
 	}
 	err = s.rows.Scan(scanArgs...)
 	if err != nil {
@@ -158,7 +152,6 @@ func (s *rowStream) Next() (*Row, error) {
 	}
 
 	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
-	row[s.table.IDColumnIndex] = id
 	return &Row{
 		Table: s.table,
 		Data:  row,

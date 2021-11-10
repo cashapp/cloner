@@ -44,6 +44,9 @@ func (r *Row) Updated(row []interface{}) *Row {
 }
 
 func (r *Row) KeyValues() []interface{} {
+	if len(r.Table.KeyColumns) == 0 {
+		panic("need key columns")
+	}
 	values := make([]interface{}, len(r.Table.KeyColumns))
 	for i, index := range r.Table.KeyColumnIndexes {
 		values[i] = r.Data[index]

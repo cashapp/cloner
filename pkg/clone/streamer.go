@@ -174,7 +174,7 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	columns := table.ColumnList
 
 	where, params := chunkWhere(chunk, extraWhereClause)
-	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where,
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s", columns, hint, table.Name, where,
 		table.KeyColumnList)
 	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {

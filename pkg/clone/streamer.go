@@ -16,23 +16,24 @@ type DBReader interface {
 
 type Row struct {
 	Table *Table
-	// ID is deprecated use KeyValues() instead¢ss
+	// ID is the numeric id column
+	// Deprecated: we supported multiple PKs now, KeyValues() instead
 	ID   int64
 	Data []interface{}
 }
 
 // PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
 func (r *Row) PkAfterOrEqual(row []interface{}) bool {
-	return r.ID >= r.Table.PkOfRow(row)
+	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) >= 0
 }
 
 // PkEqual returns true if the pk of the row is equal to the PK of the receiver row
 func (r *Row) PkEqual(row []interface{}) bool {
-	return r.ID == r.Table.PkOfRow(row)
+	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) == 0
 }
 
 func (r *Row) Updated(row []interface{}) *Row {
-	if r.Table.PkOfRow(row) != r.ID {
+	if genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) != 0 {
 		panic("updating row with another ID")
 	}
 	return &Row{

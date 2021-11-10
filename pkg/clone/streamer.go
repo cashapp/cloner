@@ -16,8 +16,9 @@ type DBReader interface {
 
 type Row struct {
 	Table *Table
-	ID    int64
-	Data  []interface{}
+	// ID is deprecated use KeyValues() instead¢ss
+	ID   int64
+	Data []interface{}
 }
 
 // PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row

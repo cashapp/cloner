@@ -238,11 +238,16 @@ func TestChunker(t *testing.T) {
 				strings.Join(keyColumns, ",")))
 			require.NoError(t, err)
 			var idsInDB [][]interface{}
-			scanArgs := make([]interface{}, len(keyColumns))
 			for rows.Next() {
+				row := make([]interface{}, len(keyColumns))
+				scanArgs := make([]interface{}, len(keyColumns))
+				for i := range scanArgs {
+					row[i] = int64(0)
+					scanArgs[i] = &row[i]
+				}
 				err = rows.Scan(scanArgs...)
 				require.NoError(t, err)
-				idsInDB = append(idsInDB, scanArgs)
+				idsInDB = append(idsInDB, row)
 			}
 			assert.Equal(t, idsInDB, idsInChunks)
 		})

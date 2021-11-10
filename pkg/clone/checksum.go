@@ -79,7 +79,7 @@ func (cmd *Checksum) reportDiffs(diffs []Diff) {
 		statsByTable[diff.Row.Table.Name] = byTable
 		logrus.WithField("table", diff.Row.Table.Name).
 			WithField("diff_type", diff.Type.String()).
-			Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
+			Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
 	}
 	logrus.Errorf("total diffs inserts=%d deletes=%d updates=%d", totalStats.inserts, totalStats.deletes, totalStats.updates)
 	for table, stat := range statsByTable {
@@ -157,8 +157,8 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		for diff := range diffs {
 			logrus.WithField("table", diff.Row.Table.Name).
 				WithField("diff_type", diff.Type.String()).
-				WithField("id", diff.Row.ID).
-				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.ID)
+				WithField("id", diff.Row.KeyValues()).
+				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
 			foundDiffs = append(foundDiffs, diff)
 		}
 		return nil

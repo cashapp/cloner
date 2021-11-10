@@ -169,7 +169,6 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			for i, row := range test.startingRows {
 				inputRows[i] = &Row{
 					Table: table,
-					ID:    int64(row[0].(int)),
 					Data:  row,
 				}
 			}

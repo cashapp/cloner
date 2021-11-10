@@ -21,7 +21,6 @@ func (testRow testRow) toRow(batchSize int) *Row {
 			KeyColumnIndexes: []int{0},
 			Config:           TableConfig{WriteBatchSize: batchSize},
 		},
-		ID:   testRow.id,
 		Data: []interface{}{testRow.id, testRow.data},
 	}
 }
@@ -40,7 +39,7 @@ func toTestDiff(diff Diff) testDiff {
 }
 
 func toTestRow(row *Row) testRow {
-	return testRow{row.ID, row.Table.Name, row.Data[1].(string)}
+	return testRow{row.KeyValues()[0].(int64), row.Table.Name, row.Data[1].(string)}
 }
 
 func TestStreamDiff(t *testing.T) {
@@ -216,12 +215,12 @@ func streamTestRows(rows []testRow, batchSize int) RowStream {
 }
 
 func TestRowsEqual(t *testing.T) {
-	sourceRow := &Row{nil, 0, []interface{}{
+	sourceRow := &Row{nil, []interface{}{
 		100020406,
 		int64(30027935561),
 		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},
 	}}
-	targetRow := &Row{nil, 0, []interface{}{
+	targetRow := &Row{nil, []interface{}{
 		100020406,
 		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},
 		[]byte{51, 48, 48, 50, 55, 57, 51, 53, 53, 54, 49},

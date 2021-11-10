@@ -15,11 +15,6 @@ import (
 type Table struct {
 	Name string
 
-	// IDColumn is the name of the ID column
-	IDColumn string
-	// IDColumnIndex is the index of the ID column in the Columns field
-	IDColumnIndex int
-
 	// KeyColumns is the columns the table is chunked by, by default the primary key columns
 	KeyColumns []string
 	// KeyColumnList is KeyColumns quoted and comma separated
@@ -68,7 +63,6 @@ func (t *Table) Validate() error {
 func (t *Table) ToRow(raw []interface{}) *Row {
 	return &Row{
 		Table: t,
-		ID:    t.PkOfRow(raw),
 		Data:  raw,
 	}
 }
@@ -309,18 +303,11 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 
 	if len(mysqlTable.PKColumns) >= 1 {
-		// TODO we should be really close to supporting multiple pk columns now
-		pkColumn := mysqlTable.GetPKColumn(0)
-		table.IDColumn = pkColumn.Name
-		for i, column := range columnNames {
-			if column == table.IDColumn {
-				table.IDColumnIndex = i
-				break
-			}
-		}
 		table.KeyColumns = table.Config.KeyColumns
 		if len(table.KeyColumns) == 0 {
-			table.KeyColumns = []string{table.IDColumn}
+			for _, c := range mysqlTable.PKColumns {
+				table.KeyColumns = append(table.KeyColumns, mysqlTable.Columns[c].Name)
+			}
 		}
 		for _, keyColumn := range table.KeyColumns {
 			for columnIndex, column := range table.Columns {

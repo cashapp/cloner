@@ -32,8 +32,6 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 	assert.Equal(t, []*Table{
 		{
 			Name:             "customers",
-			IDColumn:         "id",
-			IDColumnIndex:    0,
 			KeyColumns:       []string{"id"},
 			KeyColumnList:    "`id`",
 			KeyColumnIndexes: []int{0},
@@ -68,11 +66,12 @@ func TestLoadTablesUnshardedVitess(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{
-			Name:          "customers",
-			IDColumn:      "id",
-			IDColumnIndex: 0,
-			Columns:       []string{"id", "name"},
-			ColumnsQuoted: []string{"`id`", "`name`"},
+			Name:             "customers",
+			KeyColumns:       []string{"id"},
+			KeyColumnList:    "`id`",
+			KeyColumnIndexes: []int{0},
+			Columns:          []string{"id", "name"},
+			ColumnsQuoted:    []string{"`id`", "`name`"},
 			CRC32Columns: []string{
 				"crc32(ifnull(`id`, 0))",
 				"crc32(ifnull(`name`, 0))",
@@ -101,11 +100,12 @@ func TestLoadTablesTiDB(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
 		{
-			Name:          "customers",
-			IDColumn:      "id",
-			IDColumnIndex: 0,
-			Columns:       []string{"id", "name"},
-			ColumnsQuoted: []string{"`id`", "`name`"},
+			Name:             "customers",
+			KeyColumns:       []string{"id"},
+			KeyColumnList:    "`id`",
+			KeyColumnIndexes: []int{0},
+			Columns:          []string{"id", "name"},
+			ColumnsQuoted:    []string{"`id`", "`name`"},
 			CRC32Columns: []string{
 				"crc32(ifnull(`id`, 0))",
 				"crc32(ifnull(`name`, 0))",

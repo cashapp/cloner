@@ -68,7 +68,6 @@ func (t *Table) Validate() error {
 func (t *Table) ToRow(raw []interface{}) *Row {
 	return &Row{
 		Table: t,
-		ID:    t.PkOfRow(raw),
 		Data:  raw,
 	}
 }

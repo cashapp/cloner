@@ -236,7 +236,7 @@ func reportDiffs(diffs []Diff) error {
 			}
 		}
 		fmt.Printf("diff %v %v id=%v should=%s actual=%s\n",
-			diff.Row.Table.Name, diff.Type, diff.Row.ID, should, actual)
+			diff.Row.Table.Name, diff.Type, diff.Row.KeyValues(), should, actual)
 	}
 	return nil
 }

@@ -202,10 +202,8 @@ func (c *ChunkSnapshot) deleteRow(i int) {
 }
 
 func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
-	pk := c.Chunk.Table.PkOfRow(row)
 	r := &Row{
 		Table: c.Chunk.Table,
-		ID:    pk,
 		Data:  row,
 	}
 	if i == -1 {

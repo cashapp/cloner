@@ -16,10 +16,7 @@ type DBReader interface {
 
 type Row struct {
 	Table *Table
-	// ID is the numeric id column
-	// Deprecated: we supported multiple PKs now, KeyValues() instead
-	ID   int64
-	Data []interface{}
+	Data  []interface{}
 }
 
 // PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
@@ -38,7 +35,6 @@ func (r *Row) Updated(row []interface{}) *Row {
 	}
 	return &Row{
 		Table: r.Table,
-		ID:    r.ID,
 		Data:  row,
 	}
 }
@@ -165,7 +161,6 @@ func (s *rowStream) Next() (*Row, error) {
 	row[s.table.IDColumnIndex] = id
 	return &Row{
 		Table: s.table,
-		ID:    id,
 		Data:  row,
 	}, nil
 }

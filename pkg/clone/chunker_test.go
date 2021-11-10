@@ -215,14 +215,14 @@ func TestChunker(t *testing.T) {
 			// to make sure we don't miss anything
 			retry := RetryOptions{Timeout: time.Second}
 
-			var idsInChunks []int64
+			var idsInChunks [][]interface{}
 			for i, chunk := range chunks {
 				buffer, err := bufferChunk(ctx, retry, db, "source", chunk)
 				require.NoError(t, err)
 				rows, err := readAll(buffer)
 				require.NoError(t, err)
 				for _, row := range rows {
-					idsInChunks = append(idsInChunks, row.ID)
+					idsInChunks = append(idsInChunks, row.KeyValues())
 				}
 				if i < len(chunks)-1 {
 					assert.Equal(t, tables[0].Config.ChunkSize, len(rows))
@@ -237,16 +237,12 @@ func TestChunker(t *testing.T) {
 				test.table,
 				strings.Join(keyColumns, ",")))
 			require.NoError(t, err)
-			var idsInDB []int64
-			row := make([]int64, len(keyColumns))
+			var idsInDB [][]interface{}
 			scanArgs := make([]interface{}, len(keyColumns))
-			for i := range row {
-				scanArgs[i] = &row[i]
-			}
 			for rows.Next() {
 				err = rows.Scan(scanArgs...)
 				require.NoError(t, err)
-				idsInDB = append(idsInDB, row[len(row)-1])
+				idsInDB = append(idsInDB, scanArgs)
 			}
 			assert.Equal(t, idsInDB, idsInChunks)
 		})

@@ -6,7 +6,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"net/http"
 	_ "net/http/pprof"
 	"time"
 
@@ -151,20 +150,10 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	http.HandleFunc("/snapshot", func(writer http.ResponseWriter, request *http.Request) {
-		go func() {
-			err := replicator.snapshot(context.Background())
-			if err != nil {
-				logrus.Errorf("failed to snapshot: %v", err)
-			}
-		}()
-		// TODO return status/errors back to the caller?
-		_, _ = writer.Write([]byte(""))
-	})
 	if cmd.DoSnapshot {
 		go func() {
 			time.Sleep(cmd.DoSnapshotDelay)
-			err := replicator.snapshot(context.Background())
+			err := replicator.snapshot(ctx)
 			if err != nil {
 				logrus.Errorf("failed to snapshot: %v", err)
 			}

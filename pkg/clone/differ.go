@@ -177,13 +177,14 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 
 		if sourceRow != nil {
 			if targetRow != nil {
-				if sourceRow.ID < targetRow.ID {
+				comparison := genericCompareKeys(sourceRow.KeyValues(), targetRow.KeyValues())
+				if comparison < 0 {
 					result = append(result, Diff{Insert, sourceRow, nil})
 					diffCount.WithLabelValues(table.Name, "insert").Inc()
 					hasDiff = true
 					advanceSource = true
 					advanceTarget = false
-				} else if sourceRow.ID > targetRow.ID {
+				} else if comparison > 0 {
 					result = append(result, Diff{Delete, targetRow, nil})
 					diffCount.WithLabelValues(table.Name, "delete").Inc()
 					hasDiff = true

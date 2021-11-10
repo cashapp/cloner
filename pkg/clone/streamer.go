@@ -16,22 +16,24 @@ type DBReader interface {
 
 type Row struct {
 	Table *Table
-	ID    int64
-	Data  []interface{}
+	// ID is the numeric id column
+	// Deprecated: we supported multiple PKs now, KeyValues() instead
+	ID   int64
+	Data []interface{}
 }
 
 // PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
 func (r *Row) PkAfterOrEqual(row []interface{}) bool {
-	return r.ID >= r.Table.PkOfRow(row)
+	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) >= 0
 }
 
 // PkEqual returns true if the pk of the row is equal to the PK of the receiver row
 func (r *Row) PkEqual(row []interface{}) bool {
-	return r.ID == r.Table.PkOfRow(row)
+	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) == 0
 }
 
 func (r *Row) Updated(row []interface{}) *Row {
-	if r.Table.PkOfRow(row) != r.ID {
+	if genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) != 0 {
 		panic("updating row with another ID")
 	}
 	return &Row{
@@ -42,6 +44,9 @@ func (r *Row) Updated(row []interface{}) *Row {
 }
 
 func (r *Row) KeyValues() []interface{} {
+	if len(r.Table.KeyColumns) == 0 {
+		panic("need key columns")
+	}
 	values := make([]interface{}, len(r.Table.KeyColumns))
 	for i, index := range r.Table.KeyColumnIndexes {
 		values[i] = r.Data[index]
@@ -174,7 +179,7 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	columns := table.ColumnList
 
 	where, params := chunkWhere(chunk, extraWhereClause)
-	stmt := fmt.Sprintf("select %s %s from %s %s order by %s asc", columns, hint, table.Name, where,
+	stmt := fmt.Sprintf("select %s %s from %s %s order by %s", columns, hint, table.Name, where,
 		table.KeyColumnList)
 	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {

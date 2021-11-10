@@ -15,9 +15,14 @@ type testRow struct {
 
 func (testRow testRow) toRow(batchSize int) *Row {
 	return &Row{
-		Table: &Table{Name: testRow.table, Config: TableConfig{WriteBatchSize: batchSize}},
-		ID:    testRow.id,
-		Data:  []interface{}{testRow.data},
+		Table: &Table{
+			Name:             testRow.table,
+			KeyColumns:       []string{"id"},
+			KeyColumnIndexes: []int{0},
+			Config:           TableConfig{WriteBatchSize: batchSize},
+		},
+		ID:   testRow.id,
+		Data: []interface{}{testRow.id, testRow.data},
 	}
 }
 
@@ -35,7 +40,7 @@ func toTestDiff(diff Diff) testDiff {
 }
 
 func toTestRow(row *Row) testRow {
-	return testRow{row.ID, row.Table.Name, row.Data[0].(string)}
+	return testRow{row.ID, row.Table.Name, row.Data[1].(string)}
 }
 
 func TestStreamDiff(t *testing.T) {
@@ -133,7 +138,9 @@ func TestStreamDiff(t *testing.T) {
 				{id: 1, data: "A"},
 				{id: 3, data: "C"},
 			},
-			diff: []testDiff{{Insert, testRow{id: 2, data: "B"}}},
+			diff: []testDiff{
+				{Insert, testRow{id: 2, data: "B"}},
+			},
 		},
 		{
 			name: "2 inserted middle",

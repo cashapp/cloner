@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dlmiddlecote/sqlstats"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,13 +32,12 @@ func init() {
 
 // Snapshotter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type Snapshotter struct {
-	config       Replicate
-	source       *sql.DB
-	sourceSchema string
-	target       *sql.DB
+	config          Replicate
+	source          *sql.DB
+	sourceCollector *sqlstats.StatsCollector
+	sourceSchema    string
 
 	sourceRetry RetryOptions
-	targetRetry RetryOptions
 
 	// chunks receives chunks from the chunker, they are processed on the main replication thread and appended to ongoingChunks below
 	chunks chan Chunk
@@ -48,7 +48,7 @@ type Snapshotter struct {
 
 func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 	var err error
-	r := Snapshotter{
+	s := Snapshotter{
 		config: config,
 		sourceRetry: RetryOptions{
 			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
@@ -56,40 +56,25 @@ func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		targetRetry: RetryOptions{
-			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-			AcquireMetric: readLimiterDelay.WithLabelValues("target"),
-			MaxRetries:    config.ReadRetries,
-			Timeout:       config.ReadTimeout,
-		},
 		chunks: make(chan Chunk, config.ChunkParallelism),
 	}
-	r.sourceSchema, err = r.config.Source.Schema()
+	s.sourceSchema, err = s.config.Source.Schema()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	source, err := r.config.Source.DB()
+	source, err := s.config.Source.DB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	r.source = source
+	s.source = source
+	s.sourceCollector = sqlstats.NewStatsCollector("source", source)
 
-	target, err := r.config.Target.DB()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	r.target = target
-
-	return &r, nil
+	return &s, nil
 }
 
 func (s *Snapshotter) Init(ctx context.Context) error {
 	err := s.source.PingContext(ctx)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	err = s.target.PingContext(ctx)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -105,6 +90,9 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 }
 
 func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
+	prometheus.MustRegister(s.sourceCollector)
+	defer prometheus.Unregister(s.sourceCollector)
+
 	for {
 		err := s.maybeSnapshotChunks(ctx)
 		if err != nil {

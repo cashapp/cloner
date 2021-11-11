@@ -34,184 +34,227 @@ func (d testDiff) toDiff(batchSize int) Diff {
 	return Diff{d.diffType, d.row.toRow(batchSize), nil}
 }
 
-func toTestDiff(diff Diff) testDiff {
-	return testDiff{diff.Type, toTestRow(diff.Row)}
-}
-
 func toTestRow(row *Row) testRow {
 	return testRow{row.KeyValues()[0].(int64), row.Table.Name, row.Data[1].(string)}
 }
 
 func TestStreamDiff(t *testing.T) {
-	table := &Table{Name: "foobar"}
+	customers := &Table{
+		Name:             "customers",
+		KeyColumns:       []string{"id"},
+		KeyColumnIndexes: []int{0},
+		Config:           TableConfig{WriteBatchSize: 5},
+	}
+	transactions := &Table{
+		Name:             "transactions",
+		KeyColumns:       []string{"customer_id", "id"},
+		KeyColumnIndexes: []int{0, 1},
+		Config:           TableConfig{WriteBatchSize: 5},
+	}
 	tests := []struct {
 		name   string
-		source []testRow
-		target []testRow
-		diff   []testDiff
+		table  *Table
+		source []*Row
+		target []*Row
+		diff   []Diff
 	}{
 		{
 			name:   "empty",
+			table:  customers,
 			source: nil,
 			target: nil,
 			diff:   nil,
 		},
 		{
-			name: "same",
-			source: []testRow{
-				{id: 1, data: "A"},
+			name:  "same",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
 			diff: nil,
 		},
 		{
-			name: "1 new",
-			source: []testRow{
-				{id: 1, data: "A"},
+			name:  "1 new",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
 			target: nil,
-			diff:   []testDiff{{Insert, testRow{id: 1, data: "A"}}},
+			diff:   []Diff{{Insert, &Row{Table: customers, Data: []interface{}{1, "A"}}, nil}},
 		},
 		{
 			name:   "1 deleted",
+			table:  customers,
 			source: nil,
-			target: []testRow{
-				{id: 1, data: "A"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
-			diff: []testDiff{{Delete, testRow{id: 1, data: "A"}}},
+			diff: []Diff{{Delete, &Row{Table: customers, Data: []interface{}{1, "A"}}, nil}},
 		},
 		{
-			name: "1 updated",
-			source: []testRow{
-				{id: 1, data: "B"},
+			name:  "1 updated",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "B"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
-			diff: []testDiff{{Update, testRow{id: 1, data: "B"}}},
+			diff: []Diff{{Update,
+				&Row{Table: customers, Data: []interface{}{1, "B"}},
+				&Row{Table: customers, Data: []interface{}{1, "A"}}}},
 		},
 		{
-			name: "1 same 1 inserted",
-			source: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
+			name:  "1 same 1 inserted",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
-			diff: []testDiff{{Insert, testRow{id: 2, data: "B"}}},
+			diff: []Diff{{Insert, &Row{Table: customers, Data: []interface{}{2, "B"}}, nil}},
 		},
 		{
-			name: "1 same 1 deleted",
-			source: []testRow{
-				{id: 1, data: "A"},
+			name:  "1 same 1 deleted",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
 			},
-			diff: []testDiff{{Delete, testRow{id: 2, data: "B"}}},
+			diff: []Diff{{Delete, &Row{Table: customers, Data: []interface{}{2, "B"}}, nil}},
 		},
 		{
-			name: "1 same 1 updated",
-			source: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
+			name:  "1 same 1 updated",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "A"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "A"}},
 			},
-			diff: []testDiff{{Update, testRow{id: 2, data: "B"}}},
+			diff: []Diff{{Update, &Row{Table: customers, Data: []interface{}{2, "B"}}, &Row{Table: customers, Data: []interface{}{2, "A"}}}},
 		},
 		{
-			name: "1 inserted middle",
-			source: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
-				{id: 3, data: "C"},
+			name:  "1 inserted middle",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
+				{Table: customers, Data: []interface{}{3, "C"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
-				{id: 3, data: "C"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{3, "C"}},
 			},
-			diff: []testDiff{
-				{Insert, testRow{id: 2, data: "B"}},
-			},
-		},
-		{
-			name: "2 inserted middle",
-			source: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
-				{id: 3, data: "C"},
-				{id: 4, data: "D"},
-			},
-			target: []testRow{
-				{id: 1, data: "A"},
-				{id: 4, data: "D"},
-			},
-			diff: []testDiff{
-				{Insert, testRow{id: 2, data: "B"}},
-				{Insert, testRow{id: 3, data: "C"}},
+			diff: []Diff{
+				{Insert, &Row{Table: customers, Data: []interface{}{2, "B"}}, nil},
 			},
 		},
 		{
-			name: "2 deleted middle",
-			source: []testRow{
-				{id: 1, data: "A"},
-				{id: 4, data: "D"},
+			name:  "2 inserted middle",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
+				{Table: customers, Data: []interface{}{3, "C"}},
+				{Table: customers, Data: []interface{}{4, "D"}},
 			},
-			target: []testRow{
-				{id: 1, data: "A"},
-				{id: 2, data: "B"},
-				{id: 3, data: "C"},
-				{id: 4, data: "D"},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{4, "D"}},
 			},
-			diff: []testDiff{
-				{Delete, testRow{id: 2, data: "B"}},
-				{Delete, testRow{id: 3, data: "C"}},
+			diff: []Diff{
+				{Insert, &Row{Table: customers, Data: []interface{}{2, "B"}}, nil},
+				{Insert, &Row{Table: customers, Data: []interface{}{3, "C"}}, nil},
+			},
+		},
+		{
+			name:  "2 deleted middle",
+			table: customers,
+			source: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{4, "D"}},
+			},
+			target: []*Row{
+				{Table: customers, Data: []interface{}{1, "A"}},
+				{Table: customers, Data: []interface{}{2, "B"}},
+				{Table: customers, Data: []interface{}{3, "C"}},
+				{Table: customers, Data: []interface{}{4, "D"}},
+			},
+			diff: []Diff{
+				{Delete, &Row{Table: customers, Data: []interface{}{2, "B"}}, nil},
+				{Delete, &Row{Table: customers, Data: []interface{}{3, "C"}}, nil},
+			},
+		},
+		{
+			name:  "multi column 1 same 1 deleted",
+			table: transactions,
+			source: []*Row{
+				{Table: transactions, Data: []interface{}{1, 1, "A"}},
+			},
+			target: []*Row{
+				{Table: transactions, Data: []interface{}{1, 1, "A"}},
+				{Table: transactions, Data: []interface{}{2, 1, "B"}},
+			},
+			diff: []Diff{{Delete, &Row{Table: transactions, Data: []interface{}{2, 1, "B"}}, nil}},
+		},
+		{
+			name:  "multi column 1 same 1 updated",
+			table: transactions,
+			source: []*Row{
+				{Table: transactions, Data: []interface{}{1, 1, "A"}},
+				{Table: transactions, Data: []interface{}{2, 1, "B"}},
+			},
+			target: []*Row{
+				{Table: transactions, Data: []interface{}{1, 1, "A"}},
+				{Table: transactions, Data: []interface{}{2, 1, "A"}},
+			},
+			diff: []Diff{{Update,
+				&Row{Table: transactions, Data: []interface{}{2, 1, "B"}},
+				&Row{Table: transactions, Data: []interface{}{2, 1, "A"}}}},
+		},
+		{
+			name:  "multi column new rows lower id",
+			table: transactions,
+			source: []*Row{
+				{Table: transactions, Data: []interface{}{1, 4, "A"}},
+				{Table: transactions, Data: []interface{}{2, 3, "B"}},
+				{Table: transactions, Data: []interface{}{3, 2, "C"}},
+				{Table: transactions, Data: []interface{}{4, 1, "D"}},
+			},
+			target: []*Row{
+				{Table: transactions, Data: []interface{}{1, 4, "A"}},
+				{Table: transactions, Data: []interface{}{4, 1, "D"}},
+			},
+			diff: []Diff{
+				{Insert, &Row{Table: transactions, Data: []interface{}{2, 3, "B"}}, nil},
+				{Insert, &Row{Table: transactions, Data: []interface{}{3, 2, "C"}}, nil},
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			diffs, err := StreamDiff(context.Background(), table,
-				streamTestRows(test.source, 5),
-				streamTestRows(test.target, 5))
+			diffs, err := StreamDiff(context.Background(), test.table,
+				streamRows(test.source),
+				streamRows(test.target))
 			assert.NoError(t, err)
-			var result []testDiff
-			for _, diff := range diffs {
-				result = append(result, toTestDiff(diff))
-			}
-			assert.Equal(t, test.diff, result)
+			assert.Equal(t, test.diff, diffs)
 		})
 	}
 }
 
-type testRowStreamer struct {
-	rows      []testRow
-	batchSize int
-}
-
-func (t *testRowStreamer) Close() error {
-	return nil
-}
-
-func (t *testRowStreamer) Next() (*Row, error) {
-	if len(t.rows) == 0 {
-		return nil, nil
-	}
-	testRow := t.rows[0]
-	// chop head
-	t.rows = t.rows[1:]
-	return testRow.toRow(t.batchSize), nil
-}
-
-func streamTestRows(rows []testRow, batchSize int) RowStream {
-	return &testRowStreamer{rows, batchSize}
+func streamRows(rows []*Row) RowStream {
+	return &bufferStream{rows}
 }
 
 func TestRowsEqual(t *testing.T) {

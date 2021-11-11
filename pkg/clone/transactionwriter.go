@@ -539,7 +539,7 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 		logrus.WithContext(ctx).
 			WithField("task", "replicate").
 			WithField("table", mutation.Table.Name).
-			Infof("'%v' snapshot write done", mutation.Table.Name)
+			Infof("'%v' snapshot done", mutation.Table.Name)
 	}
 
 	return nil

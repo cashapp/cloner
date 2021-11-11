@@ -308,8 +308,6 @@ func (s *Snapshotter) findOngoingChunkFromWatermark(mutation Mutation) (*ChunkSn
 }
 
 func (s *Snapshotter) removeOngoingChunk(chunk *ChunkSnapshot) {
-	logger := logrus.WithField("task", "replicate")
-
 	n := 0
 	for _, x := range s.ongoingChunks {
 		if x != chunk {
@@ -318,10 +316,6 @@ func (s *Snapshotter) removeOngoingChunk(chunk *ChunkSnapshot) {
 		}
 	}
 	s.ongoingChunks = s.ongoingChunks[:n]
-	if chunk.Chunk.Last {
-		logger.WithField("table", chunk.Chunk.Table.Name).
-			Infof("'%s' snapshot read done", chunk.Chunk.Table.Name)
-	}
 }
 
 // snapshot runs a snapshot asynchronously unless a snapshot is already running

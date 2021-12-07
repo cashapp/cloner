@@ -231,6 +231,9 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 
 	mysqlTable, err := mysqlschema.NewTableFromSqlDB(conn, internalTableSchema, tableName)
 	if err != nil {
+		mysqlTable, err = mysqlschema.NewTableFromSqlDB(conn, schema, tableName)
+	}
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 

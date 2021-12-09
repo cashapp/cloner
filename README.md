@@ -11,10 +11,6 @@ It needs to solve for the following:
  * Minimize the amount of writes required to "rebuild"/"repair" a clone if replication is broken - it's much more expensive to write
  * At some point be open sourceable so not too many Cash specific hard wired assumptions (there will be a few of those though)
 
-## Restrictions
-
- * Single integer id primary key (we will eventually relax this restriction)
-
 ## Best effort cloning
 
 It performs a diffing clone ("repair") like this:
@@ -90,8 +86,6 @@ In summary the consistent cloning algorithm works by this:
 It needs write access to the source to be able to write to the watermark table.
 
 ## Parallel replication
-
-(This is currently being implemented.)
 
 Runs transactions in parallel unless they are causal. Transactions A and B are causal iff 1) A happens before transaction B in the global ordering and 2) the set of primary keys they write to overlap.
 

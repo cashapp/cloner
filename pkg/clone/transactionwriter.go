@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dlmiddlecote/sqlstats"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/mightyguava/autotx"
 	"github.com/mitchellh/hashstructure/v2"
@@ -29,23 +30,17 @@ type DBWriter interface {
 
 // TransactionWriter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type TransactionWriter struct {
-	config Replicate
-	target *sql.DB
+	config          Replicate
+	target          *sql.DB
+	targetCollector *sqlstats.StatsCollector
 
-	sourceRetry RetryOptions
 	targetRetry RetryOptions
 }
 
 func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
 	var err error
-	r := TransactionWriter{
+	w := TransactionWriter{
 		config: config,
-		sourceRetry: RetryOptions{
-			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-			AcquireMetric: readLimiterDelay.WithLabelValues("source"),
-			MaxRetries:    config.ReadRetries,
-			Timeout:       config.ReadTimeout,
-		},
 		targetRetry: RetryOptions{
 			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
 			AcquireMetric: readLimiterDelay.WithLabelValues("target"),
@@ -53,13 +48,14 @@ func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
 			Timeout:       config.ReadTimeout,
 		},
 	}
-	target, err := r.config.Target.DB()
+	target, err := w.config.Target.DB()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	r.target = target
+	w.target = target
+	w.targetCollector = sqlstats.NewStatsCollector("target", target)
 
-	return &r, nil
+	return &w, nil
 }
 
 func (w *TransactionWriter) Init(ctx context.Context) error {
@@ -79,6 +75,9 @@ func (w *TransactionWriter) Init(ctx context.Context) error {
 }
 
 func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+	prometheus.MustRegister(w.targetCollector)
+	defer prometheus.Unregister(w.targetCollector)
+
 	if w.config.ReplicationParallelism == 1 {
 		return errors.WithStack(w.runSequential(ctx, b, transactions))
 	} else {
@@ -539,7 +538,7 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 		logrus.WithContext(ctx).
 			WithField("task", "replicate").
 			WithField("table", mutation.Table.Name).
-			Infof("'%v' snapshot write done", mutation.Table.Name)
+			Infof("'%v' snapshot done", mutation.Table.Name)
 	}
 
 	return nil

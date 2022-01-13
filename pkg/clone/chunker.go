@@ -20,9 +20,9 @@ type Chunk struct {
 	// Seq is the sequence number of chunks for this table
 	Seq int64
 
-	// Start is the first id of the chunk inclusive
+	// Start is the first id of the chunk inclusive. If nil, chunk starts at -inf.
 	Start []interface{}
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively). If nil, chunk ends at +inf.
 	End []interface{} // exclusive
 
 	// First chunk of a table

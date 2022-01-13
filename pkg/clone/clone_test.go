@@ -3,8 +3,9 @@ package clone
 import (
 	"context"
 	"database/sql"
-	"github.com/mightyguava/autotx"
 	"testing"
+
+	"github.com/mightyguava/autotx"
 	"vitess.io/vitess/go/vt/proto/topodata"
 
 	"github.com/alecthomas/kong"
@@ -109,7 +110,7 @@ func inShard(id uint64, shard []*topodata.KeyRange) bool {
 	return false
 }
 
-func TestShardedCloneWithTargetData(t *testing.T) {
+func TestOneShardCloneWithTargetData(t *testing.T) {
 	err := startAll()
 	assert.NoError(t, err)
 
@@ -320,4 +321,117 @@ func TestCloneNoDiff(t *testing.T) {
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
 	assert.Equal(t, 52, len(diffs))
+}
+
+func TestAllShardsCloneWithTargetData(t *testing.T) {
+	err := startAll()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+	target := tidbContainer.Config()
+
+	rowCount := 500
+	// Insert some data to source
+	err = insertBunchaData(context.Background(), source, rowCount)
+	assert.NoError(t, err)
+
+	// Insert even more data to target; rows which don't exist in any source shard should get deleted.
+	err = insertBunchaData(context.Background(), target, rowCount+100)
+	assert.NoError(t, err)
+
+	// Clone left shard, -80
+	source.Database = "customer/-80@replica"
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
+		},
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+				"transactions": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(customer_id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+					KeyColumns:     []string{"customer_id", "id"},
+				},
+			},
+		},
+	}
+	clone := &Clone{
+		WriterConfig{
+			ReaderConfig:            readerConfig,
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		},
+	}
+	err = kong.ApplyDefaults(clone)
+	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
+	clone.UseCRC32Checksum = true
+	assert.NoError(t, err)
+	err = clone.Run()
+	assert.NoError(t, err)
+
+	// Clone right shard, 80-
+	source.Database = "customer/80-@replica"
+	readerConfig = ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
+		},
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to 80-
+					TargetWhere:    "(vitess_hash(id) >> 56) >= 128 and (vitess_hash(id) >> 56) < 256",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+				"transactions": {
+					// equivalent to 80-
+					TargetWhere:    "(vitess_hash(customer_id) >> 56) >= 128 and (vitess_hash(customer_id) >> 56) < 256",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+					KeyColumns:     []string{"customer_id", "id"},
+				},
+			},
+		},
+	}
+	clone = &Clone{
+		WriterConfig{
+			ReaderConfig:            readerConfig,
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		},
+	}
+	err = kong.ApplyDefaults(clone)
+	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
+	clone.UseCRC32Checksum = true
+	assert.NoError(t, err)
+	err = clone.Run()
+	assert.NoError(t, err)
+
+	// Sanity check the number of rows
+	source.Database = "customer@master"
+	sourceRowCount, err := countRows(source, "customers")
+	assert.NoError(t, err)
+	targetRowCount, err := countRows(target, "customers")
+	assert.NoError(t, err)
+	assert.Equal(t, sourceRowCount, targetRowCount)
+
+	// Do a full checksum
+	checksum := &Checksum{
+		ReaderConfig: readerConfig,
+	}
+	err = kong.ApplyDefaults(checksum)
+	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
+	clone.UseCRC32Checksum = true
+	assert.NoError(t, err)
+	diffs, err := checksum.run(context.Background())
+	assert.NoError(t, err)
+	err = reportDiffs(diffs)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(diffs))
 }

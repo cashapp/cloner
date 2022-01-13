@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"strings"
-	"testing"
-	"time"
 )
 
 type testChunk struct {
@@ -34,7 +35,9 @@ func TestChunker(t *testing.T) {
 			table:  "customers",
 			config: TableConfig{ChunkSize: 10},
 			rows:   nil,
-			chunks: nil,
+			chunks: []testChunk{
+				{Start: nil, End: nil, First: true, Last: true},
+			},
 		},
 		{
 			name:    "single column one row",
@@ -45,7 +48,9 @@ func TestChunker(t *testing.T) {
 				{1, "Customer #1"},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1}, End: []int64{2}, First: true, Last: true},
+				{Start: nil, End: []int64{1}, First: true},
+				{Start: []int64{1}, End: []int64{2}},
+				{Start: []int64{2}, End: nil, Last: true},
 			},
 		},
 		{
@@ -59,9 +64,11 @@ func TestChunker(t *testing.T) {
 				{3, "Customer #3"},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1}, End: []int64{2}, First: true},
+				{Start: nil, End: []int64{1}, First: true},
+				{Start: []int64{1}, End: []int64{2}},
 				{Start: []int64{2}, End: []int64{3}},
-				{Start: []int64{3}, End: []int64{4}, Last: true},
+				{Start: []int64{3}, End: []int64{4}},
+				{Start: []int64{4}, End: nil, Last: true},
 			},
 		},
 		{
@@ -75,8 +82,10 @@ func TestChunker(t *testing.T) {
 				{3, "Customer #3"},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1}, End: []int64{3}, First: true},
-				{Start: []int64{3}, End: []int64{4}, Last: true},
+				{Start: nil, End: []int64{1}, First: true},
+				{Start: []int64{1}, End: []int64{3}},
+				{Start: []int64{3}, End: []int64{4}},
+				{Start: []int64{4}, End: nil, Last: true},
 			},
 		},
 		{
@@ -86,11 +95,13 @@ func TestChunker(t *testing.T) {
 			columns: []string{"id", "name"},
 			rows:    customerRows(95),
 			chunks: []testChunk{
-				{Start: []int64{1}, End: []int64{21}, First: true},
+				{Start: nil, End: []int64{1}, First: true},
+				{Start: []int64{1}, End: []int64{21}},
 				{Start: []int64{21}, End: []int64{41}},
 				{Start: []int64{41}, End: []int64{61}},
 				{Start: []int64{61}, End: []int64{81}},
-				{Start: []int64{81}, End: []int64{96}, Last: true},
+				{Start: []int64{81}, End: []int64{96}},
+				{Start: []int64{96}, End: nil, Last: true},
 			},
 		},
 		{
@@ -98,7 +109,9 @@ func TestChunker(t *testing.T) {
 			table:  "transactions",
 			config: TableConfig{KeyColumns: []string{"customer_id", "id"}, ChunkSize: 10},
 			rows:   nil,
-			chunks: nil,
+			chunks: []testChunk{
+				{Start: nil, End: nil, First: true, Last: true},
+			},
 		},
 		{
 			name:    "two columns one row",
@@ -109,7 +122,9 @@ func TestChunker(t *testing.T) {
 				{1, 1, "Description #1", 1000},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1, 1}, End: []int64{1, 2}, First: true, Last: true},
+				{Start: nil, End: []int64{1, 1}, First: true},
+				{Start: []int64{1, 1}, End: []int64{1, 2}},
+				{Start: []int64{1, 2}, End: nil, Last: true},
 			},
 		},
 		{
@@ -126,8 +141,10 @@ func TestChunker(t *testing.T) {
 				{2, 5, "Description #5", 5000},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1, 1}, End: []int64{2, 4}, First: true},
-				{Start: []int64{2, 4}, End: []int64{2, 6}, Last: true},
+				{Start: nil, End: []int64{1, 1}, First: true},
+				{Start: []int64{1, 1}, End: []int64{2, 4}},
+				{Start: []int64{2, 4}, End: []int64{2, 6}},
+				{Start: []int64{2, 6}, End: nil, Last: true},
 			},
 		},
 		{
@@ -144,8 +161,10 @@ func TestChunker(t *testing.T) {
 				{2, 2, "Description #2", 2000},
 			},
 			chunks: []testChunk{
-				{Start: []int64{1, 3}, End: []int64{2, 1}, First: true},
-				{Start: []int64{2, 1}, End: []int64{2, 3}, Last: true},
+				{Start: nil, End: []int64{1, 3}, First: true},
+				{Start: []int64{1, 3}, End: []int64{2, 1}},
+				{Start: []int64{2, 1}, End: []int64{2, 3}},
+				{Start: []int64{2, 3}, End: nil, Last: true},
 			},
 		},
 		{
@@ -155,7 +174,8 @@ func TestChunker(t *testing.T) {
 			columns: []string{"customer_id", "id", "description", "amount_cents"},
 			rows:    transactionRows(95, 3),
 			chunks: []testChunk{
-				{Start: []int64{0, 1}, End: []int64{3, 11}, First: true},
+				{Start: nil, End: []int64{0, 1}, First: true},
+				{Start: []int64{0, 1}, End: []int64{3, 11}},
 				{Start: []int64{3, 11}, End: []int64{7, 21}},
 				{Start: []int64{7, 21}, End: []int64{10, 31}},
 				{Start: []int64{10, 31}, End: []int64{13, 41}},
@@ -164,7 +184,9 @@ func TestChunker(t *testing.T) {
 				{Start: []int64{20, 61}, End: []int64{23, 71}},
 				{Start: []int64{23, 71}, End: []int64{27, 81}},
 				{Start: []int64{27, 81}, End: []int64{30, 91}},
-				{Start: []int64{30, 91}, End: []int64{31, 96}, Last: true}},
+				{Start: []int64{30, 91}, End: []int64{31, 96}},
+				{Start: []int64{31, 96}, End: nil, Last: true},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -224,7 +246,7 @@ func TestChunker(t *testing.T) {
 				for _, row := range rows {
 					idsInChunks = append(idsInChunks, row.KeyValues())
 				}
-				if i < len(chunks)-1 {
+				if i > 0 && i < len(chunks)-2 {
 					assert.Equal(t, tables[0].Config.ChunkSize, len(rows))
 				}
 			}

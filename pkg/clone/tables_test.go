@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"github.com/go-mysql-org/go-mysql/schema"
 	"testing"
 	"time"
 
@@ -47,8 +48,6 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 }
 
 func TestLoadTablesUnshardedVitess(t *testing.T) {
-	t.Skip("unsharded vitess as a source is not currently supported")
-
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -77,13 +76,42 @@ func TestLoadTablesUnshardedVitess(t *testing.T) {
 				"crc32(ifnull(`name`, 0))",
 			},
 			ColumnList: "`id`,`name`",
+			MysqlTable: &schema.Table{
+				Schema: "customer",
+				Name:   "customers",
+				Columns: []schema.TableColumn{
+					{
+						Name:    "id",
+						Type:    1,
+						RawType: "bigint(20)",
+						IsAuto:  true,
+					},
+					{
+						Name:      "name",
+						Type:      5,
+						Collation: "utf8mb4_general_ci",
+						RawType:   "varchar(255)",
+						MaxSize:   255,
+					},
+				},
+				Indexes: []*schema.Index{
+					{
+						Name: "PRIMARY",
+						Columns: []string{
+							"id",
+						},
+						Cardinality: []uint64{
+							1,
+						},
+					},
+				},
+				PKColumns: []int{0},
+			},
 		},
 	}, tables)
 }
 
 func TestLoadTablesTiDB(t *testing.T) {
-	t.Skip("unsharded vitess as a source is not currently supported")
-
 	err := startTidb()
 	assert.NoError(t, err)
 
@@ -111,6 +139,37 @@ func TestLoadTablesTiDB(t *testing.T) {
 				"crc32(ifnull(`name`, 0))",
 			},
 			ColumnList: "`id`,`name`",
+			MysqlTable: &schema.Table{
+				Schema: "mydatabase",
+				Name:   "customers",
+				Columns: []schema.TableColumn{
+					{
+						Name:    "id",
+						Type:    1,
+						RawType: "bigint(20)",
+						IsAuto:  true,
+					},
+					{
+						Name:      "name",
+						Type:      5,
+						Collation: "utf8mb4_bin",
+						RawType:   "varchar(255)",
+						MaxSize:   255,
+					},
+				},
+				Indexes: []*schema.Index{
+					{
+						Name: "PRIMARY",
+						Columns: []string{
+							"id",
+						},
+						Cardinality: []uint64{
+							1,
+						},
+					},
+				},
+				PKColumns: []int{0},
+			},
 		},
 	}, tables)
 }

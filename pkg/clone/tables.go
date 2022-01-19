@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"math/rand"
 	"strings"
 
@@ -27,6 +28,7 @@ type Table struct {
 	Columns       []string
 	ColumnsQuoted []string
 	CRC32Columns  []string
+	// ColumnList is a comma separated list of quoted strings
 	ColumnList    string
 	EstimatedRows int64
 
@@ -201,26 +203,18 @@ func contains(strings []string, str string) bool {
 func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn *sql.DB, schema, tableName string, tableConfig TableConfig) (*Table, error) {
 	var err error
 	var rows *sql.Rows
+	// Figure out the schema name, on Vitess information_schema doesn't always match the schema name
 	var internalTableSchema string
-	if databaseType == MySQL {
-		rows, err = conn.QueryContext(ctx,
-			"select table_schema from information_schema.tables where table_schema = ? and table_name = ?",
-			schema, tableName)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else if databaseType == Vitess {
-		rows, err = conn.QueryContext(ctx,
-			"select table_schema from information_schema.columns where table_name = ? and table_schema like ?",
-			tableName, fmt.Sprintf("vt_%s%%", schema))
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else {
-		return nil, errors.Errorf("Not supported: %v", databaseType)
+	rows, err = conn.QueryContext(ctx,
+		`
+		select table_schema from information_schema.tables 
+		where table_name = ? and (table_schema like ? or table_schema = ?)
+		`,
+		tableName, fmt.Sprintf("vt_%s%%", schema), schema)
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
+	defer rows.Close()
 	if !rows.Next() {
 		return nil, errors.Errorf("table %v not found in information_schema", tableName)
 	}
@@ -237,31 +231,11 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		return nil, errors.WithStack(err)
 	}
 
-	if databaseType == MySQL {
-		rows, err = conn.QueryContext(ctx,
-			"select column_name from information_schema.columns where table_schema = ? and table_name = ?",
-			schema, tableName)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else if databaseType == Vitess {
-		rows, err = conn.QueryContext(ctx,
-			"select column_name from information_schema.columns where table_name = ? and table_schema like ?",
-			tableName, fmt.Sprintf("vt_%s%%", schema))
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else {
-		return nil, errors.Errorf("Not supported: %v", databaseType)
-	}
 	var columnNames []string
 	var columnNamesQuoted []string
 	var columnNamesCRC32 []string
-	for rows.Next() {
-		var columnName string
-		err := rows.Scan(&columnName)
+	for _, column := range mysqlTable.Columns {
+		columnName := column.Name
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -282,9 +256,9 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		return nil, errors.WithStack(err)
 	}
 
-	estimatedRows, err := estimatedRows(ctx, databaseType, conn, schema, tableName)
+	estimatedRows, err := estimatedRows(ctx, conn, mysqlTable)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		logrus.Warn(err)
 	}
 
 	if tableConfig.ChunkSize == 0 {
@@ -339,30 +313,19 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	return table, nil
 }
 
-func estimatedRows(ctx context.Context, databaseType DataSourceType, conn DBReader, schema string, tableName string) (int64, error) {
+func estimatedRows(ctx context.Context, conn DBReader, mysqlTable *mysqlschema.Table) (int64, error) {
 	var err error
 	var rows *sql.Rows
-	if databaseType == MySQL {
-		rows, err = conn.QueryContext(ctx,
-			"select round(data_length/avg_row_length) from information_schema.tables where table_schema = ? and table_name = ?",
-			schema, tableName)
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else if databaseType == Vitess {
-		rows, err = conn.QueryContext(ctx,
-			"select round(data_length/avg_row_length) from information_schema.tables where table_name = ? and table_schema like ?",
-			tableName, fmt.Sprintf("vt_%s%%", schema))
-		if err != nil {
-			return 0, errors.WithStack(err)
-		}
-		defer rows.Close()
-	} else {
-		return 0, errors.Errorf("not supported: %v", databaseType)
+
+	rows, err = conn.QueryContext(ctx,
+		"select round(data_length/avg_row_length) from information_schema.tables where table_schema = ? and table_name = ?",
+		mysqlTable.Schema, mysqlTable.Name)
+	if err != nil {
+		return 0, errors.WithStack(err)
 	}
+	defer rows.Close()
 	if !rows.Next() {
-		return 0, errors.Errorf("could not estimate number of rows of table %v.%v", schema, tableName)
+		return 0, errors.Errorf("could not estimate number of rows of table %v.%v", mysqlTable.Schema, mysqlTable.Name)
 	}
 
 	var estimatedRows *int64

@@ -205,7 +205,7 @@ func (c DBConfig) Schema() (string, error) {
 			return "", nil
 		}
 		if last != -1 {
-			schema = schema[0 : last-1]
+			schema = schema[0:last]
 		}
 		return schema, nil
 	}

@@ -50,18 +50,6 @@ func (t *Table) PkOfRow(row []interface{}) int64 {
 	return i
 }
 
-func (t *Table) Validate() error {
-	// Validate which PK columns we currently support
-	if len(t.MysqlTable.PKColumns) != 1 {
-		return errors.Errorf("currently only support a single PK column")
-	}
-	pkColumn := t.MysqlTable.GetPKColumn(0)
-	if pkColumn.Type != mysqlschema.TYPE_NUMBER {
-		return errors.Errorf("currently only support integer PK column")
-	}
-	return nil
-}
-
 func (t *Table) ToRow(raw []interface{}) *Row {
 	return &Row{
 		Table: t,
@@ -175,10 +163,6 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
 		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])
-		if err != nil {
-			return nil, err
-		}
-		err = table.Validate()
 		if err != nil {
 			return nil, err
 		}

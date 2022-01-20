@@ -116,7 +116,24 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 }
 
 func (c DBConfig) openMySQL() (*sql.DB, error) {
-	return sql.Open("mysql", fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.Password, c.Host, c.Database))
+	host := c.Host
+	abstractSocket := false
+	if strings.HasPrefix(host, "unix(@") {
+		// The driver can't parse the dsn with an @ sign so we hack it
+		abstractSocket = true
+		// we remove the @ sign then put it back again
+		host = strings.ReplaceAll(host, "@", "")
+	}
+	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.Password, host, c.Database)
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if abstractSocket {
+		cfg.Addr = "@" + cfg.Addr
+	}
+	connector, err := mysql.NewConnector(cfg)
+	return sql.OpenDB(connector), errors.WithStack(err)
 }
 
 func (c DBConfig) openMisk() (*sql.DB, error) {

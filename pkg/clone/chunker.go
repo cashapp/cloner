@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)
@@ -311,6 +313,11 @@ func generateTableChunks(ctx context.Context, table *Table, source *sql.DB, retr
 
 // generateTableChunksAsync generates chunks async on the current goroutine
 func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB, chunks chan Chunk, retry RetryOptions) error {
+	logger := log.WithContext(ctx).WithField("task", "chunker")
+	logger = logger.WithField("table", table.Name)
+	logger.Infof("chunking start: %s", table.Name)
+	startTime := time.Now()
+
 	chunkSize := table.Config.ChunkSize
 
 	ids := streamIds(source, table, chunkSize, retry)
@@ -382,6 +389,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			return ctx.Err()
 		}
 	}
+	logger.Infof("chunking done: %s (duration=%v)", table.Name, time.Since(startTime))
 	return nil
 }
 

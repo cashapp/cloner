@@ -564,8 +564,8 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		logger := log.WithField("task", "writer").WithField("table", w.table.Name)
-		logger.Infof("clone done: %s (inserts=%d deletes=%d updates=%d)",
+		logger := log.WithContext(ctx).WithField("task", "writer").WithField("table", w.table.Name)
+		logger.Infof("writes done: %s (inserts=%d deletes=%d updates=%d)",
 			w.table.Name, inserts, deletes, updates)
 		return nil
 	})

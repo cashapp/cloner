@@ -201,6 +201,10 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 	defer rows.Close()
 	if !rows.Next() {
+		dumpErr := dumpInformationSchema(ctx, conn)
+		if dumpErr != nil {
+			logrus.Warnf("could not dump information_schema: %v", dumpErr)
+		}
 		return nil, errors.Errorf("table %v not found in information_schema", tableName)
 	}
 	err = rows.Scan(&internalTableSchema)
@@ -298,6 +302,29 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	table.KeyColumnList = keyColumnList.String()
 
 	return table, nil
+}
+
+func dumpInformationSchema(ctx context.Context, conn *sql.DB) error {
+	var tables []string
+	rows, err := conn.QueryContext(ctx,
+		` select table_schema, table_name from information_schema.tables `)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tableSchema, tableName string
+		err := rows.Scan(tableSchema, tableName)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		tables = append(tables, fmt.Sprintf("%s.%s", tableSchema, tableName))
+	}
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	logrus.Infof("all tables in information_schema: %v", strings.Join(tables, ", "))
+	return nil
 }
 
 func estimatedRows(ctx context.Context, conn DBReader, mysqlTable *mysqlschema.Table) (int64, error) {

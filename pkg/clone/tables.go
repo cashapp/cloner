@@ -209,6 +209,8 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 
 	mysqlTable, err := mysqlschema.NewTableFromSqlDB(conn, internalTableSchema, tableName)
 	if err != nil {
+		// Sometimes on Vitess the schema returned by the information_schema isn't correct, 
+		// we also try the configured schema as a fallback
 		mysqlTable, err = mysqlschema.NewTableFromSqlDB(conn, schema, tableName)
 	}
 	if err != nil {

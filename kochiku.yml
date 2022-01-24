@@ -9,3 +9,5 @@ targets:
     retry_count: 3
     requires:
       - test
+docker_compose:
+  enabled: false

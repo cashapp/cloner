@@ -24,8 +24,13 @@ for APP in ${APPS}; do
   make -n -C ./apps/${APP} pre-test &> /dev/null && make -C ./apps/${APP} pre-test
 done
 
+# The following are needed for Docker builds in Kochiku to allow ports exposed from containers spawned from CI scripts.  
+# Docker containers spawned from CI scripts will be spawned as sibling, instead of "docker in docker"
+# The "socat hack" ensures that the running container can talk to the new containers through localhost 
 if grep -q docker /proc/1/cgroup; then
   docker0_ip=$(ip route show | awk '/default/ {print $3}')
+  # kochiku worker will be responsible for cleaning up these processes
+  # Port 4000 is TiDB, 1500x are vitess
   ( socat TCP-LISTEN:4000,reuseaddr,fork  TCP:${docker0_ip}:4000 ) &
   ( socat TCP-LISTEN:15001,reuseaddr,fork  TCP:${docker0_ip}:15001 ) &
   ( socat TCP-LISTEN:15002,reuseaddr,fork  TCP:${docker0_ip}:15002 ) &

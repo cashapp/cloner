@@ -23,4 +23,12 @@ APPS=$(echo "${DIRS}" | (grep /apps || true) | sed -e 's,^.*/apps/\([^/]*\)/.*,\
 for APP in ${APPS}; do
   make -n -C ./apps/${APP} pre-test &> /dev/null && make -C ./apps/${APP} pre-test
 done
+
+if grep -q docker /proc/1/cgroup; then
+  docker0_ip=$(ip route show | awk '/default/ {print $3}')
+  ( socat TCP-LISTEN:4000,reuseaddr,fork  TCP:${docker0_ip}:4000 ) &
+  ( socat TCP-LISTEN:15001,reuseaddr,fork  TCP:${docker0_ip}:15001 ) &
+  ( socat TCP-LISTEN:15002,reuseaddr,fork  TCP:${docker0_ip}:15002 ) &
+fi
+
 go test -mod=vendor -race -run "${TESTS}" -timeout 10m -v ${DIRS}

@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/replication"
 	"io"
 	"io/ioutil"
 	"net"
@@ -15,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/replication"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pavel-v-chernykh/keystore-go"

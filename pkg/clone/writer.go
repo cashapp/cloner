@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
@@ -13,8 +16,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"strconv"
-	"strings"
 )
 
 var (

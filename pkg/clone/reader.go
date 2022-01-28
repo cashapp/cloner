@@ -3,13 +3,14 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"math/rand"
+
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"math/rand"
 )
 
 var (

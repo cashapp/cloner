@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/pkg/errors"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 // DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can
@@ -186,13 +187,17 @@ func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 	}
 
 	// Expanding the row constructor comparisons
-	c, p := expandRowConstructorComparison(table.KeyColumns, ">=", chunk.Start)
-	clauses = append(clauses, c)
-	params = append(params, p...)
+	if chunk.Start != nil {
+		c, p := expandRowConstructorComparison(table.KeyColumns, ">=", chunk.Start)
+		clauses = append(clauses, c)
+		params = append(params, p...)
+	}
 
-	c, p = expandRowConstructorComparison(table.KeyColumns, "<", chunk.End)
-	clauses = append(clauses, c)
-	params = append(params, p...)
+	if chunk.End != nil {
+		c, p := expandRowConstructorComparison(table.KeyColumns, "<", chunk.End)
+		clauses = append(clauses, c)
+		params = append(params, p...)
+	}
 
 	if len(clauses) == 0 {
 		return "", []interface{}{}

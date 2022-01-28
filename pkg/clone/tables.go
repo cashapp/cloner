@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"math/rand"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/pkg/errors"
@@ -209,7 +210,7 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 
 	mysqlTable, err := mysqlschema.NewTableFromSqlDB(conn, internalTableSchema, tableName)
 	if err != nil {
-		// Sometimes on Vitess the schema returned by the information_schema isn't correct, 
+		// Sometimes on Vitess the schema returned by the information_schema isn't correct,
 		// we also try the configured schema as a fallback
 		mysqlTable, err = mysqlschema.NewTableFromSqlDB(conn, schema, tableName)
 	}

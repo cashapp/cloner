@@ -2,9 +2,10 @@ package clone
 
 import (
 	"context"
-	"github.com/go-mysql-org/go-mysql/schema"
 	"testing"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/schema"
 
 	"github.com/stretchr/testify/assert"
 )

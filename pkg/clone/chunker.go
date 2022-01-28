@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/cenkalti/backoff/v4"
-	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)
@@ -21,9 +22,9 @@ type Chunk struct {
 	// Seq is the sequence number of chunks for this table
 	Seq int64
 
-	// Start is the first id of the chunk inclusive
+	// Start is the first id of the chunk inclusive. If nil, chunk starts at -inf.
 	Start []interface{}
-	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively)
+	// End is the first id of the next chunk (i.e. the last id of this chunk exclusively). If nil, chunk ends at +inf.
 	End []interface{} // exclusive
 
 	// First chunk of a table
@@ -44,7 +45,14 @@ func (c *Chunk) ContainsRow(row []interface{}) bool {
 }
 
 func (c *Chunk) ContainsKeys(keys []interface{}) bool {
-	return genericCompareKeys(keys, c.Start) >= 0 && genericCompareKeys(keys, c.End) < 0
+	result := true
+	if c.Start != nil {
+		result = result && genericCompareKeys(keys, c.Start) >= 0
+	}
+	if c.End != nil {
+		result = result && genericCompareKeys(keys, c.End) < 0
+	}
+	return result
 }
 
 func genericCompareKeys(a []interface{}, b []interface{}) int {
@@ -324,7 +332,6 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 
 	var err error
 	currentChunkSize := 0
-	first := true
 	var startId []interface{}
 	seq := int64(0)
 	var id []interface{}
@@ -332,6 +339,19 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
 		if errors.Is(err, io.EOF) {
+			if startId == nil {
+				// The table is empty.
+				// Emit a special chunk covering entire keyspace.
+				chunks <- Chunk{
+					Table: table,
+					Seq:   0,
+					Start: nil,
+					End:   nil,
+					First: true,
+					Last:  true,
+					Size:  0,
+				}
+			}
 			return nil
 		}
 		if err != nil {
@@ -341,6 +361,16 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 
 		if startId == nil {
 			startId = id
+			// This is the minimum source ID.
+			// Emit a special chunk covering items with keys smaller than minimum ID.
+			chunks <- Chunk{
+				Table: table,
+				Seq:   seq,
+				Start: nil,
+				End:   startId,
+				First: true,
+				Size:  0,
+			}
 		}
 
 		if currentChunkSize == chunkSize {
@@ -355,8 +385,6 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 				Seq:   seq,
 				Start: startId,
 				End:   nextId,
-				First: first,
-				Last:  !hasNext,
 				Size:  currentChunkSize,
 			}:
 			case <-ctx.Done():
@@ -365,8 +393,6 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			seq++
 			// Next id should be the next start id
 			startId = nextId
-			// We are no longer the first chunk
-			first = false
 			// We have no rows in the next chunk yet
 			currentChunkSize = 0
 		}
@@ -380,15 +406,24 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			Seq:   seq,
 			Start: startId,
 			// Make sure the End position is _after_ the final row by "adding one" to it
-			End:   nextChunkPosition(id),
-			First: first,
-			Last:  true,
-			Size:  currentChunkSize,
+			End:  nextChunkPosition(id),
+			Size: currentChunkSize,
 		}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+
+	// Emit a special chunk covering items with keys greater than maximum ID.
+	chunks <- Chunk{
+		Table: table,
+		Seq:   seq,
+		Start: nextChunkPosition(id),
+		End:   nil,
+		Last:  true,
+		Size:  0,
+	}
+
 	logger.Infof("chunking done: %s (duration=%v)", table.Name, time.Since(startTime))
 	return nil
 }

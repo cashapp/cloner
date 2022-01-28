@@ -3,14 +3,14 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"math/rand"
+
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"math/rand"
-	"time"
 )
 
 var (
@@ -67,10 +67,6 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 
 	// Generate chunks of source table
 	g.Go(func() error {
-		logger := log.WithContext(ctx).WithField("task", "chunking")
-		logger = logger.WithField("table", r.table.Name)
-		logger.Infof("'%s' chunking start", r.table.Name)
-		startTime := time.Now()
 		if r.config.ShuffleChunks {
 			chunks, err := generateTableChunks(ctx, r.table, r.source, r.sourceRetry)
 			if err != nil {
@@ -91,14 +87,20 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 			}
 		}
 		close(chunkCh)
-		logger.Infof("'%s' chunking done, took %vs", r.table.Name, time.Since(startTime).Seconds())
 		return nil
 	})
 
+	logger := log.WithContext(ctx).WithField("task", "reader")
+	logger = logger.WithField("table", r.table.Name)
+
 	// Generate diffs from all chunks
+	chunkCount := 0
+	rowCount := 0
 	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
 	for c := range chunkCh {
 		chunk := c
+		chunkCount += 1
+		rowCount += c.Size
 		err := readerParallelism.Acquire(ctx, 1)
 		if err != nil {
 			return errors.WithStack(err)
@@ -115,10 +117,19 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 		return errors.WithStack(err)
 	}
 
+	logger.Infof("reads done: %s (chunks=%d rows=%d)", r.table.Name, chunkCount, rowCount)
+
 	return nil
 }
 
 func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool, chunk Chunk) (err error) {
+	if chunk.First {
+		log.Infof("processing first chunk of a table, %s", chunk.String())
+	}
+	if chunk.Last {
+		log.Infof("processing last chunk of a table, %s", chunk.String())
+	}
+
 	var diffs []Diff
 	if diff {
 		diffs, err = r.diffChunk(ctx, chunk)

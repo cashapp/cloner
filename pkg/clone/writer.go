@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
@@ -13,8 +16,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	"strconv"
-	"strings"
 )
 
 var (
@@ -542,7 +543,19 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 	// Write every batch
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
+		inserts := 0
+		deletes := 0
+		updates := 0
+
 		for batch := range batches {
+			switch batch.Type {
+			case Insert:
+				inserts += len(batch.Rows)
+			case Delete:
+				deletes += len(batch.Rows)
+			case Update:
+				updates += len(batch.Rows)
+			}
 			err := w.scheduleWriteBatch(ctx, g, batch)
 			if err != nil {
 				return errors.WithStack(err)
@@ -552,6 +565,9 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		logger := log.WithContext(ctx).WithField("task", "writer").WithField("table", w.table.Name)
+		logger.Infof("writes done: %s (inserts=%d deletes=%d updates=%d)",
+			w.table.Name, inserts, deletes, updates)
 		return nil
 	})
 }

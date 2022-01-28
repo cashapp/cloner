@@ -155,6 +155,8 @@ github.com/go-logfmt/logfmt v0.4.0/go.mod h1:3RMwSq7FuexP4Kalkev3ejPJsZTpXXBr9+V
 github.com/go-logr/logr v0.1.0/go.mod h1:ixOQHD9gLJUVQQ2ZOR7zLEifBX6tGkNJF4QyIY7sIas=
 github.com/go-mysql-org/go-mysql v1.3.0 h1:lpNqkwdPzIrYSZGdqt8HIgAXZaK6VxBNfr8f7Z4FgGg=
 github.com/go-mysql-org/go-mysql v1.3.0/go.mod h1:3lFZKf7l95Qo70+3XB2WpiSf9wu2s3na3geLMaIIrqQ=
+github.com/go-mysql-org/go-mysql v1.4.1-0.20220119050903-d8b74c3a01e1 h1:oQOfO/SFIBHLSyhqJ55dWKgf7SW/TB41uFj/YI89QiU=
+github.com/go-mysql-org/go-mysql v1.4.1-0.20220119050903-d8b74c3a01e1/go.mod h1:3lFZKf7l95Qo70+3XB2WpiSf9wu2s3na3geLMaIIrqQ=
 github.com/go-openapi/analysis v0.0.0-20180825180245-b006789cd277/go.mod h1:k70tL6pCuVxPJOHXQ+wIac1FUrvNkHolPie/cLEU6hI=
 github.com/go-openapi/analysis v0.17.0/go.mod h1:IowGgpVeD0vNm45So8nr+IcQ3pxVtpRoBWb8PVZO0ik=
 github.com/go-openapi/analysis v0.18.0/go.mod h1:IowGgpVeD0vNm45So8nr+IcQ3pxVtpRoBWb8PVZO0ik=

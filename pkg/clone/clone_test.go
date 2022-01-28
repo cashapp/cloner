@@ -52,6 +52,24 @@ func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error 
 	return nil
 }
 
+func clearTables(ctx context.Context, config DBConfig) error {
+	db, err := config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		tx.ExecContext(ctx, `DELETE FROM customers`)
+		tx.ExecContext(ctx, `DELETE FROM transactions`)
+		return nil
+	})
+
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
 func countRows(target DBConfig, tableName string) (int, error) {
 	db, err := target.DB()
 	if err != nil {
@@ -195,8 +213,6 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 }
 
 func TestUnshardedClone(t *testing.T) {
-	t.Skip("unsharded vitess as a source is not currently supported")
-
 	err := startAll()
 	assert.NoError(t, err)
 
@@ -434,4 +450,45 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 	err = reportDiffs(diffs)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
+}
+
+func TestUnshardedCloneEmptySourceTables(t *testing.T) {
+	err := startAll()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+	target := tidbContainer.Config()
+
+	// Make sure source tables are empty
+	err = clearTables(context.Background(), source)
+	assert.NoError(t, err)
+	// Insert data only to target; the expectation is for target to be empty when Cloner is done
+	err = insertBunchaData(context.Background(), target, 1000)
+	assert.NoError(t, err)
+
+	source.Database = "@replica"
+	clone := &Clone{
+		WriterConfig{
+			ReaderConfig: ReaderConfig{
+				SourceTargetConfig: SourceTargetConfig{
+					Source: source,
+					Target: target,
+				},
+				ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+			},
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		},
+	}
+	err = kong.ApplyDefaults(clone)
+	assert.NoError(t, err)
+	err = clone.Run()
+	assert.NoError(t, err)
+
+	targetRowCount, err := countRows(target, "customers")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, targetRowCount)
+	targetRowCount, err = countRows(target, "transactions")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, targetRowCount)
 }

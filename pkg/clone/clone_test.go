@@ -59,8 +59,14 @@ func clearTables(ctx context.Context, config DBConfig) error {
 	}
 
 	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
-		tx.ExecContext(ctx, `DELETE FROM customers`)
-		tx.ExecContext(ctx, `DELETE FROM transactions`)
+		_, err = tx.ExecContext(ctx, `DELETE FROM customers`)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM transactions`)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 		return nil
 	})
 

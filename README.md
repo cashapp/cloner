@@ -14,20 +14,12 @@ It is currently mainly focused on migrating from sharded or unsharded MySQL (inc
 
 Best effort cloning performs a diffing clone ("repair") like this:
 
-1. Chunk up each table in roughly equally sized parts (see below for details)
- 2. Diff the table to generate a bunch of diffs (see below for details)
+ 1. [Chunk up each table in roughly equally sized parts](https://github.com/cashapp/cloner/blob/master/pkg/clone/chunker.go)
+ 2. [Diff the table to generate a bunch of diffs](https://github.com/cashapp/cloner/blob/master/pkg/clone/differ.go)
  3. Batch up the diffs by type (inserts, updates or deletes)
  4. Send off the batches to writers
 
 Writers and differs run in parallel in a pool so that longer tables are diffed and written in parallel.
-     
-## Diffing a chunk
-
-We filter the target side query by shard using a configurable where clause so we can clone a single Vitess shard at the time without deleting a bunch of out-of-shard data.
-
-After that we load the result set of both the source and the target and perform a simple diffing algorithm. ([See code](https://github.com/squareup/cloner/blob/master/pkg/clone/differ.go#L59) for more detail.)
-
-(We could use the same approach for calculating a chunk checksum as pt-table-checksum but this is computationally intensive on TiDB right now so instead we just load all the rows of a chunks and compare in memory. https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367)
 
 ## Checksumming
 
@@ -35,7 +27,9 @@ This tool can be used to verify replication integrity without any freezing in ti
 
 We divide each table into chunks as above. Then we load each chunk from source and target and compare. If there is a difference it can mean two things: 1) There is data corruption in that chunk or, 2) there is replication lag for that chunk
 
-In order to differentiate between these two possibilities we simply re-load the chunk data and compare again a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
+In order to differentiate between these two possibilities we simply re-load the chunk data and compare again a after fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
+
+(There is an option to same approach for calculating a chunk checksum as pt-table-checksum but this is computationally intensive on TiDB right now for some reason so it's faster to not do this. https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367)
 
 ## Replication
 
@@ -65,7 +59,7 @@ It needs write access to the source to be able to write to the watermark table.
 
 ## Parallel replication
 
-Runs transactions in parallel unless they are causal. Transactions A and B are causal iff 1) A happens before transaction B in the global ordering and 2) the set of primary keys they write to overlap.
+Apples transactions in parallel unless they are causal. Transactions A and B are causal iff 1) A happens before transaction B in the global ordering and 2) the set of primary keys they write to overlap.
 
 The primary key set of a chunk "repair" (i.e. diffing/writing of a chunk at the point of the high watermark) is the full primary key set of that chunk, i.e. a chunk repair never runs in parallel with any other transactions inside that chunk.
 
@@ -76,3 +70,7 @@ Rough algorithm:
 4. Repeat from 1 in parallel with 3 but don't start applying transactions until the previous transactions have completed and the checkpoint table has been written to
 
 Parallel replication can encounter partial failure as in some transactions may be written before the checkpoint table is written to. In this case when replication starts over again some transactions are re-applied. Fortunately the way we apply a transaction is idempotent.
+
+## Sharded cloning
+
+Cloner supports merging sharded databases for all the algorithms above. We filter the target side query by shard using a configurable where clause so we can clone/checksum a single shard at the time without deleting a bunch of out-of-shard data.

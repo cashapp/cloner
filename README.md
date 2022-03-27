@@ -39,7 +39,7 @@ Writes checkpoints to a checkpoint table in the target. Restarts from the checkp
 
 Does not currently support DDL. If you need to do DDL then stop replication and delete the checkpoint row, run the DDL, then restart replication and run another consistent clone to repair.
 
-## Determine end to end replication lag
+## End to end replication lag ("heartbeat")
 
 Writes to a heartbeat table and then read the heartbeat table from the source. This determines real end to end replication lag (with the heartbeat period as resolution). It's published as a Prometheus metric.
 

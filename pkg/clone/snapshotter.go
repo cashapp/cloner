@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	_ "net/http/pprof"
+	"sort"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/mightyguava/autotx"
@@ -12,8 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	_ "net/http/pprof"
-	"sort"
 )
 
 var (
@@ -437,6 +438,14 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	// TODO does not support snapshotting from a replica because it writes to the same source as it reads the chunk
+	//      if we want to support snapshotting from a replica we need to do this:
+	//        1) write low watermark to master
+	//        2) observe binlogs out of replica
+	//        3) when we receive low watermark in replica -> read the chunk snapshot
+	//        4) write high watermark to master
+
 	stream, err := bufferChunk(ctx, s.sourceRetry, s.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)

@@ -1,51 +1,29 @@
 # Cloner
 
-Cloner is a Golang app that clones a database to another database by diffing both databases and writing the minimal amount inserts/updates/deletes to make them identical. It can also (eventually) be used to checksum two databases where one is replicated into the other without stopping replication.
- 
-There are some Cash specific assumptions right now but it could eventually become completely generic and work across Vitess, TiDB, Aurora and MySQL or any database that has a Go sql driver.
+Cloner is a Golang app that clones a database to another database. It supports:
+ * Best effort cloning
+ * Replication (including heartbeating and safe parallelism)
+ * Checksumming
+ * Consistent cloning
 
-## Goals
+None of these algorithms require stopping replication.
 
-It needs to solve for the following:
- * Minimize bandwidth required from onprem to cloud as this is a limited resource
- * Minimize the amount of writes required to "rebuild"/"repair" a clone if replication is broken - it's much more expensive to write
- * At some point be open sourceable so not too many Cash specific hard wired assumptions (there will be a few of those though)
+It is currently mainly focused on migrating from sharded or unsharded MySQL (including Aurora) to TiDB but can eventually be used to migrate from/to any SQL database that has a Go driver.
 
 ## Best effort cloning
 
-It performs a diffing clone ("repair") like this:
- 1. Chunk up each table in roughly equally sized parts (see below for details)
+Best effort cloning performs a diffing clone ("repair") like this:
+
+1. Chunk up each table in roughly equally sized parts (see below for details)
  2. Diff the table to generate a bunch of diffs (see below for details)
  3. Batch up the diffs by type (inserts, updates or deletes)
  4. Send off the batches to writers
 
 Writers and differs run in parallel in a pool so that longer tables are diffed and written in parallel.
      
-## Chunking a table
-
-Ideally we'd use the following windowing SQL:
-```
-select
-	  min(tmp.id) as start_rowid,
-	  max(tmp.id) as end_rowid,
-	  count(*) as page_size
-from (
-  select
-	id,
-	row_number() over (order by id) as row_num
-  from %s
-) tmp
-group by floor((tmp.row_num - 1) / ?)
-order by start_rowid
-``` 
-
-But sadly windowing functions are not supported by Vitess so we have to do a rather silly thing where we select the IDs ordered by ID and then split that up into equal parts. [See the code](https://github.com/squareup/cloner/blob/master/pkg/clone/chunker.go#L115) for more detail.
-
-We could use the MySQL built in stats histogram of the primary key index of a table but not sure that is easily accessible.
-
 ## Diffing a chunk
 
-We filter the TiDB side query by Vitess shard using a configurable where clause so we can clone a single Vitess shard at the time without deleting a bunch of out-of-shard data.
+We filter the target side query by shard using a configurable where clause so we can clone a single Vitess shard at the time without deleting a bunch of out-of-shard data.
 
 After that we load the result set of both the source and the target and perform a simple diffing algorithm. ([See code](https://github.com/squareup/cloner/blob/master/pkg/clone/differ.go#L59) for more detail.)
 
@@ -53,7 +31,7 @@ After that we load the result set of both the source and the target and perform 
 
 ## Checksumming
 
-This tool can be used to verify replication integrity without any freezing in time.
+This tool can be used to verify replication integrity without any freezing in time (stopping replication).
 
 We divide each table into chunks as above. Then we load each chunk from source and target and compare. If there is a difference it can mean two things: 1) There is data corruption in that chunk or, 2) there is replication lag for that chunk
 
@@ -65,7 +43,7 @@ Reads the MySQL binlog and applies to the target.
 
 Writes checkpoints to a checkpoint table in the target. Restarts from the checkpoint if present.
 
-Does not currently support DDL.
+Does not currently support DDL. If you need to do DDL then stop replication and delete the checkpoint row, run the DDL, then restart replication and run another consistent clone to repair.
 
 ## Determine end to end replication lag
 
@@ -98,9 +76,3 @@ Rough algorithm:
 4. Repeat from 1 in parallel with 3 but don't start applying transactions until the previous transactions have completed and the checkpoint table has been written to
 
 Parallel replication can encounter partial failure as in some transactions may be written before the checkpoint table is written to. In this case when replication starts over again some transactions are re-applied. Fortunately the way we apply a transaction is idempotent.
-
-## Open sourcing status
-
-Cloner will be open sourced once all Cash specific features have been removed.
-
-Only a single Cash specific feature is left: Connecting using a Misk datasource. This can probably be replaced with command line flags and support for JKS/JCEKS key stores.

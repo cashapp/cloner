@@ -12,8 +12,8 @@ None of these algorithms require stopping replication.
 
 Best effort cloning performs a diffing clone ("repair") like this:
 
- 1. [Chunk up each table in roughly equally sized parts](https://github.com/cashapp/cloner/blob/master/pkg/clone/chunker.go)
- 2. [Diff the table to generate a bunch of diffs](https://github.com/cashapp/cloner/blob/master/pkg/clone/differ.go)
+ 1. Chunk up each table in roughly equally sized parts. [See code for more detail.](https://github.com/cashapp/cloner/blob/master/pkg/clone/chunker.go)
+ 2. Diff the table to generate a bunch of diffs. [See code for more detail.](https://github.com/cashapp/cloner/blob/master/pkg/clone/differ.go)
  3. Batch up the diffs by type (inserts, updates or deletes)
  4. Send off the batches to writers
 

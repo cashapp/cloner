@@ -25,7 +25,7 @@ This tool can be used to verify replication integrity without any freezing in ti
 
 We divide each table into chunks as above. Then we load each chunk from source and target and compare. If there is a difference it can mean two things: 1) There is data corruption in that chunk or, 2) there is replication lag for that chunk
 
-In order to differentiate between these two possibilities we simply re-load the chunk data and compare again a after fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
+In order to differentiate between these two possibilities we simply re-load the chunk data and compare again after a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
 
 (There is an option to same approach for calculating a chunk checksum as pt-table-checksum but this is computationally intensive on TiDB right now for some reason so it's faster to not do this. https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367)
 

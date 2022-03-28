@@ -8,8 +8,6 @@ Cloner is a Golang app that clones a database to another database. It supports:
 
 None of these algorithms require stopping replication.
 
-It is currently mainly focused on migrating from sharded or unsharded MySQL (including Aurora) to TiDB but can eventually be used to migrate from/to any SQL database that has a Go driver.
-
 ## Best effort cloning
 
 Best effort cloning performs a diffing clone ("repair") like this:

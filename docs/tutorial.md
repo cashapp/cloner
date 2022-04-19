@@ -14,12 +14,19 @@ For this reason it's a good idea to make sure your app runs well on your target 
 
 cloner does not currently copy the schema, this needs to be done by either running your migrations or simply dumping and copying. This is a good time to do any modifications you might need to the schema.
 
+At this point you could also create the worker tables for cloner. Cloner can create them automatically but sometimes the user used by cloner does not have access to run CREATE TABLE statements.
+
+```
+TODO create table statements for checkpoint, heartbeat and watermark tables
+```
+
 ## 3. Best effort clone(s)
 
 "Offline" clones chunk up each table and copies it. Each chunk is consistent but since writes have not been stopped the chunks won't be consistent with each other.
 
 ```
 cloner \
+  clone \
   TODO args
 ```
 
@@ -29,12 +36,20 @@ Consistent clone starts off replicating from the source to the target and then s
 
 ```
 cloner \
+  replicate \
+  --do-snapshot \
   TODO args
 ```
 
 ## 5. Checksumming
 
-Checksumming compares 
+Checksumming compares all the cells of all the rows one chunk at the time. Since cloner does not stop replication a chunk could have differences. There are two reasons for a chunk difference: either there were writes in the chunk in between reading the chunk from the source and the target or there is an issue with the consistent clone. In order to differentiate between these two cases we simply retry the comparison a few times. Unless the chunk is receiving some extremely high write frequency the first case should resolve itself. A real issue with the consistent clone would never resolve itself regardless how many retries. In this case we should tear down the replication by clearing the checkpoint table and create a new one.
+
+```
+cloner \
+  checksum \
+  TODO args
+```
 
 
 ## 6. Shift traffic

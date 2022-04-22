@@ -94,7 +94,7 @@ func init() {
 type Replicate struct {
 	WriterConfig
 
-	TaskName string `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" required:""`
+	TaskName string `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
 	ServerID uint32 `help:"Unique identifier of this server, defaults to a hash of the TaskName" optional:""`
 
 	// TODO should this just be ReadParallelism

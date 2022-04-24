@@ -16,9 +16,44 @@ cloner does not currently copy the schema, this needs to be done by either runni
 
 At this point you could also create the worker tables for cloner. Cloner can create them automatically but sometimes the user used by cloner does not have access to run CREATE TABLE statements.
 
+In the source database create the heartbeat and the watermark tables:
 ```
-TODO create table statements for checkpoint, heartbeat and watermark tables
+CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
+    name VARCHAR(255) NOT NULL,
+    time TIMESTAMP NOT NULL,
+    count BIGINT(20) NOT NULL,
+    PRIMARY KEY (name)
+);
+
+CREATE TABLE IF NOT EXISTS _cloner_watermark (
+    id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
+    table_name VARCHAR(255) NOT NULL,
+    chunk_seq  BIGINT(20)   NOT NULL,
+    low        TINYINT      DEFAULT 0,
+    high       TINYINT      DEFAULT 0,
+    PRIMARY KEY (id)
+);
 ```
+
+In the target database create the heartbeat and the checkpoint tables:
+```
+CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
+    name VARCHAR(255) NOT NULL,
+    time TIMESTAMP NOT NULL,
+    count BIGINT(20) NOT NULL,
+    PRIMARY KEY (name)
+);
+
+CREATE TABLE IF NOT EXISTS _cloner_checkpoint (
+    name      VARCHAR(255) NOT NULL,
+    file      VARCHAR(255) NOT NULL,
+    position  BIGINT(20)   NOT NULL,
+    gtid_set  TEXT,
+    timestamp TIMESTAMP    NOT NULL,
+    PRIMARY KEY (name)
+);
+```
+
 
 ## 3. Best effort clone(s)
 
@@ -27,7 +62,12 @@ TODO create table statements for checkpoint, heartbeat and watermark tables
 ```
 cloner \
   clone \
-  TODO args
+  --source-host <...> \
+  --source-username <...> \
+  --source-password <...> \
+  --target-host <...> \
+  --target-username <...> \
+  --target-password <...>
 ```
 
 ## 4. Consistent clone
@@ -38,30 +78,52 @@ Consistent clone starts off replicating from the source to the target and then s
 cloner \
   replicate \
   --do-snapshot \
-  TODO args
+  --source-host <...> \
+  --source-username <...> \
+  --source-password <...> \
+  --target-host <...> \
+  --target-username <...> \
+  --target-password <...>
 ```
 
-## 5. Checksumming
+## 5. Wait for replication to catch up
 
-Checksumming compares all the cells of all the rows one chunk at the time. Since cloner does not stop replication a chunk could have differences. There are two reasons for a chunk difference: either there were writes in the chunk in between reading the chunk from the source and the target or there is an issue with the consistent clone. In order to differentiate between these two cases we simply retry the comparison a few times. Unless the chunk is receiving some extremely high write frequency the first case should resolve itself. A real issue with the consistent clone would never resolve itself regardless how many retries. In this case we should tear down the replication by clearing the checkpoint table and create a new one.
+Before we start checksumming or shifting we should make sure the target database isn't too far behind the source. Every 60 s (configurable) we write a heartbeat row to the source database which should get replicated to the target. The difference between the time of these heartbeats is the row. The minimum row resolution is the heartbeat frequency so it never drops entirely to zero.
+
+There is a Prometheus metric called `replication_lag` or you can simply run the following query on both the source and the target and eye ball it:
+```
+SELECT * FROM _cloner_heartbeat\G
+```
+
+## 6. Checksumming
+
+Checksumming compares all the cells of all the rows one chunk at the time. Since cloner does not stop replication a chunk could have differences. There are two reasons for a chunk difference: either there were writes in the chunk in between reading the chunk from the source and the target or there is an issue with the consistent clone. In order to differentiate between these two cases we simply retry the comparison a few times. 
+
+Unless the chunk is receiving extremely high write frequency we should eventually be able to read the chunk from the source and the target while there are no unreplicated writes.
+
+A real issue with the consistent clone would never resolve itself regardless how many retries. In this case we should tear down the replication by clearing the checkpoint table and create a new one.
 
 ```
 cloner \
   checksum \
-  TODO args
+  --source-host <...> \
+  --source-username <...> \
+  --source-password <...> \
+  --target-host <...> \
+  --target-username <...> \
+  --target-password <...>
 ```
 
+## 7. Shift traffic
 
-## 6. Shift traffic
+Double check that replication lag isn't too high as in step 5 above.
 
 Stop all writes to the source database. Easiest is to shut down the application or put it in maintenance mode. (If you have a read only mode in your application that is even better.)
 
-Check that everything has fully replicated to the source by waiting for a full heartbeat (default 60 seconds) and then checking the replication lag is lower than the heartbeat frequency. There is a Prometheus metric called `replication_lag` or you can simply run the following query on both the source and the target and make sure it matches up:
-
-```
-SELECT TODO
-```
+Check that replication has caught up by waiting for the full amount of a heartbeat frequency (minimum 60 seconds) and then make sure there is no replication lag as in step 5 again.
 
 Reconfigure your application to access the new target database and start it up again.
 
 Congratulations you have now migrated!
+
+(This traffic shifting approach uses restarts which results in quite high downtime. It's possible to use eg [SQLProxy](https://proxysql.com/) to decrease downtime even further.)

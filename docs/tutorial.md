@@ -151,6 +151,8 @@ ignore_columns = ["column_to_ignore"]
 [table."<other table name>"]
 ```
 
+Pass the name of the config file to the `-f` option.
+
 There are many other table level options described here: https://github.com/cashapp/cloner/blob/main/pkg/clone/globals.go#L16
 
 Of particular interest might be `target_where` and `source_where`. These options can be used to merge/split shards.

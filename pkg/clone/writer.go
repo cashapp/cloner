@@ -139,15 +139,11 @@ func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batc
 				schemaErrors.WithLabelValues(batch.Table.Name, batch.Type.String()).Inc()
 			}
 
-			if !w.config.Consistent {
-				logger := log.WithField("table", batch.Table.Name).WithError(err)
-				// If we're doing a best effort clone we just give up on this batch
-				logger.Warnf("failed write batch after retries and backoff, "+
-					"since this is a best effort clone we just give up: %+v", err)
-				return nil
-			}
-
-			return errors.WithStack(err)
+			logger := log.WithField("table", batch.Table.Name).WithError(err)
+			// This is only used for best effort clonse (consistent snapshotting uses another codepath), so we just give up
+			logger.Warnf("failed write batch after retries and backoff, "+
+				"since this is a best effort clone we just give up: %+v", err)
+			return nil
 		}
 		return nil
 	})

@@ -2,12 +2,13 @@ package clone
 
 import (
 	"context"
+	_ "net/http/pprof"
+	"time"
+
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/semaphore"
-	_ "net/http/pprof"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -65,11 +66,6 @@ func (cmd *Clone) run() error {
 	tables, err := LoadTables(ctx, cmd.ReaderConfig)
 	if err != nil {
 		return errors.WithStack(err)
-	}
-
-	// TODO set up synced connections from the source
-	if cmd.Consistent {
-		return errors.Errorf("not implemented yet")
 	}
 
 	sourceReader, err := cmd.Source.ReaderDB()

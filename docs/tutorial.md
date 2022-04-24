@@ -138,6 +138,8 @@ The source and target datasources are configured in the same way with the follow
 
 There are many other command line options used to tune various parts of cloner, the documentation for those options are available by running `cloner <task> --help`.
 
+They are also easy to read in the code: [clone and checksum options](https://github.com/cashapp/cloner/blob/main/pkg/clone/globals.go) and [additional options for replicate](https://github.com/cashapp/cloner/blob/main/pkg/clone/replicate.go#L94).
+
 ## Config file
 
 By default cloner will clone all tables, if you want to list tables or specify further configuration for each table you can provide a config file with a TOML format like this:

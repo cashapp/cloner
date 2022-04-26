@@ -1,9 +1,10 @@
 package clone
 
 import (
+	"time"
+
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -45,8 +46,6 @@ type ReaderConfig struct {
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 
 	UseConcurrencyLimits bool `help:"Use concurrency limits to automatically find the throughput of the underlying databases" default:"false"`
-
-	Consistent bool `help:"Clone at a specific GTID using consistent snapshot" default:"false"`
 
 	ConfigFile string `help:"TOML formatted config file" short:"f" optional:"" type:"path"`
 

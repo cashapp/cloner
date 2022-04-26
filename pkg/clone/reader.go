@@ -138,10 +138,6 @@ func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool,
 	}
 
 	if err != nil {
-		if r.config.Consistent {
-			return errors.WithStack(err)
-		}
-
 		log.WithField("table", chunk.Table.Name).
 			WithError(err).
 			WithContext(ctx).

@@ -1,5 +1,3 @@
-name: Go
-
 on:
   push:
     branches: [ main ]
@@ -7,19 +5,23 @@ on:
     branches: [ main ]
 
 jobs:
-
-  build:
+  test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Set up Go
-        uses: actions/setup-go@v3
-        with:
-          go-version: 1.18
-
-      - name: Build
-        run: go build -v ./...
-
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Init Hermit
+        run: ./bin/hermit env -r >> $GITHUB_ENV
       - name: Test
         run: go test -v ./...
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Init Hermit
+        run: ./bin/hermit env -r >> $GITHUB_ENV
+      - name: golangci-lint
+        run: golangci-lint run

@@ -72,3 +72,7 @@ Parallel replication can encounter partial failure as in some transactions may b
 ## Sharded cloning
 
 Cloner supports merging sharded databases for all the algorithms above. We filter the target side query by shard using a configurable where clause so we can clone/checksum a single shard at the time without deleting a bunch of out-of-shard data.
+
+## Tutorial
+
+See the [tutorial](docs/tutorial.md) for more details.

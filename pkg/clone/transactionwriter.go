@@ -5,6 +5,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	_ "net/http/pprof"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dlmiddlecote/sqlstats"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
@@ -15,12 +22,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	_ "net/http/pprof"
-	"reflect"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type DBWriter interface {

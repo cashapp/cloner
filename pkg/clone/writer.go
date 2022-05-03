@@ -190,7 +190,7 @@ func isConstraintViolation(err error) bool {
 
 // isWriteConflict are errors caused by a write-write conflict between two parallel transactions:
 //   https://docs.pingcap.com/tidb/stable/error-codes
-//nolint:deadcode,unused
+//nolint:deadcode
 func isWriteConflict(err error) bool {
 	me := mysqlError(err)
 	if me == nil {
@@ -306,7 +306,6 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 		}
 
 		return nil
-
 	})
 
 	return errors.WithStack(err)
@@ -551,6 +550,8 @@ func (w *Writer) Write(ctx context.Context, g *errgroup.Group, diffs chan Diff) 
 				deletes += len(batch.Rows)
 			case Update:
 				updates += len(batch.Rows)
+			case Repair:
+				panic("not supported here")
 			}
 			err := w.scheduleWriteBatch(ctx, g, batch)
 			if err != nil {

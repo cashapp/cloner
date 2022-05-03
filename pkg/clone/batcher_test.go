@@ -41,7 +41,7 @@ func TestBatcher(t *testing.T) {
 			diffs:     []testDiff{{Insert, testRow{1, "t1", "A"}}},
 			batches: []testBatch{
 				{diffType: Insert, table: "t1",
-					rows: []testRow{testRow{1, "t1", "A"}}},
+					rows: []testRow{{1, "t1", "A"}}},
 			},
 		},
 	}
@@ -89,7 +89,7 @@ func TestBatchTableWritesSync(t *testing.T) {
 			diffs:     []testDiff{{Insert, testRow{1, "t1", "A"}}},
 			batches: []testBatch{
 				{diffType: Insert, table: "t1",
-					rows: []testRow{testRow{1, "t1", "A"}}},
+					rows: []testRow{{1, "t1", "A"}}},
 			},
 		},
 	}

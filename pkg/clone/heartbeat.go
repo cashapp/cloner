@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	_ "net/http/pprof"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	_ "net/http/pprof"
-	"time"
 )
 
 // Heartbeat receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots

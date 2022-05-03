@@ -142,6 +142,9 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 	}
 	if tlsConfig != nil {
 		err = mysql.RegisterTLSConfig("cloner", tlsConfig)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 		cfg.TLSConfig = "cloner"
 	}
 	connector, err := mysql.NewConnector(cfg)

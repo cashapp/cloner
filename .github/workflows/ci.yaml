@@ -17,9 +17,8 @@ jobs:
       - name: Build
         run: go build -o cloner ./cmd/cloner
 
-# TODO re-enable after push image works
-#      - name: Test
-#        run: go test -v ./...
+      - name: Test
+        run: go test -v ./...
 
       - name: Archive
         uses: actions/upload-artifact@v3
@@ -42,8 +41,7 @@ jobs:
   push-image:
     needs: build-and-test
     runs-on: ubuntu-latest
-    # TODO re-enable to only push image on main
-    #if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write

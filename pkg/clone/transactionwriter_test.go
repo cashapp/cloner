@@ -1,9 +1,10 @@
 package clone
 
 import (
+	"testing"
+
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestTransactionSetAppend(t *testing.T) {

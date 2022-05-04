@@ -4,16 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math/rand"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
-	"math/rand"
-	"strings"
-	"testing"
-	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ import (
 
 const heartbeatFrequency = 100 * time.Millisecond
 
-var rollbackErr = fmt.Errorf("expected rollback")
+var errRollback = fmt.Errorf("expected rollback")
 
 func TestReplicateSingleThreaded(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
@@ -122,7 +123,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 			for {
 				if doWrite.Load() {
 					err := write(ctx, db)
-					if err != nil && err != rollbackErr {
+					if err != nil && err != errRollback {
 						return errors.WithStack(err)
 					}
 				}
@@ -397,7 +398,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		// Roll back a few transactions
 		doRollback := rand.Intn(20) == 0
 		if doRollback {
-			return rollbackErr
+			return errRollback
 		}
 
 		return nil

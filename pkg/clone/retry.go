@@ -2,13 +2,14 @@ package clone
 
 import (
 	"context"
+	"runtime/debug"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-	"runtime/debug"
-	"time"
 )
 
 type RetryOptions struct {

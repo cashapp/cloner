@@ -22,10 +22,10 @@ func vhash(shardKey uint64) []byte {
 	var keybytes, hashed [8]byte
 	binary.BigEndian.PutUint64(keybytes[:], shardKey)
 	blockDES.Encrypt(hashed[:], keybytes[:])
-	return []byte(hashed[:])
+	return hashed[:]
 }
 
-//nolint:deadcode,unused
+//nolint:deadcode
 func vunhash(k []byte) (uint64, error) {
 	if len(k) != 8 {
 		return 0, fmt.Errorf("invalid keyspace id: %v", hex.EncodeToString(k))

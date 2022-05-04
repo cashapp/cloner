@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"hash/fnv"
+	_ "net/http/pprof"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"hash/fnv"
-	_ "net/http/pprof"
 )
 
 type Mutation struct {

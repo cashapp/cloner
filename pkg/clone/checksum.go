@@ -2,14 +2,15 @@ package clone
 
 import (
 	"context"
+	_ "net/http/pprof"
+	"time"
+
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
-	_ "net/http/pprof"
-	"time"
 
 	"github.com/pkg/errors"
 )
@@ -75,6 +76,8 @@ func (cmd *Checksum) reportDiffs(diffs []Diff) {
 		case Insert:
 			totalStats.inserts++
 			byTable.inserts++
+		case Repair:
+			panic("Repair diff type not supported here")
 		}
 		statsByTable[diff.Row.Table.Name] = byTable
 		logrus.WithField("table", diff.Row.Table.Name).

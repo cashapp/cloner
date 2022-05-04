@@ -1,10 +1,11 @@
 package clone
 
 import (
+	"testing"
+
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {

@@ -19,16 +19,6 @@ Best effort cloning performs a diffing clone ("repair") like this:
 
 Writers and differs run in parallel in a pool so that longer tables are diffed and written in parallel.
 
-## Checksumming
-
-This tool can be used to verify replication integrity without any freezing in time (stopping replication).
-
-We divide each table into chunks as above. Then we load each chunk from source and target and compare. If there is a difference it can mean two things: 1) There is data corruption in that chunk or, 2) there is replication lag for that chunk
-
-In order to differentiate between these two possibilities we simply re-load the chunk data and compare again after a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
-
-(There is an option to same approach for calculating a chunk checksum as pt-table-checksum but this is computationally intensive on TiDB right now for some reason so it's faster to not do this. https://github.com/percona/percona-toolkit/blob/3.x/lib/TableChecksum.pm#L367)
-
 ## Replication
 
 Reads the MySQL binlog and applies to the target.
@@ -36,6 +26,16 @@ Reads the MySQL binlog and applies to the target.
 Writes checkpoints to a checkpoint table in the target. Restarts from the checkpoint if present.
 
 Does not currently support DDL. If you need to do DDL then stop replication and delete the checkpoint row, run the DDL, then restart replication and run another consistent clone to repair.
+
+## Checksumming
+
+We divide each table into chunks as in cloning above. Then we load each chunk from source and target and compare and report any differences.
+
+This will only work if both source and target are synchronized and "frozen in time" (i.e. no writes). This tool can be used to verify replication integrity if there is replication running between the source and the target without any freezing in time (stopping replication).
+
+If there is a difference between two chunks it can mean two things: 1) There is data corruption in that chunk or, 2) there is replication lag for that chunk
+
+To differentiate between these two possibilities we simply re-load the chunk data and compare again after a fixed amount of time. If there is replication lag for that chunk it should generally resolve after a few retries. If not, it's likely there is data corruption.
 
 ## End to end replication lag ("heartbeat")
 
@@ -72,3 +72,7 @@ Parallel replication can encounter partial failure as in some transactions may b
 ## Sharded cloning
 
 Cloner supports merging sharded databases for all the algorithms above. We filter the target side query by shard using a configurable where clause so we can clone/checksum a single shard at the time without deleting a bunch of out-of-shard data.
+
+## Tutorial
+
+See the [tutorial](docs/tutorial.md) for more details.

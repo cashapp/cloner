@@ -2,12 +2,13 @@ package clone
 
 import (
 	"context"
+	_ "net/http/pprof"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	_ "net/http/pprof"
-	"time"
 
 	"github.com/pkg/errors"
 )

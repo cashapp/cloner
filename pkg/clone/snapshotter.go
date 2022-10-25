@@ -143,6 +143,7 @@ func (s *Snapshotter) createWatermarkTable(ctx context.Context) error {
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
+      task       VARCHAR(255) NOT NULL,
 			table_name VARCHAR(255) NOT NULL,
 			chunk_seq  BIGINT(20)   NOT NULL,
 			low        TINYINT      DEFAULT 0,
@@ -341,6 +342,15 @@ func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, r
 		return result, errors.Errorf("more than a single row was written to the watermark table at the same time")
 	}
 	row := watermark.Rows[0]
+	task, err := watermark.Table.MysqlTable.GetColumnValue("task", row)
+	if err != nil {
+		return result, errors.WithStack(err)
+	}
+	if task != s.config.TaskName {
+		// This is not for us, we just add the mutation untouched and return
+		result = append(result, watermark)
+		return result, nil
+	}
 	low, err := watermark.Table.MysqlTable.GetColumnValue("low", row)
 	if err != nil {
 		return result, errors.WithStack(err)
@@ -432,9 +442,9 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	//   3. insert the high watermark
 
 	_, err := s.source.ExecContext(ctx,
-		fmt.Sprintf("INSERT INTO %s (table_name, chunk_seq, low) VALUES (?, ?, 1)",
+		fmt.Sprintf("INSERT INTO %s (task, table_name, chunk_seq, low) VALUES (?, ?, ?, 1)",
 			s.config.WatermarkTable),
-		chunk.Table.Name, chunk.Seq)
+		s.config.TaskName, chunk.Table.Name, chunk.Seq)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -460,9 +470,9 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	chunksSnapshotted.WithLabelValues(s.config.TaskName, chunk.Table.Name).Inc()
 
 	_, err = s.source.ExecContext(ctx,
-		fmt.Sprintf("INSERT INTO %s (table_name, chunk_seq, high) VALUES (?, ?, 1)",
+		fmt.Sprintf("INSERT INTO %s (task, table_name, chunk_seq, high) VALUES (?, ?, ?, 1)",
 			s.config.WatermarkTable),
-		chunk.Table.Name, chunk.Seq)
+		s.config.TaskName, chunk.Table.Name, chunk.Seq)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -552,8 +562,8 @@ func (s *Snapshotter) deleteWatermark(ctx context.Context, mutation Mutation) er
 	chunkSeq := chunkSeqI.(int64)
 	return Retry(ctx, s.sourceRetry, func(ctx context.Context) error {
 		_, err := s.source.ExecContext(ctx,
-			fmt.Sprintf("DELETE FROM %s WHERE table_name = ? AND chunk_seq = ?", s.config.WatermarkTable),
-			tableName, chunkSeq)
+			fmt.Sprintf("DELETE FROM %s WHERE task = ? AND table_name = ? AND chunk_seq = ?", s.config.WatermarkTable),
+			s.config.TaskName, tableName, chunkSeq)
 		return err
 	})
 }

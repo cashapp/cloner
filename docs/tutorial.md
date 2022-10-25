@@ -19,38 +19,39 @@ At this point you could also create the worker tables for cloner. Cloner can cre
 In the source database create the heartbeat and the watermark tables:
 ```
 CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
-    name VARCHAR(255) NOT NULL,
+    task VARCHAR(255) NOT NULL,
     time TIMESTAMP NOT NULL,
     count BIGINT(20) NOT NULL,
-    PRIMARY KEY (name)
+    PRIMARY KEY (task)
 );
 
 CREATE TABLE IF NOT EXISTS _cloner_watermark (
+    task       VARCHAR(255) NOT NULL,
     id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
     table_name VARCHAR(255) NOT NULL,
     chunk_seq  BIGINT(20)   NOT NULL,
     low        TINYINT      DEFAULT 0,
     high       TINYINT      DEFAULT 0,
-    PRIMARY KEY (id)
+    PRIMARY KEY (task, id)
 );
 ```
 
 In the target database create the heartbeat and the checkpoint tables:
 ```
 CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
-    name VARCHAR(255) NOT NULL,
+    task VARCHAR(255) NOT NULL,
     time TIMESTAMP NOT NULL,
     count BIGINT(20) NOT NULL,
-    PRIMARY KEY (name)
+    PRIMARY KEY (task)
 );
 
 CREATE TABLE IF NOT EXISTS _cloner_checkpoint (
-    name      VARCHAR(255) NOT NULL,
+    task      VARCHAR(255) NOT NULL,
     file      VARCHAR(255) NOT NULL,
     position  BIGINT(20)   NOT NULL,
     gtid_set  TEXT,
     timestamp TIMESTAMP    NOT NULL,
-    PRIMARY KEY (name)
+    PRIMARY KEY (task)
 );
 ```
 

@@ -257,7 +257,7 @@ func RestartLoop(ctx context.Context, b backoff.BackOff, loop func(b backoff.Bac
 			if errors.Is(err, context.Canceled) {
 				return errors.WithStack(err)
 			}
-			logrus.WithError(err).Errorf("replication write loop failed, restarting")
+			logrus.WithError(err).Errorf("replication write loop failed, restarting: %+v", err)
 			sleepTime := b.NextBackOff()
 			if sleepTime == backoff.Stop {
 				return errors.Wrapf(err, "failed to reconnect after retries")

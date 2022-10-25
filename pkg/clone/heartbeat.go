@@ -101,10 +101,10 @@ func (h *Heartbeat) createTable(ctx context.Context) error {
 	defer cancel()
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-		  name VARCHAR(255) NOT NULL,
+		  task VARCHAR(255) NOT NULL,
 		  time TIMESTAMP NOT NULL,
 		  count BIGINT(20) NOT NULL,
-		  PRIMARY KEY (name)
+		  PRIMARY KEY (task)
 		)
 		`, "`"+h.config.HeartbeatTable+"`")
 	_, err := h.source.ExecContext(timeoutCtx, stmt)
@@ -127,7 +127,7 @@ func (h *Heartbeat) write(ctx context.Context) error {
 			}
 
 			row := tx.QueryRowContext(ctx,
-				fmt.Sprintf("SELECT count FROM %s WHERE name = ?", h.config.HeartbeatTable), h.config.TaskName)
+				fmt.Sprintf("SELECT count FROM %s WHERE task = ?", h.config.HeartbeatTable), h.config.TaskName)
 			var count int64
 			err = row.Scan(&count)
 			if err != nil {
@@ -140,7 +140,7 @@ func (h *Heartbeat) write(ctx context.Context) error {
 			}
 			heartbeatTime := time.Now().UTC()
 			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf("REPLACE INTO %s (name, time, count) VALUES (?, ?, ?)",
+				fmt.Sprintf("REPLACE INTO %s (task, time, count) VALUES (?, ?, ?)",
 					h.config.HeartbeatTable),
 				h.config.TaskName, heartbeatTime, count+1)
 			return errors.WithStack(err)
@@ -154,7 +154,7 @@ func (h *Heartbeat) read(ctx context.Context) error {
 	logger := logrus.WithContext(ctx).WithField("task", "heartbeat")
 
 	err := Retry(ctx, h.targetRetry, func(ctx context.Context) error {
-		stmt := fmt.Sprintf("SELECT time FROM %s WHERE name = ?", h.config.HeartbeatTable)
+		stmt := fmt.Sprintf("SELECT time FROM %s WHERE task = ?", h.config.HeartbeatTable)
 		row := h.target.QueryRowContext(ctx, stmt, h.config.TaskName)
 		var lastHeartbeat time.Time
 		var lag time.Duration

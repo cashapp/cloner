@@ -296,7 +296,7 @@ func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
 
 func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Time, error) {
 	// TODO retries with backoff?
-	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE name = ?", "_cloner_heartbeat")
+	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE task = ?", "_cloner_heartbeat")
 	row := db.QueryRowContext(ctx, stmt, "customer/-80")
 	var lastHeartbeat time.Time
 	err := row.Scan(&lastHeartbeat)

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alecthomas/kong"
+
 	"github.com/go-mysql-org/go-mysql/replication"
 
 	"github.com/go-sql-driver/mysql"
@@ -32,18 +34,19 @@ import (
 )
 
 type DBConfig struct {
-	Type             DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
-	Host             string         `help:"Hostname" optional:""`
-	EgressSocket     string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
-	Username         string         `help:"User" optional:""`
-	Password         string         `help:"Password" optional:""`
-	Database         string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
-	MiskDatasource   string         `help:"Misk formatted config yaml file" optional:"" path:""`
-	MiskReader       bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
-	GrpcCustomHeader []string       `help:"Custom GRPC headers separated by ="`
-	CA               string         `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
-	Cert             string         `help:"Certificate file for client side authentication (PEM encoded)"`
-	Key              string         `help:"Key file for client side authentication (PEM encoded)"`
+	Type             DataSourceType       `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
+	Host             string               `help:"Hostname" optional:""`
+	EgressSocket     string               `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
+	Username         string               `help:"User" optional:""`
+	Password         string               `help:"Password" optional:""`
+	PasswordFile     kong.FileContentFlag `help:"File which content will be used for a password" optional:""`
+	Database         string               `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
+	MiskDatasource   string               `help:"Misk formatted config yaml file" optional:"" path:""`
+	MiskReader       bool                 `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
+	GrpcCustomHeader []string             `help:"Custom GRPC headers separated by ="`
+	CA               string               `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
+	Cert             string               `help:"Certificate file for client side authentication (PEM encoded)"`
+	Key              string               `help:"Key file for client side authentication (PEM encoded)"`
 }
 
 type DataSourceType string
@@ -128,7 +131,7 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		// we remove the @ sign then put it back again
 		host = strings.ReplaceAll(host, "@", "")
 	}
-	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.Password, host, c.Database)
+	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.GetPassword(), host, c.Database)
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -339,11 +342,18 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 			Host:                    host,
 			Port:                    port,
 			User:                    c.Username,
-			Password:                c.Password,
+			Password:                c.GetPassword(),
 			TimestampStringLocation: time.UTC,
 			TLSConfig:               tlsConfig,
 		}, nil
 	}
+}
+
+func (c DBConfig) GetPassword() string {
+	if c.PasswordFile != nil {
+		return string(c.PasswordFile)
+	}
+	return c.Password
 }
 
 func (c DBConfig) tlsConfig() (*tls.Config, error) {

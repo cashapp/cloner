@@ -245,10 +245,15 @@ func (s *TransactionStream) readStartingPosition(ctx context.Context) (Position,
 	file, position, executedGtidSet, err := s.readCheckpoint(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			file, position, executedGtidSet, err = s.readMasterPosition(ctx)
-			logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
-			if err != nil {
-				return Position{}, errors.WithStack(err)
+			if s.config.StartingGTID != "" {
+				file, position, executedGtidSet = "", 0, s.config.StartingGTID
+				logger.Infof("starting new replication from gtid=%s", executedGtidSet)
+			} else {
+				file, position, executedGtidSet, err = s.readMasterPosition(ctx)
+				logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
+				if err != nil {
+					return Position{}, errors.WithStack(err)
+				}
 			}
 		} else {
 			return Position{}, errors.WithStack(err)
@@ -306,7 +311,7 @@ func (s *TransactionStream) readCheckpoint(ctx context.Context) (file string, po
 	defer target.Close()
 
 	row := target.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT file, position, gtid_set FROM %s WHERE task = ?",
+		fmt.Sprintf("SELECT file, position, gtid FROM %s WHERE task = ?",
 			s.config.CheckpointTable),
 		s.config.TaskName)
 	err = row.Scan(

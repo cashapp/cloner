@@ -40,19 +40,20 @@ In the target database create the heartbeat and the checkpoint tables:
 ```
 CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
     task VARCHAR(255) NOT NULL,
-    time TIMESTAMP NOT NULL,
-    count BIGINT(20) NOT NULL,
+    time TIMESTAMP    NOT NULL,
+    count BIGINT(20)  NOT NULL,
     PRIMARY KEY (task)
 );
 
-CREATE TABLE IF NOT EXISTS _cloner_checkpoint (
-    task      VARCHAR(255) NOT NULL,
-    file      VARCHAR(255) NOT NULL,
-    position  BIGINT(20)   NOT NULL,
-    gtid_set  TEXT,
-    timestamp TIMESTAMP    NOT NULL,
+CREATE TABLE IF NOT EXISTS %s (
+    task        VARCHAR(255) NOT NULL,
+    file        VARCHAR(255) NOT NULL,
+    position    BIGINT(20)   NOT NULL,
+    gtid        TEXT,
+    target_gtid TEXT,
+    timestamp   TIMESTAMP    NOT NULL,
     PRIMARY KEY (task)
-);
+)
 ```
 
 

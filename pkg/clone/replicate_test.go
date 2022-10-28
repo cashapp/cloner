@@ -35,7 +35,7 @@ func TestReplicateSingleThreaded(t *testing.T) {
 
 func TestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
-		//replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
+		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50
 		replicate.ReplicationParallelism = 10
 	})
@@ -62,11 +62,12 @@ func TestReverseReplication(t *testing.T) {
 	err = deleteAllData(target.Config())
 	require.NoError(t, err)
 
+	// Start forward replication and insert some data
 	forwardReplicationCtx, forwardReplicationCancel := context.WithCancel(ctx)
 	defer forwardReplicationCancel()
 	err = startReplication(forwardReplicationCtx, "replication", g, source.Config(), target.Config())
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 	err = insertBunchaData(ctx, source.Config(), 50)
 	require.NoError(t, err)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
@@ -75,20 +76,22 @@ func TestReverseReplication(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, len(diffs))
 
-	// Now break the replication, insert some more data into the _target_
+	// Stop the replication and insert some more data into the _target_
+	// This simulates shifting writes to the target database
 	forwardReplicationCancel()
-	time.Sleep(1 * time.Second)
+	time.Sleep(time.Second)
 	err = insertBunchaData(ctx, target.Config(), 50)
 	require.NoError(t, err)
 
 	// Start reverse replication, insert some more, then checksum
+	// This simulates replicating back to the source for reversibility
 	reverseReplicationCtx, reverseReplicationCancel := context.WithCancel(ctx)
 	defer reverseReplicationCancel()
 	err = startReverseReplication(reverseReplicationCtx, "replication", g, source.Config(), target.Config())
 	require.NoError(t, err)
 	err = insertBunchaData(ctx, target.Config(), 50)
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
 	require.NoError(t, err)
 	diffs, err = runChecksum(ctx, target.Config(), source.Config())

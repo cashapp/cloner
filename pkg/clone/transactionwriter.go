@@ -697,7 +697,7 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 		targetGTIDValue = ", @@GLOBAL.gtid_executed"
 	}
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf("REPLACE INTO %s (task, file, position, gtid, timestamp%s) VALUES (?, ?, ?, ?, ?%s)",
+		fmt.Sprintf("REPLACE INTO %s (task, file, position, source_gtid, timestamp%s) VALUES (?, ?, ?, ?, ?%s)",
 			w.config.CheckpointTable, targetGTIDColumn, targetGTIDValue),
 		w.config.TaskName, position.File, position.Position, gsetString, time.Now().UTC())
 	if err != nil {

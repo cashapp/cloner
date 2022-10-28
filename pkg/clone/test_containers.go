@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"time"
 
@@ -51,6 +52,46 @@ func createSchema(config DBConfig, database string) error {
 		  description VARCHAR(255) NOT NULL,
 		  PRIMARY KEY (customer_id, id)
 		) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+	`)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func createMysqlSchema(config DBConfig, database string) error {
+	db, err := config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = db.Exec("CREATE DATABASE " + database)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	config.Database = database
+	db, err = config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE customers (
+		  id BIGINT(20) NOT NULL AUTO_INCREMENT,
+		  name VARCHAR(255) NOT NULL,
+		  PRIMARY KEY (id)
+		)
+	`)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE transactions (
+		  id BIGINT(20) NOT NULL AUTO_INCREMENT,
+		  customer_id BIGINT(20) NOT NULL,
+		  amount_cents INTEGER NOT NULL,
+		  description VARCHAR(255) NOT NULL,
+		  PRIMARY KEY (id)
+		) DEFAULT CHARSET=utf8mb4;
 	`)
 	if err != nil {
 		return errors.WithStack(err)
@@ -263,6 +304,73 @@ func startTidb() error {
 	tidbContainer = &DatabaseContainer{pool: pool, resource: resource, config: config}
 
 	return nil
+}
+
+func startMysql() (*DatabaseContainer, error) {
+	log.Debugf("starting MySQL")
+	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		log.Fatalf("Could not connect to docker: %s", err)
+	}
+
+	// pulls an image, creates a container based on it and runs it
+	serverID := rand.Intn(10_000_000)
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Repository: "mysql",
+		Tag:        "5.7",
+		Cmd: []string{
+			"--log-bin=/tmp/binlog",
+			"--gtid_mode=ON",
+			"--enforce-gtid-consistency=ON",
+			fmt.Sprintf("--server-id=%v", serverID),
+		},
+		Env: []string{"MYSQL_ROOT_PASSWORD=secret"}})
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	err = resource.Expire(15 * 60)
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	config := DBConfig{
+		Type:     MySQL,
+		Host:     "localhost:" + resource.GetPort("3306/tcp"),
+		Username: "root",
+		Password: "secret",
+		Database: "mysql",
+	}
+
+	// exponential backoff-Retry, because the application in the container might not be ready to accept connections yet
+	if err := pool.Retry(func() error {
+		var err error
+		db, err := config.DB()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return db.Ping()
+	}); err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	err = createMysqlSchema(config, "mydatabase")
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	config.Database = "mydatabase"
+
+	err = insertBaseData(config)
+	if err != nil {
+		_ = pool.Purge(resource)
+		return nil, errors.WithStack(err)
+	}
+
+	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
 }
 
 // startAll (re)starts both Vitess and TiDB in parallel

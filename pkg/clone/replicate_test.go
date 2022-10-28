@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
@@ -33,10 +35,164 @@ func TestReplicateSingleThreaded(t *testing.T) {
 
 func TestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
-		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
+		//replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50
 		replicate.ReplicationParallelism = 10
 	})
+}
+
+func TestReverseReplication(t *testing.T) {
+	var err error
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+
+	source, err := startMysql()
+	require.NoError(t, err)
+	defer source.Close()
+	require.NoError(t, err)
+	err = deleteAllData(source.Config())
+	require.NoError(t, err)
+
+	target, err := startMysql()
+	require.NoError(t, err)
+	defer target.Close()
+	targetDB, err := target.Config().DB()
+	require.NoError(t, err)
+	err = deleteAllData(target.Config())
+	require.NoError(t, err)
+
+	forwardReplicationCtx, forwardReplicationCancel := context.WithCancel(ctx)
+	defer forwardReplicationCancel()
+	err = startReplication(forwardReplicationCtx, "replication", g, source.Config(), target.Config())
+	require.NoError(t, err)
+	time.Sleep(5 * time.Second)
+	err = insertBunchaData(ctx, source.Config(), 50)
+	require.NoError(t, err)
+	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
+	require.NoError(t, err)
+	diffs, err := runChecksum(ctx, source.Config(), target.Config())
+	require.NoError(t, err)
+	require.Equal(t, 0, len(diffs))
+
+	// Now break the replication, insert some more data into the _target_
+	forwardReplicationCancel()
+	time.Sleep(1 * time.Second)
+	err = insertBunchaData(ctx, target.Config(), 50)
+	require.NoError(t, err)
+
+	// Start reverse replication, insert some more, then checksum
+	reverseReplicationCtx, reverseReplicationCancel := context.WithCancel(ctx)
+	defer reverseReplicationCancel()
+	err = startReverseReplication(reverseReplicationCtx, "replication", g, source.Config(), target.Config())
+	require.NoError(t, err)
+	err = insertBunchaData(ctx, target.Config(), 50)
+	require.NoError(t, err)
+	time.Sleep(5 * time.Second)
+	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
+	require.NoError(t, err)
+	diffs, err = runChecksum(ctx, target.Config(), source.Config())
+	require.NoError(t, err)
+	require.Equal(t, 0, len(diffs))
+
+	cancel()
+	err = g.Wait()
+	if err != nil && !isCancelledError(err) {
+		require.NoError(t, err)
+	}
+}
+
+func runChecksum(ctx context.Context, target DBConfig, source DBConfig) ([]Diff, error) {
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
+		},
+		ReadRetries:          1,
+		ChunkSize:            5, // Smaller chunk size to make sure we're exercising chunking
+		UseConcurrencyLimits: false,
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers":    {},
+				"transactions": {},
+			},
+		},
+	}
+	checksum := &Checksum{
+		ReaderConfig: readerConfig,
+	}
+	err := kong.ApplyDefaults(checksum)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
+	// we should eventually catch the chunk while replication is caught up
+	checksum.FailedChunkRetryCount = 10
+	diffs, err := checksum.run(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return diffs, nil
+}
+
+func startReverseReplication(ctx context.Context, task string, g *errgroup.Group, source DBConfig, target DBConfig) error {
+	return errors.WithStack(doStartReplication(ctx, task, g, target, source, func(replicate *Replicate) {
+		replicate.StartAtLastSourceGTID = true
+	}))
+}
+
+func startReplication(ctx context.Context, task string, g *errgroup.Group, source DBConfig, target DBConfig) error {
+	return errors.WithStack(doStartReplication(ctx, task, g, source, target, func(replicate *Replicate) {}))
+}
+
+func doStartReplication(ctx context.Context, task string, g *errgroup.Group, source DBConfig, target DBConfig, reconfig func(replicate *Replicate)) error {
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: source,
+			Target: target,
+		},
+		ReadRetries:          1,
+		ChunkSize:            5, // Smaller chunk size to make sure we're exercising chunking
+		UseConcurrencyLimits: false,
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers":    {},
+				"transactions": {},
+			},
+		},
+	}
+	replicate := &Replicate{
+		WriterConfig: WriterConfig{
+			WriteRetries:            1,
+			ReaderConfig:            readerConfig,
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+			SaveGTIDExecuted:        true,
+		},
+		TaskName:               task,
+		HeartbeatFrequency:     heartbeatFrequency,
+		CreateTables:           true,
+		ReplicationParallelism: 10,
+	}
+	err := kong.ApplyDefaults(replicate)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	reconfig(replicate)
+	replicator, err := NewReplicator(*replicate)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	// Run replication in separate thread
+	g.Go(func() error {
+		err := replicator.run(ctx)
+		if isCancelledError(err) {
+			return nil
+		}
+		logrus.WithError(err).Errorf("replication failed: %+v", err)
+		return errors.WithStack(err)
+	})
+	return nil
 }
 
 func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
@@ -171,10 +327,10 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	time.Sleep(5 * time.Second)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
-	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
+	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))
 	require.NoError(t, err)
 	doWrite.Store(false)
-	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
+	err = waitFor(ctx, littleReplicationLag(ctx, "customer/-80", targetDB))
 	require.NoError(t, err)
 
 	// Restart the writes
@@ -192,12 +348,12 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		}
 		return err
 	})
-	err = waitFor(ctx, someReplicationLag(ctx, targetDB))
+	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))
 	require.NoError(t, err)
 
 	// Let replication catch up and then do a full checksum while replication is running
 	time.Sleep(5 * time.Second)
-	err = waitFor(ctx, littleReplicationLag(ctx, targetDB))
+	err = waitFor(ctx, littleReplicationLag(ctx, "customer/-80", targetDB))
 	require.NoError(t, err)
 	checksum := &Checksum{
 		ReaderConfig: readerConfig,
@@ -263,9 +419,9 @@ func isCancelledError(err error) bool {
 		strings.Contains(err.Error(), "context canceled")
 }
 
-func someReplicationLag(ctx context.Context, db *sql.DB) func() error {
+func someReplicationLag(ctx context.Context, task string, db *sql.DB) func() error {
 	return func() error {
-		lag, _, err := readReplicationLag(ctx, db)
+		lag, _, err := readReplicationLag(ctx, task, db)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -276,17 +432,27 @@ func someReplicationLag(ctx context.Context, db *sql.DB) func() error {
 	}
 }
 
-func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
-	return func() error {
-		expectedLag := time.Duration(1.5 * float64(heartbeatFrequency))
+func littleReplicationLag(ctx context.Context, task string, db *sql.DB) func() error {
+	return func() (err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				var ok bool
+				err, ok = p.(error)
+				if !ok {
+					err = errors.Errorf("exited with panic: %v", p)
+				}
+			}
+		}()
+		expectedLag := 1 * time.Second
 		reads := testutil.ToFloat64(heartbeatsRead)
 		if reads == 0 {
 			return errors.Errorf("we haven't read any heartbeats yet")
 		}
-		lag, _, err := readReplicationLag(ctx, db)
+		lag, _, err := readReplicationLag(ctx, task, db)
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		logrus.Infof("replication lag %v", lag)
 		if lag > expectedLag {
 			return errors.Errorf("replication lag did not drop yet, it's still %v", lag)
 		}
@@ -294,10 +460,10 @@ func littleReplicationLag(ctx context.Context, db *sql.DB) func() error {
 	}
 }
 
-func readReplicationLag(ctx context.Context, db *sql.DB) (time.Duration, time.Time, error) {
+func readReplicationLag(ctx context.Context, task string, db *sql.DB) (time.Duration, time.Time, error) {
 	// TODO retries with backoff?
 	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE task = ?", "_cloner_heartbeat")
-	row := db.QueryRowContext(ctx, stmt, "customer/-80")
+	row := db.QueryRowContext(ctx, stmt, task)
 	var lastHeartbeat time.Time
 	err := row.Scan(&lastHeartbeat)
 	if err != nil {

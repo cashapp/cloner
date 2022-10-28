@@ -115,7 +115,8 @@ type Replicate struct {
 	ReplicationParallelism          int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
 	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
 	ParallelTransactionBatchTimeout time.Duration `help:"How long to wait for a batch of transactions to fill up before executing them anyway" default:"5s"`
-	StartingGTID                    string        `help:"If starting a new replication (no rows in the checkpoint table) then we will use this GTID set as the starting point"`
+	StartingGTID                    string        `help:"When starting a new replication this GTID set as the starting point" xor:"starting_gtid"`
+	StartAtLastSourceGTID           bool          `help:"When starting a new replication use the value of the 'target_gtid' of the source checkpoint table" default:"false" xor:"starting_gtid"`
 }
 
 // Run replicates from source to target

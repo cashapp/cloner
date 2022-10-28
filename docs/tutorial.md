@@ -45,15 +45,15 @@ CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
     PRIMARY KEY (task)
 );
 
-CREATE TABLE IF NOT EXISTS %s (
+CREATE TABLE IF NOT EXISTS _cloner_checkpoint (
     task        VARCHAR(255) NOT NULL,
     file        VARCHAR(255) NOT NULL,
     position    BIGINT(20)   NOT NULL,
-    gtid        TEXT,
+    source_gtid TEXT,
     target_gtid TEXT,
     timestamp   TIMESTAMP    NOT NULL,
     PRIMARY KEY (task)
-)
+);
 ```
 
 

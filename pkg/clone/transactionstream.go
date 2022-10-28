@@ -316,7 +316,7 @@ func (s *TransactionStream) readCheckpoint(ctx context.Context) (file string, po
 	defer target.Close()
 
 	row := target.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT file, position, gtid FROM %s WHERE task = ?",
+		fmt.Sprintf("SELECT file, position, source_gtid FROM %s WHERE task = ?",
 			s.config.CheckpointTable),
 		s.config.TaskName)
 	err = errors.WithStack(row.Scan(

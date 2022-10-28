@@ -672,7 +672,7 @@ func (w *TransactionWriter) createCheckpointTable(ctx context.Context) error {
 			task        VARCHAR(255) NOT NULL,
 			file        VARCHAR(255) NOT NULL,
 			position    BIGINT(20)   NOT NULL,
-			gtid        TEXT,
+			source_gtid TEXT,
 			target_gtid TEXT,
 			timestamp   TIMESTAMP    NOT NULL,
 			PRIMARY KEY (task)

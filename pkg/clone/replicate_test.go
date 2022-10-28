@@ -171,10 +171,9 @@ func doStartReplication(ctx context.Context, task string, g *errgroup.Group, sou
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 			SaveGTIDExecuted:        true,
 		},
-		TaskName:               task,
-		HeartbeatFrequency:     heartbeatFrequency,
-		CreateTables:           true,
-		ReplicationParallelism: 10,
+		TaskName:           task,
+		HeartbeatFrequency: heartbeatFrequency,
+		CreateTables:       true,
 	}
 	err := kong.ApplyDefaults(replicate)
 	if err != nil {

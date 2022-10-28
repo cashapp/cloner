@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v3"
+	"github.com/cenkalti/backoff/v4"
 	dc "github.com/ory/dockertest/v3/docker"
 	options "github.com/ory/dockertest/v3/docker/opts"
 	"github.com/pkg/errors"
@@ -69,7 +69,11 @@ func (r *Resource) GetBoundIP(id string) string {
 		return ""
 	}
 
-	return m[0].HostIP
+	ip := m[0].HostIP
+	if ip == "0.0.0.0" || ip == "" {
+		return "localhost"
+	}
+	return ip
 }
 
 // GetHostPort returns a resource's published port with an address.
@@ -84,7 +88,7 @@ func (r *Resource) GetHostPort(portID string) string {
 	}
 
 	ip := m[0].HostIP
-	if ip == "0.0.0.0" {
+	if ip == "0.0.0.0" || ip == "" {
 		ip = "localhost"
 	}
 	return net.JoinHostPort(ip, m[0].HostPort)
@@ -300,12 +304,17 @@ type RunOptions struct {
 	Auth         dc.AuthConfiguration
 	PortBindings map[dc.Port][]dc.PortBinding
 	Privileged   bool
+	User         string
+	Tty          bool
+	Platform     string
 }
 
 // BuildOptions is used to pass in optional parameters when building a container
 type BuildOptions struct {
 	Dockerfile string
 	ContextDir string
+	BuildArgs  []dc.BuildArg
+	Platform   string
 }
 
 // BuildAndRunWithBuildOptions builds and starts a docker container.
@@ -316,6 +325,8 @@ func (d *Pool) BuildAndRunWithBuildOptions(buildOpts *BuildOptions, runOpts *Run
 		Dockerfile:   buildOpts.Dockerfile,
 		OutputStream: ioutil.Discard,
 		ContextDir:   buildOpts.ContextDir,
+		BuildArgs:    buildOpts.BuildArgs,
+		Platform:     buildOpts.Platform,
 	})
 
 	if err != nil {
@@ -397,6 +408,7 @@ func (d *Pool) RunWithOptions(opts *RunOptions, hcOpts ...func(*dc.HostConfig)) 
 		if err := d.Client.PullImage(dc.PullImageOptions{
 			Repository: repository,
 			Tag:        tag,
+			Platform:   opts.Platform,
 		}, opts.Auth); err != nil {
 			return nil, errors.Wrap(err, "")
 		}
@@ -431,6 +443,8 @@ func (d *Pool) RunWithOptions(opts *RunOptions, hcOpts ...func(*dc.HostConfig)) 
 			WorkingDir:   wd,
 			Labels:       opts.Labels,
 			StopSignal:   "SIGWINCH", // to support timeouts
+			User:         opts.User,
+			Tty:          opts.Tty,
 		},
 		HostConfig:       &hostConfig,
 		NetworkingConfig: &networkingConfig,
@@ -541,7 +555,15 @@ func (d *Pool) Retry(op func() error) error {
 	bo := backoff.NewExponentialBackOff()
 	bo.MaxInterval = time.Second * 5
 	bo.MaxElapsedTime = d.MaxWait
-	return backoff.Retry(op, bo)
+	if err := backoff.Retry(op, bo); err != nil {
+		if bo.NextBackOff() == backoff.Stop {
+			return fmt.Errorf("reached retry deadline")
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 // CurrentContainer returns current container descriptor if this function called within running container.
@@ -584,6 +606,28 @@ func (d *Pool) CreateNetwork(name string, opts ...func(config *dc.CreateNetworkO
 		pool:    d,
 		Network: network,
 	}, nil
+}
+
+// NetworksByName returns a list of docker networks filtered by name
+func (d *Pool) NetworksByName(name string) ([]Network, error) {
+	networks, err := d.Client.ListNetworks()
+	if err != nil {
+		return nil, errors.Wrap(err, "")
+	}
+
+	var foundNetworks []Network
+	for idx := range networks {
+		if networks[idx].Name == name {
+			foundNetworks = append(foundNetworks,
+				Network{
+					pool:    d,
+					Network: &networks[idx],
+				},
+			)
+		}
+	}
+
+	return foundNetworks, nil
 }
 
 // RemoveNetwork disconnects containers and removes provided network.

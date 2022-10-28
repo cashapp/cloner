@@ -3,7 +3,7 @@
 [![Build Status](https://travis-ci.org/ory/dockertest.svg)](https://travis-ci.org/ory/dockertest?branch=master)
 [![Coverage Status](https://coveralls.io/repos/github/ory/dockertest/badge.svg?branch=v3)](https://coveralls.io/github/ory/dockertest?branch=v3)
 
-Use Docker to run your Go language integration tests against third party services on **Microsoft Windows, Mac OSX and Linux**!
+Use Docker to run your Golang integration tests against third party services on **Microsoft Windows, Mac OSX and Linux**!
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 		}
 		return db.Ping()
 	}); err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+		log.Fatalf("Could not connect to database: %s", err)
 	}
 
 	code := m.Run()
@@ -119,3 +119,91 @@ Sometimes container clean up fails. Check out
 ```go
 resource.Expire(60) // Tell docker to hard kill the container in 60 seconds
 ```
+
+To let stopped containers removed from file system automatically, use `pool.RunWithOptions()` instead of `pool.Run()` with `config.AutoRemove` set to true, e.g.:
+
+```go
+postgres, err := pool.RunWithOptions(&dockertest.RunOptions{
+	Repository: "postgres",
+	Tag:        "11",
+	Env: []string{
+		"POSTGRES_USER=test",
+		"POSTGRES_PASSWORD=test",
+		"listen_addresses = '*'",
+	},
+}, func(config *docker.HostConfig) {
+	// set AutoRemove to true so that stopped container goes away by itself
+	config.AutoRemove = true
+	config.RestartPolicy = docker.RestartPolicy{
+		Name: "no",
+	}
+})
+```
+
+## Running dockertest in Gitlab CI
+ 
+### How to run dockertest on shared gitlab runners?
+
+You should add docker dind service to your job which starts in sibling container. 
+That means database will be available on host `docker`.   
+You app should be able to change db host through environment variable.
+
+Here is the simple example of `gitlab-ci.yml`:
+```yaml
+stages:
+  - test
+go-test:
+  stage: test
+  image: golang:1.15
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+    YOUR_APP_DB_HOST: docker
+  script:
+    - go test ./...
+```
+
+Plus in the `pool.Retry` method that checks for connection readiness,
+ you need to use `$YOUR_APP_DB_HOST` instead of localhost.
+
+### How to run dockertest on group(custom) gitlab runners?
+
+Gitlab runner can be run in docker executor mode to save compatibility with shared runners.    
+Here is the simple register command:
+```shell script
+gitlab-runner register -n \
+ --url https://gitlab.com/ \
+ --registration-token $YOUR_TOKEN \
+ --executor docker \
+ --description "My Docker Runner" \
+ --docker-image "docker:19.03.12" \
+ --docker-privileged
+```
+
+You only need to instruct docker dind to start with disabled tls.  
+Add variable `DOCKER_TLS_CERTDIR: ""` to `gitlab-ci.yml` above.
+It will tell docker daemon to start on 2375 port over http. 
+
+### How to run dockertest with remote Docker
+
+Use-case: locally installed docker CLI (client), docker daemon somewhere remotely, environment properly set (ie: `DOCKER_HOST`, etc..). For example, remote docker can be provisioned by docker-machine.
+
+Currently, dockertest in case of `resource.GetHostPort()` will return docker host binding address (commonly - `localhost`) instead of remote docker host. Universal solution is:
+
+```go
+func getHostPort(resource *dockertest.Resource, id string) string {
+	dockerURL := os.Getenv("DOCKER_HOST")
+	if dockerURL == "" {
+		return resource.GetHostPort(id)
+	}
+	u, err := url.Parse(dockerURL)
+	if err != nil {
+		panic(err)
+	}
+	return u.Hostname() + ":" + resource.GetPort(id)
+}
+```
+
+It will return the remote docker host concatenated with the allocated port in case `DOCKER_HOST` env is defined. Otherwise, it will fall back to the embedded behavior.

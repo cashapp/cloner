@@ -19,8 +19,12 @@ const (
 	MetricMinRTT = "min_rtt"
 	// MetricWindowMinRTT is the name of the metric for the Window's Minimum Round Trip Time
 	MetricWindowMinRTT = "window.min_rtt"
-	// MetricWindowQueueSize represents the name of hte metric for the Window's Queue Size
+	// MetricWindowQueueSize represents the name of the metric for the Window's Queue Size
 	MetricWindowQueueSize = "window.queue_size"
+	// MetricQueueSize represents the name of the metric for the size of a lifo queue
+	MetricQueueSize = "queue_size"
+	// MetricQueueLimit represents the name of the metric for the max size of a lifo queue
+	MetricQueueLimit = "queue_limit"
 )
 
 // PrefixMetricWithName will prefix a given name with the metric name in the form "<name>.<metric>"

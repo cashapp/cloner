@@ -25,7 +25,15 @@ func NewIntMetricSupplierWrapper(s func() int) MetricSupplier {
 	})
 }
 
-// NewFloat64MetricSupplierWrapper will wrap a int-return value func to a supplier func
+// NewUint64MetricSupplierWrapper will wrap a uint64-return value func to a supplier func
+func NewUint64MetricSupplierWrapper(s func() uint64) MetricSupplier {
+	return MetricSupplier(func() (float64, bool) {
+		val := s()
+		return float64(val), true
+	})
+}
+
+// NewFloat64MetricSupplierWrapper will wrap a float64-return value func to a supplier func
 func NewFloat64MetricSupplierWrapper(s func() float64) MetricSupplier {
 	return MetricSupplier(func() (float64, bool) {
 		val := s()
@@ -117,7 +125,7 @@ func NewCommonMetricSampler(registry MetricRegistry, limit Limit, name string, t
 // Sample will sample the current sample for metric reporting.
 func (s *CommonMetricSampler) Sample(rtt int64, inFlight int, didDrop bool) {
 	if didDrop {
-		s.InFlightListener.AddSample(1.0)
+		s.DropCounterListener.AddSample(1.0)
 	}
 	s.RTTListener.AddSample(float64(rtt))
 	s.InFlightListener.AddSample(float64(inFlight))

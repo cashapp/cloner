@@ -8,7 +8,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/dlmiddlecote/sqlstats v1.0.1
 	github.com/go-mysql-org/go-mysql v1.4.1-0.20220119050903-d8b74c3a01e1
-	github.com/go-sql-driver/mysql v1.5.0
+	github.com/go-sql-driver/mysql v1.6.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
 	github.com/ory/dockertest/v3 v3.6.1

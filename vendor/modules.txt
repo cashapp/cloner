@@ -50,7 +50,7 @@ github.com/go-mysql-org/go-mysql/packet
 github.com/go-mysql-org/go-mysql/replication
 github.com/go-mysql-org/go-mysql/schema
 github.com/go-mysql-org/go-mysql/utils
-# github.com/go-sql-driver/mysql v1.5.0
+# github.com/go-sql-driver/mysql v1.6.0
 ## explicit; go 1.10
 github.com/go-sql-driver/mysql
 # github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b

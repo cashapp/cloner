@@ -16,7 +16,7 @@ import (
 const (
 	defaultMinWindowTime   = int64(1e9) // (1 s) nanoseconds
 	defaultMaxWindowTime   = int64(1e9) // (1 s) nanoseconds
-	defaultMinRTTThreshold = int64(1e5) // (100 ms) nanoseconds
+	defaultMinRTTThreshold = int64(1e5) // (100 µs) nanoseconds
 	defaultWindowSize      = int(100)   // Minimum observed samples to filter out sample windows with not enough significant samples
 )
 

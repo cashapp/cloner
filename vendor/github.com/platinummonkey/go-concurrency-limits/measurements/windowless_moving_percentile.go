@@ -14,7 +14,6 @@ import (
 type WindowlessMovingPercentile struct {
 	p            float64
 	deltaInitial float64
-	q            float64
 
 	value      float64
 	delta      float64
@@ -41,10 +40,6 @@ func NewWindowlessMovingPercentile(
 	if p <= 0 || p >= 1 {
 		return nil, fmt.Errorf("p must be between (0,1)")
 	}
-	q := 1 - p
-	if q <= 0 || q >= 1 {
-		return nil, fmt.Errorf("calculated q must be between (0,1)")
-	}
 	variance, err := NewSimpleMovingVariance(movingAvgAlphaAvg, movingVarianceAlphaVar)
 	if err != nil {
 		return nil, err
@@ -52,7 +47,6 @@ func NewWindowlessMovingPercentile(
 
 	return &WindowlessMovingPercentile{
 		p:            p,
-		q:            q,
 		deltaInitial: deltaInitial,
 		delta:        deltaInitial,
 		deltaState:   variance,

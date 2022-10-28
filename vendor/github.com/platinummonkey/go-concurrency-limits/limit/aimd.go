@@ -22,8 +22,8 @@ type AIMDLimit struct {
 	mu sync.RWMutex
 }
 
-// NewDefaultAIMLimit will create a default AIMDLimit.
-func NewDefaultAIMLimit(
+// NewDefaultAIMDLimit will create a default AIMDLimit.
+func NewDefaultAIMDLimit(
 	name string,
 	registry core.MetricRegistry,
 	tags ...string,
@@ -88,7 +88,7 @@ func (l *AIMDLimit) OnSample(startTime int64, rtt int64, inFlight int, didDrop b
 	l.commonSampler.Sample(rtt, inFlight, didDrop)
 
 	if didDrop {
-		l.limit = int(math.Max(1, math.Min(float64(l.limit-1), float64(int(float64(l.limit)*l.backOffRatio)))))
+		l.limit = int(math.Max(1, math.Min(float64(l.limit-1), float64(l.limit)*l.backOffRatio)))
 		l.notifyListeners(l.limit)
 	} else if inFlight >= l.limit {
 		l.limit += l.increaseBy

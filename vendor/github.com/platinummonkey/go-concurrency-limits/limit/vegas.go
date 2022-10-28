@@ -228,6 +228,7 @@ func (l *VegasLimit) OnSample(startTime int64, rtt int64, inFlight int, didDrop 
 			rtt/1e6, int64(l.rttNoLoad.Get())/1e6)
 		l.probeJitter = newProbeJitter()
 		l.probeCount = 0
+		l.rttNoLoad = &measurements.MinimumMeasurement{}
 		l.rttNoLoad.Add(float64(rtt))
 		return
 	}

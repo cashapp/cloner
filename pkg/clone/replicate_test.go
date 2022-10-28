@@ -41,7 +41,7 @@ func TestReplicateParallel(t *testing.T) {
 	})
 }
 
-func IgnoreTestReverseReplication(t *testing.T) {
+func TestReverseReplication(t *testing.T) {
 	var err error
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

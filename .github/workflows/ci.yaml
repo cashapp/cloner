@@ -18,7 +18,7 @@ jobs:
         run: go build -o cloner ./cmd/cloner
 
       - name: Test
-        run: go test -v ./...
+        run: go test -timeout 20m -v ./...
 
       - name: Archive
         uses: actions/upload-artifact@v3

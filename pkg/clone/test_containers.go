@@ -374,9 +374,10 @@ func startMysql() (*DatabaseContainer, error) {
 }
 
 // startAll (re)starts both Vitess and TiDB in parallel
-func startAll() error {
+func startAll() (*DatabaseContainer, *DatabaseContainer, error) {
 	g, _ := errgroup.WithContext(context.Background())
 	g.Go(startVitess)
 	g.Go(startTidb)
-	return g.Wait()
+	err := g.Wait()
+	return vitessContainer, tidbContainer, err
 }

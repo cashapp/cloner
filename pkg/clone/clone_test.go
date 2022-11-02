@@ -134,8 +134,8 @@ func inShard(id uint64, shard []*topodata.KeyRange) bool {
 	return false
 }
 
-func TestOneShardCloneWithTargetData(t *testing.T) {
-	err := startAll()
+func DisableTestOneShardCloneWithTargetData(t *testing.T) {
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -218,8 +218,8 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestUnshardedClone(t *testing.T) {
-	err := startAll()
+func DisableTestUnshardedClone(t *testing.T) {
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -271,8 +271,8 @@ func TestUnshardedClone(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestCloneNoDiff(t *testing.T) {
-	err := startAll()
+func DisableTestCloneNoDiff(t *testing.T) {
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -345,8 +345,8 @@ func TestCloneNoDiff(t *testing.T) {
 	assert.Equal(t, 52, len(diffs))
 }
 
-func TestAllShardsCloneWithTargetData(t *testing.T) {
-	err := startAll()
+func DisableTestAllShardsCloneWithTargetData(t *testing.T) {
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -458,8 +458,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestUnshardedCloneEmptySourceTables(t *testing.T) {
-	err := startAll()
+func DisableTestUnshardedCloneEmptySourceTables(t *testing.T) {
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()

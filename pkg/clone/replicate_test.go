@@ -33,7 +33,7 @@ func TestReplicateSingleThreaded(t *testing.T) {
 	})
 }
 
-func TestReplicateParallel(t *testing.T) {
+func DisableTestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
 		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50
@@ -198,8 +198,12 @@ func doStartReplication(ctx context.Context, task string, g *errgroup.Group, sou
 }
 
 func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
-	err := startAll()
+	vitessContainer, tidbContainer, err := startAll()
 	require.NoError(t, err)
+	defer func() {
+		vitessContainer.Close()
+		tidbContainer.Close()
+	}()
 
 	rowCount := 5000
 	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)

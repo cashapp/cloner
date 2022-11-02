@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func DisableTestOngoingChunkReconcileBinlogEvents(t *testing.T) {
+func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 	tests := []struct {
 		name         string
 		chunk        testChunk

@@ -134,7 +134,7 @@ func inShard(id uint64, shard []*topodata.KeyRange) bool {
 	return false
 }
 
-func DisableTestOneShardCloneWithTargetData(t *testing.T) {
+func TestOneShardCloneWithTargetData(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -218,7 +218,7 @@ func DisableTestOneShardCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func DisableTestUnshardedClone(t *testing.T) {
+func TestUnshardedClone(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -271,7 +271,7 @@ func DisableTestUnshardedClone(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func DisableTestCloneNoDiff(t *testing.T) {
+func TestCloneNoDiff(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -345,7 +345,7 @@ func DisableTestCloneNoDiff(t *testing.T) {
 	assert.Equal(t, 52, len(diffs))
 }
 
-func DisableTestAllShardsCloneWithTargetData(t *testing.T) {
+func TestAllShardsCloneWithTargetData(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -458,7 +458,7 @@ func DisableTestAllShardsCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func DisableTestUnshardedCloneEmptySourceTables(t *testing.T) {
+func TestUnshardedCloneEmptySourceTables(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 

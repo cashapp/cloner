@@ -27,7 +27,7 @@ func deleteAllData(config DBConfig) error {
 	return nil
 }
 
-func DisableTestChecksum(t *testing.T) {
+func TestChecksum(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 

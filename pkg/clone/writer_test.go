@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func DisableTestSplitBatch(t *testing.T) {
+func TestSplitBatch(t *testing.T) {
 	b1, b2 := splitBatch(Batch{
 		Type:  Insert,
 		Table: nil,

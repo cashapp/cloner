@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func DisableTestTransactionSetAppend(t *testing.T) {
+func TestTransactionSetAppend(t *testing.T) {
 	table := &Table{Name: "customers",
 		KeyColumns:       []string{"id"},
 		KeyColumnIndexes: []int{0},

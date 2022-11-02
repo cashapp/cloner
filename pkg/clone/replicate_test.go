@@ -33,7 +33,7 @@ func TestReplicateSingleThreaded(t *testing.T) {
 	})
 }
 
-func DisableTestReplicateParallel(t *testing.T) {
+func TestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
 		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50

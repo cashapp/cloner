@@ -38,7 +38,7 @@ func toTestRow(row *Row) testRow {
 	return testRow{row.KeyValues()[0].(int64), row.Table.Name, row.Data[1].(string)}
 }
 
-func DisableTestStreamDiff(t *testing.T) {
+func TestStreamDiff(t *testing.T) {
 	customers := &Table{
 		Name:             "customers",
 		KeyColumns:       []string{"id"},
@@ -257,7 +257,7 @@ func streamRows(rows []*Row) RowStream {
 	return &bufferStream{rows}
 }
 
-func DisableTestRowsEqual(t *testing.T) {
+func TestRowsEqual(t *testing.T) {
 	sourceRow := &Row{nil, []interface{}{
 		100020406,
 		int64(30027935561),

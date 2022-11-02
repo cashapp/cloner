@@ -21,7 +21,7 @@ type testChunk struct {
 	Last  bool
 }
 
-func DisableTestChunker(t *testing.T) {
+func TestChunker(t *testing.T) {
 	tests := []struct {
 		name    string
 		table   string

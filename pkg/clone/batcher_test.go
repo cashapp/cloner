@@ -22,7 +22,7 @@ func toTestBatch(batch Batch) testBatch {
 	return testBatch{batch.Type, batch.Table.Name, rows}
 }
 
-func DisableTestBatcher(t *testing.T) {
+func TestBatcher(t *testing.T) {
 	tests := []struct {
 		name      string
 		batchSize int
@@ -70,7 +70,7 @@ func DisableTestBatcher(t *testing.T) {
 	}
 }
 
-func DisableTestBatchTableWritesSync(t *testing.T) {
+func TestBatchTableWritesSync(t *testing.T) {
 	tests := []struct {
 		name      string
 		batchSize int

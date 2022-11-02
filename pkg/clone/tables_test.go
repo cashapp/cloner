@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func DisableTestLoadTablesShardedVitess(t *testing.T) {
+func TestLoadTablesShardedVitess(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -48,7 +48,7 @@ func DisableTestLoadTablesShardedVitess(t *testing.T) {
 	}, tables)
 }
 
-func DisableTestLoadTablesUnshardedVitess(t *testing.T) {
+func TestLoadTablesUnshardedVitess(t *testing.T) {
 	err := startVitess()
 	assert.NoError(t, err)
 
@@ -112,7 +112,7 @@ func DisableTestLoadTablesUnshardedVitess(t *testing.T) {
 	}, tables)
 }
 
-func DisableTestLoadTablesTiDB(t *testing.T) {
+func TestLoadTablesTiDB(t *testing.T) {
 	err := startTidb()
 	assert.NoError(t, err)
 

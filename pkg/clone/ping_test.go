@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func DisableTestPing(t *testing.T) {
+func TestPing(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 

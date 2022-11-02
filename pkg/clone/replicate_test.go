@@ -187,12 +187,14 @@ func doStartReplication(ctx context.Context, task string, g *errgroup.Group, sou
 
 	// Run replication in separate thread
 	g.Go(func() error {
-		err := replicator.run(ctx)
-		if isCancelledError(err) {
-			return nil
+		for {
+			err := replicator.run(ctx)
+			if isCancelledError(err) {
+				return nil
+			}
+			logrus.WithError(err).Errorf("replication failed, restarting: %+v", err)
+			return errors.WithStack(err)
 		}
-		logrus.WithError(err).Errorf("replication failed: %+v", err)
-		return errors.WithStack(err)
 	})
 	return nil
 }
@@ -442,6 +444,7 @@ func littleReplicationLag(ctx context.Context, task string, db *sql.DB) func() e
 	return func() (err error) {
 		defer func() {
 			if p := recover(); p != nil {
+				logrus.Errorf("panic: %+v", p)
 				var ok bool
 				err, ok = p.(error)
 				if !ok {
@@ -453,6 +456,7 @@ func littleReplicationLag(ctx context.Context, task string, db *sql.DB) func() e
 		logrus.Infof("waiting for replication lag to be <%v", expectedLag)
 		reads := testutil.ToFloat64(heartbeatsRead)
 		if reads == 0 {
+			logrus.Infof("we haven't read any heartbeats yet")
 			return errors.Errorf("we haven't read any heartbeats yet")
 		}
 		lag, _, err := readReplicationLag(ctx, task, db)

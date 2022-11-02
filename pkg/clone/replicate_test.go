@@ -450,12 +450,14 @@ func littleReplicationLag(ctx context.Context, task string, db *sql.DB) func() e
 			}
 		}()
 		expectedLag := 1 * time.Second
+		logrus.Infof("waiting for replication lag to be <%v", expectedLag)
 		reads := testutil.ToFloat64(heartbeatsRead)
 		if reads == 0 {
 			return errors.Errorf("we haven't read any heartbeats yet")
 		}
 		lag, _, err := readReplicationLag(ctx, task, db)
 		if err != nil {
+			logrus.WithError(err).Errorf("could not read repl lag: %+v", err)
 			return errors.WithStack(err)
 		}
 		logrus.Infof("replication lag %v", lag)

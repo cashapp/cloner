@@ -62,13 +62,14 @@ func run() error {
 
 ## Exposed Metrics
 
-| Name                                         | Description                                                       | Labels  |
-|----------------------------------------------|-------------------------------------------------------------------|---------|
-| go_sql_stats_connections_max_open            | Maximum number of open connections to the database.               | db_name |
-| go_sql_stats_connections_open                | The number of established connections both in use and idle.       | db_name |
-| go_sql_stats_connections_in_use              | The number of connections currently in use.                       | db_name |
-| go_sql_stats_connections_idle                | The number of idle connections.                                   | db_name |
-| go_sql_stats_connections_waited_for          | The total number of connections waited for.                       | db_name |
-| go_sql_stats_connections_blocked_seconds     | The total time blocked waiting for a new connection.              | db_name |
-| go_sql_stats_connections_closed_max_idle     | The total number of connections closed due to SetMaxIdleConns.    | db_name |
-| go_sql_stats_connections_closed_max_lifetime | The total number of connections closed due to SetConnMaxLifetime. | db_name |
+| Name                                          | Description                                                       | Labels  | Go Version |
+|-----------------------------------------------|-------------------------------------------------------------------|---------|------------|
+| go_sql_stats_connections_max_open             | Maximum number of open connections to the database.               | db_name | 1.11+      |
+| go_sql_stats_connections_open                 | The number of established connections both in use and idle.       | db_name | 1.11+      |
+| go_sql_stats_connections_in_use               | The number of connections currently in use.                       | db_name | 1.11+      |
+| go_sql_stats_connections_idle                 | The number of idle connections.                                   | db_name | 1.11+      |
+| go_sql_stats_connections_waited_for           | The total number of connections waited for.                       | db_name | 1.11+      |
+| go_sql_stats_connections_blocked_seconds      | The total time blocked waiting for a new connection.              | db_name | 1.11+      |
+| go_sql_stats_connections_closed_max_idle      | The total number of connections closed due to SetMaxIdleConns.    | db_name | 1.11+      |
+| go_sql_stats_connections_closed_max_lifetime  | The total number of connections closed due to SetConnMaxLifetime. | db_name | 1.11+      |
+| go_sql_stats_connections_closed_max_idle_time | The total number of connections closed due to SetConnMaxIdleTime. | db_name | 1.15+      |

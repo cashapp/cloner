@@ -135,7 +135,7 @@ func inShard(id uint64, shard []*topodata.KeyRange) bool {
 }
 
 func TestOneShardCloneWithTargetData(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -219,7 +219,7 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 }
 
 func TestUnshardedClone(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -272,7 +272,7 @@ func TestUnshardedClone(t *testing.T) {
 }
 
 func TestCloneNoDiff(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -346,7 +346,7 @@ func TestCloneNoDiff(t *testing.T) {
 }
 
 func TestAllShardsCloneWithTargetData(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()
@@ -459,7 +459,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 }
 
 func TestUnshardedCloneEmptySourceTables(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	source := vitessContainer.Config()

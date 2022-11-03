@@ -28,7 +28,7 @@ func deleteAllData(config DBConfig) error {
 }
 
 func TestChecksum(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	rowCount := 1000

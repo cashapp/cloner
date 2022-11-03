@@ -78,7 +78,7 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 	}
 
 	var nextPos mysql.Position
-	var currentTransaction *Transaction
+	currentTransaction := &Transaction{}
 
 	for {
 		e, err := streamer.GetEvent(ctx)
@@ -100,12 +100,6 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 		case *replication.RotateEvent:
 			nextPos.Name = string(event.NextLogName)
 			nextPos.Pos = uint32(event.Position)
-		case *replication.QueryEvent:
-			if string(event.Query) == "BEGIN" {
-				currentTransaction = &Transaction{}
-			} else {
-				ignored = true
-			}
 		case *replication.RowsEvent:
 			if !s.shouldReplicate(event.Table) {
 				ignored = true
@@ -124,7 +118,7 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			currentTransaction = nil
+			currentTransaction = &Transaction{}
 			// We've received a full transaction, we can reset the backoff
 			b.Reset()
 		default:
@@ -245,10 +239,25 @@ func (s *TransactionStream) readStartingPosition(ctx context.Context) (Position,
 	file, position, executedGtidSet, err := s.readCheckpoint(ctx)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			file, position, executedGtidSet, err = s.readMasterPosition(ctx)
-			logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
-			if err != nil {
-				return Position{}, errors.WithStack(err)
+			if s.config.StartingGTID != "" {
+				file, position, executedGtidSet = "", 0, s.config.StartingGTID
+				logger.Infof("starting new replication from gtid=%s", executedGtidSet)
+			} else if s.config.StartAtLastSourceGTID {
+				file, position = "", 0
+				executedGtidSet, err = s.readLastTargetGTID(ctx)
+				if err != nil {
+					return Position{}, errors.WithStack(err)
+				}
+				logger.Infof("starting new replication from last source gtid=%s", executedGtidSet)
+			} else {
+				file, position, executedGtidSet, err = s.readMasterPosition(ctx)
+				logger.Infof("starting new replication from current master position %s:%d gtid=%s", file, position, executedGtidSet)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return Position{}, errors.Wrap(err, "binlogs are not enabled on the replication source database")
+					}
+					return Position{}, errors.WithStack(err)
+				}
 			}
 		} else {
 			return Position{}, errors.WithStack(err)
@@ -301,18 +310,36 @@ func (s *TransactionStream) readMasterPosition(ctx context.Context) (file string
 func (s *TransactionStream) readCheckpoint(ctx context.Context) (file string, position uint32, executedGtidSet string, err error) {
 	target, err := s.config.Target.DB()
 	if err != nil {
+		err = errors.WithStack(err)
 		return
 	}
 	defer target.Close()
 
 	row := target.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT file, position, gtid_set FROM %s WHERE task = ?",
+		fmt.Sprintf("SELECT file, position, source_gtid FROM %s WHERE task = ?",
 			s.config.CheckpointTable),
 		s.config.TaskName)
-	err = row.Scan(
+	err = errors.WithStack(row.Scan(
 		&file,
 		&position,
 		&executedGtidSet,
-	)
+	))
+	return
+}
+
+// readLastTargetGTID reads the last "target_gtid" from the source database
+func (s *TransactionStream) readLastTargetGTID(ctx context.Context) (gtidSet string, err error) {
+	source, err := s.config.Source.DB()
+	if err != nil {
+		err = errors.WithStack(err)
+		return
+	}
+	defer source.Close()
+
+	row := source.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT target_gtid FROM %s WHERE task = ?",
+			s.config.CheckpointTable),
+		s.config.TaskName)
+	err = errors.WithStack(row.Scan(&gtidSet))
 	return
 }

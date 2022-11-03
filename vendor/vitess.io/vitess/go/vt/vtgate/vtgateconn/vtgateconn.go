@@ -17,12 +17,15 @@ limitations under the License.
 package vtgateconn
 
 import (
-	"flag"
+	"context"
 	"fmt"
+	"sync"
 
-	"golang.org/x/net/context"
+	"github.com/spf13/pflag"
+
 	"vitess.io/vitess/go/sqltypes"
 	"vitess.io/vitess/go/vt/log"
+	"vitess.io/vitess/go/vt/servenv"
 
 	binlogdatapb "vitess.io/vitess/go/vt/proto/binlogdata"
 	querypb "vitess.io/vitess/go/vt/proto/query"
@@ -30,10 +33,27 @@ import (
 	vtgatepb "vitess.io/vitess/go/vt/proto/vtgate"
 )
 
-var (
-	// VtgateProtocol defines the RPC implementation used for connecting to vtgate.
-	VtgateProtocol = flag.String("vtgate_protocol", "grpc", "how to talk to vtgate")
-)
+// vtgateProtocol defines the RPC implementation used for connecting to vtgate.
+var vtgateProtocol = "grpc"
+
+func registerFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&vtgateProtocol, "vtgate_protocol", vtgateProtocol, "how to talk to vtgate")
+}
+
+func init() {
+	servenv.OnParseFor("vttablet", registerFlags)
+	servenv.OnParseFor("vtclient", registerFlags)
+}
+
+// GetVTGateProtocol returns the protocol used to connect to vtgate as provided in the flag.
+func GetVTGateProtocol() string {
+	return vtgateProtocol
+}
+
+// SetVTGateProtocol set the protocol to be used to connect to vtgate.
+func SetVTGateProtocol(protocol string) {
+	vtgateProtocol = protocol
+}
 
 // VTGateConn is the client API object to talk to vtgate.
 // It can support concurrent sessions.
@@ -51,6 +71,19 @@ func (conn *VTGateConn) Session(targetString string, options *querypb.ExecuteOpt
 			Autocommit:   true,
 		},
 		impl: conn.impl,
+	}
+}
+
+// SessionPb returns the underlying proto session.
+func (sn *VTGateSession) SessionPb() *vtgatepb.Session {
+	return sn.session
+}
+
+// SessionFromPb returns a VTGateSession based on the provided proto session.
+func (conn *VTGateConn) SessionFromPb(sn *vtgatepb.Session) *VTGateSession {
+	return &VTGateSession{
+		session: sn,
+		impl:    conn.impl,
 	}
 }
 
@@ -73,8 +106,9 @@ type VStreamReader interface {
 }
 
 // VStream streams binlog events.
-func (conn *VTGateConn) VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid, filter *binlogdatapb.Filter) (VStreamReader, error) {
-	return conn.impl.VStream(ctx, tabletType, vgtid, filter)
+func (conn *VTGateConn) VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid,
+	filter *binlogdatapb.Filter, flags *vtgatepb.VStreamFlags) (VStreamReader, error) {
+	return conn.impl.VStream(ctx, tabletType, vgtid, filter, flags)
 }
 
 // VTGateSession exposes the V3 API to the clients.
@@ -113,6 +147,13 @@ func (sn *VTGateSession) StreamExecute(ctx context.Context, query string, bindVa
 	return sn.impl.StreamExecute(ctx, sn.session, query, bindVars)
 }
 
+// Prepare performs a VTGate Prepare.
+func (sn *VTGateSession) Prepare(ctx context.Context, query string, bindVars map[string]*querypb.BindVariable) ([]*querypb.Field, error) {
+	session, fields, err := sn.impl.Prepare(ctx, sn.session, query, bindVars)
+	sn.session = session
+	return fields, err
+}
+
 //
 // The rest of this file is for the protocol implementations.
 //
@@ -129,11 +170,17 @@ type Impl interface {
 	// StreamExecute executes a streaming query on vtgate. This is a V3 function.
 	StreamExecute(ctx context.Context, session *vtgatepb.Session, query string, bindVars map[string]*querypb.BindVariable) (sqltypes.ResultStream, error)
 
+	// Prepare returns the fields information for the query as part of supporting prepare statements.
+	Prepare(ctx context.Context, session *vtgatepb.Session, sql string, bindVariables map[string]*querypb.BindVariable) (*vtgatepb.Session, []*querypb.Field, error)
+
+	// CloseSession closes the session provided by rolling back any active transaction.
+	CloseSession(ctx context.Context, session *vtgatepb.Session) error
+
 	// ResolveTransaction resolves the specified 2pc transaction.
 	ResolveTransaction(ctx context.Context, dtid string) error
 
 	// VStream streams binlogevents
-	VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid, filter *binlogdatapb.Filter) (VStreamReader, error)
+	VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid, filter *binlogdatapb.Filter, flags *vtgatepb.VStreamFlags) (VStreamReader, error)
 
 	// Close must be called for releasing resources.
 	Close()
@@ -143,11 +190,17 @@ type Impl interface {
 // object that can communicate with a VTGate.
 type DialerFunc func(ctx context.Context, address string) (Impl, error)
 
-var dialers = make(map[string]DialerFunc)
+var (
+	dialers  = make(map[string]DialerFunc)
+	dialersM sync.Mutex
+)
 
 // RegisterDialer is meant to be used by Dialer implementations
 // to self register.
 func RegisterDialer(name string, dialer DialerFunc) {
+	dialersM.Lock()
+	defer dialersM.Unlock()
+
 	if _, ok := dialers[name]; ok {
 		log.Warningf("Dialer %s already exists, overwriting it", name)
 	}
@@ -156,7 +209,10 @@ func RegisterDialer(name string, dialer DialerFunc) {
 
 // DialProtocol dials a specific protocol, and returns the *VTGateConn
 func DialProtocol(ctx context.Context, protocol string, address string) (*VTGateConn, error) {
+	dialersM.Lock()
 	dialer, ok := dialers[protocol]
+	dialersM.Unlock()
+
 	if !ok {
 		return nil, fmt.Errorf("no dialer registered for VTGate protocol %s", protocol)
 	}
@@ -172,5 +228,5 @@ func DialProtocol(ctx context.Context, protocol string, address string) (*VTGate
 // Dial dials using the command-line specified protocol, and returns
 // the *VTGateConn.
 func Dial(ctx context.Context, address string) (*VTGateConn, error) {
-	return DialProtocol(ctx, *VtgateProtocol, address)
+	return DialProtocol(ctx, vtgateProtocol, address)
 }

@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -133,6 +134,12 @@ func genericCompare(a interface{}, b interface{}) int {
 		} else {
 			return 1
 		}
+	case []byte:
+		coerced, err := coerceRaw(b)
+		if err != nil {
+			panic(err)
+		}
+		return bytes.Compare(a, coerced)
 	default:
 		panic(fmt.Sprintf("type combination %v -> %v not supported yet: source=%v target=%v",
 			aType, bType, a, b))

@@ -7,7 +7,7 @@ import (
 )
 
 func TestPing(t *testing.T) {
-	err := startAll()
+	_, _, err := startAll()
 	assert.NoError(t, err)
 
 	ping := &Ping{

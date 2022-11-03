@@ -669,11 +669,12 @@ func (w *TransactionWriter) createCheckpointTable(ctx context.Context) error {
 	defer cancel()
 	stmt := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
-			task      VARCHAR(255) NOT NULL,
-			file      VARCHAR(255) NOT NULL,
-			position  BIGINT(20)   NOT NULL,
-			gtid_set  TEXT,
-			timestamp TIMESTAMP    NOT NULL,
+			task        VARCHAR(255) NOT NULL,
+			file        VARCHAR(255) NOT NULL,
+			position    BIGINT(20)   NOT NULL,
+			source_gtid TEXT,
+			target_gtid TEXT,
+			timestamp   TIMESTAMP    NOT NULL,
 			PRIMARY KEY (task)
 		)
 		`, "`"+w.config.CheckpointTable+"`")
@@ -689,9 +690,15 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 	if position.Gset != nil {
 		gsetString = position.Gset.String()
 	}
+	targetGTIDColumn := ""
+	targetGTIDValue := ""
+	if w.config.SaveGTIDExecuted {
+		targetGTIDColumn = ", target_gtid"
+		targetGTIDValue = ", @@GLOBAL.gtid_executed"
+	}
 	_, err := tx.ExecContext(ctx,
-		fmt.Sprintf("REPLACE INTO %s (task, file, position, gtid_set, timestamp) VALUES (?, ?, ?, ?, ?)",
-			w.config.CheckpointTable),
+		fmt.Sprintf("REPLACE INTO %s (task, file, position, source_gtid, timestamp%s) VALUES (?, ?, ?, ?, ?%s)",
+			w.config.CheckpointTable, targetGTIDColumn, targetGTIDValue),
 		w.config.TaskName, position.File, position.Position, gsetString, time.Now().UTC())
 	if err != nil {
 		return errors.WithStack(err)

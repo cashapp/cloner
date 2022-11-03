@@ -67,6 +67,8 @@ type WriterConfig struct {
 	WriteRetries            uint64        `help:"Number of retries" default:"5"`
 	WriteTimeout            time.Duration `help:"Timeout for each write" default:"30s"`
 
+	SaveGTIDExecuted bool `help:"During replication save the gtid_executed into the checkpoint table, useful when reversing replication" default:"false"`
+
 	NoDiff bool `help:"Clone without diffing using INSERT IGNORE can be faster as a first pass" default:"false"`
 }
 

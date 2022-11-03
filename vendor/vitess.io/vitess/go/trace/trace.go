@@ -20,14 +20,15 @@ limitations under the License.
 package trace
 
 import (
-	"flag"
+	"context"
+	"fmt"
 	"io"
 	"strings"
 
-	"golang.org/x/net/context"
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
+
 	"vitess.io/vitess/go/vt/log"
-	"vitess.io/vitess/go/vt/sqlparser"
 	"vitess.io/vitess/go/vt/vterrors"
 )
 
@@ -39,7 +40,7 @@ type Span interface {
 	Finish()
 	// Annotate records a key/value pair associated with a Span. It should be
 	// called between Start and Finish.
-	Annotate(key string, value interface{})
+	Annotate(key string, value any)
 }
 
 // NewSpan creates a new Span with the currently installed tracing plugin.
@@ -65,8 +66,8 @@ func NewFromString(inCtx context.Context, parent, label string) (Span, context.C
 
 // AnnotateSQL annotates information about a sql query in the span. This is done in a way
 // so as to not leak personally identifying information (PII), or sensitive personal information (SPI)
-func AnnotateSQL(span Span, sql string) {
-	span.Annotate("sql-statement-type", sqlparser.Preview(sql).String())
+func AnnotateSQL(span Span, strippedSQL fmt.Stringer) {
+	span.Annotate("sql-statement-type", strippedSQL.String())
 }
 
 // FromContext returns the Span from a Context if present. The bool return
@@ -124,31 +125,45 @@ type tracingService interface {
 // object to make sure that all spans are sent to the backend before the process exits.
 type TracerFactory func(serviceName string) (tracingService, io.Closer, error)
 
-// tracingBackendFactories should be added to by a plugin during init() to install itself
-var tracingBackendFactories = make(map[string]TracerFactory)
-
-var currentTracer tracingService = noopTracingServer{}
-
 var (
-	tracingServer = flag.String("tracer", "noop", "tracing service to use")
+	// tracingBackendFactories should be added to by a plugin during init() to install itself
+	tracingBackendFactories = make(map[string]TracerFactory)
+
+	currentTracer tracingService = noopTracingServer{}
+
+	/* flags */
+
+	tracingServer = "noop"
+	enableLogging bool
+
+	pluginFlags []func(fs *pflag.FlagSet)
 )
+
+func RegisterFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&tracingServer, "tracer", "noop", "tracing service to use")
+	fs.BoolVar(&enableLogging, "tracing-enable-logging", false, "whether to enable logging in the tracing service")
+
+	for _, fn := range pluginFlags {
+		fn(fs)
+	}
+}
 
 // StartTracing enables tracing for a named service
 func StartTracing(serviceName string) io.Closer {
-	factory, ok := tracingBackendFactories[*tracingServer]
+	factory, ok := tracingBackendFactories[tracingServer]
 	if !ok {
 		return fail(serviceName)
 	}
 
 	tracer, closer, err := factory(serviceName)
 	if err != nil {
-		log.Error(vterrors.Wrapf(err, "failed to create a %s tracer", *tracingServer))
+		log.Error(vterrors.Wrapf(err, "failed to create a %s tracer", tracingServer))
 		return &nilCloser{}
 	}
 
 	currentTracer = tracer
-	if *tracingServer != "noop" {
-		log.Infof("successfully started tracing with [%s]", *tracingServer)
+	if tracingServer != "noop" {
+		log.Infof("successfully started tracing with [%s]", tracingServer)
 	}
 
 	return closer

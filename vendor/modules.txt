@@ -1,3 +1,6 @@
+# github.com/AdaLogics/go-fuzz-headers v0.0.0-20211102141018-f7be0cbad29c
+## explicit; go 1.13
+github.com/AdaLogics/go-fuzz-headers
 # github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78
 ## explicit
 github.com/Azure/go-ansiterm
@@ -27,6 +30,9 @@ github.com/cespare/xxhash/v2
 # github.com/containerd/continuity v0.3.0
 ## explicit; go 1.17
 github.com/containerd/continuity/pathdriver
+# github.com/cyphar/filepath-securejoin v0.2.3
+## explicit; go 1.13
+github.com/cyphar/filepath-securejoin
 # github.com/davecgh/go-spew v1.1.1
 ## explicit
 github.com/davecgh/go-spew/spew
@@ -84,7 +90,7 @@ github.com/golang/protobuf/ptypes
 github.com/golang/protobuf/ptypes/any
 github.com/golang/protobuf/ptypes/duration
 github.com/golang/protobuf/ptypes/timestamp
-# github.com/golang/snappy v0.0.1
+# github.com/golang/snappy v0.0.3
 ## explicit
 github.com/golang/snappy
 # github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
@@ -99,8 +105,8 @@ github.com/grpc-ecosystem/go-grpc-prometheus
 # github.com/imdario/mergo v0.3.12
 ## explicit; go 1.13
 github.com/imdario/mergo
-# github.com/matttproud/golang_protobuf_extensions v1.0.1
-## explicit
+# github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369
+## explicit; go 1.9
 github.com/matttproud/golang_protobuf_extensions/pbutil
 # github.com/mightyguava/autotx v0.1.1
 ## explicit; go 1.13
@@ -182,22 +188,23 @@ github.com/platinummonkey/go-concurrency-limits/strategy/matchers
 # github.com/pmezard/go-difflib v1.0.0
 ## explicit
 github.com/pmezard/go-difflib/difflib
-# github.com/prometheus/client_golang v1.4.1
-## explicit; go 1.11
+# github.com/prometheus/client_golang v1.11.0
+## explicit; go 1.13
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 github.com/prometheus/client_golang/prometheus/promhttp
 github.com/prometheus/client_golang/prometheus/testutil
+github.com/prometheus/client_golang/prometheus/testutil/promlint
 # github.com/prometheus/client_model v0.2.0
 ## explicit; go 1.9
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.9.1
-## explicit; go 1.11
+# github.com/prometheus/common v0.29.0
+## explicit; go 1.13
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/internal/bitbucket.org/ww/goautoneg
 github.com/prometheus/common/model
-# github.com/prometheus/procfs v0.0.8
-## explicit; go 1.12
+# github.com/prometheus/procfs v0.6.0
+## explicit; go 1.13
 github.com/prometheus/procfs
 github.com/prometheus/procfs/internal/fs
 github.com/prometheus/procfs/internal/util
@@ -217,6 +224,9 @@ github.com/siddontang/go-log/loggers
 # github.com/sirupsen/logrus v1.8.1
 ## explicit; go 1.13
 github.com/sirupsen/logrus
+# github.com/spf13/pflag v1.0.5
+## explicit; go 1.12
+github.com/spf13/pflag
 # github.com/stretchr/testify v1.7.1
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
@@ -243,7 +253,7 @@ github.com/uber/jaeger-client-go/thrift-gen/sampling
 github.com/uber/jaeger-client-go/thrift-gen/zipkincore
 github.com/uber/jaeger-client-go/transport
 github.com/uber/jaeger-client-go/utils
-# github.com/uber/jaeger-lib v2.0.0+incompatible
+# github.com/uber/jaeger-lib v2.4.1+incompatible
 ## explicit
 github.com/uber/jaeger-lib/metrics
 # github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f
@@ -258,11 +268,11 @@ github.com/xeipuuv/gojsonschema
 # go.uber.org/atomic v1.7.0
 ## explicit; go 1.13
 go.uber.org/atomic
-# golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
-## explicit; go 1.11
+# golang.org/x/crypto v0.0.0-20220507011949-2cf3adece122
+## explicit; go 1.17
 golang.org/x/crypto/pbkdf2
-# golang.org/x/net v0.0.0-20201224014010-6772e930b67b
-## explicit; go 1.11
+# golang.org/x/net v0.0.0-20220722155237-a158d28d115b
+## explicit; go 1.17
 golang.org/x/net/context
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
@@ -274,13 +284,13 @@ golang.org/x/net/trace
 ## explicit
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.0.0-20220502124256-b6088ccd6cba
+# golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f
 ## explicit; go 1.17
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/text v0.3.6
-## explicit; go 1.11
+# golang.org/x/text v0.3.8
+## explicit; go 1.17
 golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
@@ -289,10 +299,10 @@ golang.org/x/text/unicode/norm
 ## explicit; go 1.11
 golang.org/x/xerrors
 golang.org/x/xerrors/internal
-# google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013
+# google.golang.org/genproto v0.0.0-20210701191553-46259e63a0a9
 ## explicit; go 1.11
 google.golang.org/genproto/googleapis/rpc/status
-# google.golang.org/grpc v1.43.0
+# google.golang.org/grpc v1.45.0
 ## explicit; go 1.14
 google.golang.org/grpc
 google.golang.org/grpc/attributes
@@ -309,6 +319,8 @@ google.golang.org/grpc/credentials/insecure
 google.golang.org/grpc/encoding
 google.golang.org/grpc/encoding/proto
 google.golang.org/grpc/grpclog
+google.golang.org/grpc/health
+google.golang.org/grpc/health/grpc_health_v1
 google.golang.org/grpc/internal
 google.golang.org/grpc/internal/backoff
 google.golang.org/grpc/internal/balancerload
@@ -334,13 +346,15 @@ google.golang.org/grpc/internal/transport/networktype
 google.golang.org/grpc/keepalive
 google.golang.org/grpc/metadata
 google.golang.org/grpc/peer
+google.golang.org/grpc/reflection
+google.golang.org/grpc/reflection/grpc_reflection_v1alpha
 google.golang.org/grpc/resolver
 google.golang.org/grpc/serviceconfig
 google.golang.org/grpc/stats
 google.golang.org/grpc/status
 google.golang.org/grpc/tap
-# google.golang.org/protobuf v1.27.1
-## explicit; go 1.9
+# google.golang.org/protobuf v1.28.0
+## explicit; go 1.11
 google.golang.org/protobuf/encoding/prototext
 google.golang.org/protobuf/encoding/protowire
 google.golang.org/protobuf/internal/descfmt
@@ -381,30 +395,49 @@ gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer
 gopkg.in/DataDog/dd-trace-go.v1/internal/globalconfig
 gopkg.in/DataDog/dd-trace-go.v1/internal/log
 gopkg.in/DataDog/dd-trace-go.v1/internal/version
-# gopkg.in/yaml.v2 v2.3.0
-## explicit
+# gopkg.in/yaml.v2 v2.4.0
+## explicit; go 1.15
 gopkg.in/yaml.v2
-# gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c
+# gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
 ## explicit
 gopkg.in/yaml.v3
+# k8s.io/apimachinery v0.20.6
+## explicit; go 1.15
+k8s.io/apimachinery/pkg/util/sets
 # software.sslmate.com/src/go-pkcs12 v0.0.0-20200830195227-52f69702a001
 ## explicit
 software.sslmate.com/src/go-pkcs12
 software.sslmate.com/src/go-pkcs12/internal/rc2
-# vitess.io/vitess v0.7.0
-## explicit; go 1.13
+# vitess.io/vitess v0.15.0
+## explicit; go 1.18
+vitess.io/vitess/go/acl
 vitess.io/vitess/go/bytes2
 vitess.io/vitess/go/cache
+vitess.io/vitess/go/cache/ristretto
+vitess.io/vitess/go/cache/ristretto/bloom
 vitess.io/vitess/go/event
+vitess.io/vitess/go/flagutil
 vitess.io/vitess/go/hack
+vitess.io/vitess/go/internal/flag
+vitess.io/vitess/go/mysql/collations
+vitess.io/vitess/go/mysql/collations/internal/charset
+vitess.io/vitess/go/mysql/collations/internal/charset/eightbit
+vitess.io/vitess/go/mysql/collations/internal/charset/japanese
+vitess.io/vitess/go/mysql/collations/internal/charset/korean
+vitess.io/vitess/go/mysql/collations/internal/charset/simplifiedchinese
+vitess.io/vitess/go/mysql/collations/internal/charset/types
+vitess.io/vitess/go/mysql/collations/internal/charset/unicode
+vitess.io/vitess/go/mysql/collations/internal/uca
 vitess.io/vitess/go/netutil
 vitess.io/vitess/go/sqltypes
 vitess.io/vitess/go/stats
 vitess.io/vitess/go/sync2
+vitess.io/vitess/go/tb
 vitess.io/vitess/go/trace
 vitess.io/vitess/go/vt/callerid
 vitess.io/vitess/go/vt/grpcclient
 vitess.io/vitess/go/vt/grpccommon
+vitess.io/vitess/go/vt/grpcoptionaltls
 vitess.io/vitess/go/vt/key
 vitess.io/vitess/go/vt/log
 vitess.io/vitess/go/vt/logutil
@@ -416,11 +449,14 @@ vitess.io/vitess/go/vt/proto/vtgate
 vitess.io/vitess/go/vt/proto/vtgateservice
 vitess.io/vitess/go/vt/proto/vtrpc
 vitess.io/vitess/go/vt/proto/vttime
+vitess.io/vitess/go/vt/servenv
 vitess.io/vitess/go/vt/sqlparser
+vitess.io/vitess/go/vt/sysvars
 vitess.io/vitess/go/vt/topo/topoproto
 vitess.io/vitess/go/vt/vitessdriver
 vitess.io/vitess/go/vt/vterrors
 vitess.io/vitess/go/vt/vtgate/evalengine
+vitess.io/vitess/go/vt/vtgate/evalengine/internal/decimal
 vitess.io/vitess/go/vt/vtgate/grpcvtgateconn
 vitess.io/vitess/go/vt/vtgate/vtgateconn
 vitess.io/vitess/go/vt/vttls

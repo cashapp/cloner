@@ -17,13 +17,14 @@ limitations under the License.
 package trace
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 
 	otgrpc "github.com/opentracing-contrib/go-grpc"
 	"github.com/opentracing/opentracing-go"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+
 	"vitess.io/vitess/go/vt/vterrors"
 )
 
@@ -39,7 +40,7 @@ func (js openTracingSpan) Finish() {
 }
 
 // Annotate will add information to an existing span
-func (js openTracingSpan) Annotate(key string, value interface{}) {
+func (js openTracingSpan) Annotate(key string, value any) {
 	js.otSpan.SetTag(key, value)
 }
 

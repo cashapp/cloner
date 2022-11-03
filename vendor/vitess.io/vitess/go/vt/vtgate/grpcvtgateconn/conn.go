@@ -18,14 +18,15 @@ limitations under the License.
 package grpcvtgateconn
 
 import (
-	"flag"
+	"context"
 
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 
-	"golang.org/x/net/context"
 	"vitess.io/vitess/go/sqltypes"
 	"vitess.io/vitess/go/vt/callerid"
 	"vitess.io/vitess/go/vt/grpcclient"
+	"vitess.io/vitess/go/vt/servenv"
 	"vitess.io/vitess/go/vt/vterrors"
 	"vitess.io/vitess/go/vt/vtgate/vtgateconn"
 
@@ -37,14 +38,33 @@ import (
 )
 
 var (
-	cert = flag.String("vtgate_grpc_cert", "", "the cert to use to connect")
-	key  = flag.String("vtgate_grpc_key", "", "the key to use to connect")
-	ca   = flag.String("vtgate_grpc_ca", "", "the server ca to use to validate servers when connecting")
-	name = flag.String("vtgate_grpc_server_name", "", "the server name to use to validate server certificate")
+	cert string
+	key  string
+	ca   string
+	crl  string
+	name string
 )
 
 func init() {
 	vtgateconn.RegisterDialer("grpc", dial)
+
+	for _, cmd := range []string{
+		"vtbench",
+		"vtclient",
+		"vtcombo",
+		"vtctl",
+		"vttestserver",
+	} {
+		servenv.OnParseFor(cmd, registerFlags)
+	}
+}
+
+func registerFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&cert, "vtgate_grpc_cert", "", "the cert to use to connect")
+	fs.StringVar(&key, "vtgate_grpc_key", "", "the key to use to connect")
+	fs.StringVar(&ca, "vtgate_grpc_ca", "", "the server ca to use to validate servers when connecting")
+	fs.StringVar(&crl, "vtgate_grpc_crl", "", "the server crl to use to validate server certificates when connecting")
+	fs.StringVar(&name, "vtgate_grpc_server_name", "", "the server name to use to validate server certificate")
 }
 
 type vtgateConn struct {
@@ -59,7 +79,7 @@ func dial(ctx context.Context, addr string) (vtgateconn.Impl, error) {
 // DialWithOpts allows for custom dial options to be set on a vtgateConn.
 func DialWithOpts(ctx context.Context, opts ...grpc.DialOption) vtgateconn.DialerFunc {
 	return func(ctx context.Context, address string) (vtgateconn.Impl, error) {
-		opt, err := grpcclient.SecureDialOption(*cert, *key, *ca, *name)
+		opt, err := grpcclient.SecureDialOption(cert, key, ca, crl, name)
 		if err != nil {
 			return nil, err
 		}
@@ -162,6 +182,40 @@ func (conn *vtgateConn) StreamExecute(ctx context.Context, session *vtgatepb.Ses
 	}, nil
 }
 
+func (conn *vtgateConn) Prepare(ctx context.Context, session *vtgatepb.Session, query string, bindVars map[string]*querypb.BindVariable) (*vtgatepb.Session, []*querypb.Field, error) {
+	request := &vtgatepb.PrepareRequest{
+		CallerId: callerid.EffectiveCallerIDFromContext(ctx),
+		Session:  session,
+		Query: &querypb.BoundQuery{
+			Sql:           query,
+			BindVariables: bindVars,
+		},
+	}
+	response, err := conn.c.Prepare(ctx, request)
+	if err != nil {
+		return session, nil, vterrors.FromGRPC(err)
+	}
+	if response.Error != nil {
+		return response.Session, nil, vterrors.FromVTRPC(response.Error)
+	}
+	return response.Session, response.Fields, nil
+}
+
+func (conn *vtgateConn) CloseSession(ctx context.Context, session *vtgatepb.Session) error {
+	request := &vtgatepb.CloseSessionRequest{
+		CallerId: callerid.EffectiveCallerIDFromContext(ctx),
+		Session:  session,
+	}
+	response, err := conn.c.CloseSession(ctx, request)
+	if err != nil {
+		return vterrors.FromGRPC(err)
+	}
+	if response.Error != nil {
+		return vterrors.FromVTRPC(response.Error)
+	}
+	return nil
+}
+
 func (conn *vtgateConn) ResolveTransaction(ctx context.Context, dtid string) error {
 	request := &vtgatepb.ResolveTransactionRequest{
 		CallerId: callerid.EffectiveCallerIDFromContext(ctx),
@@ -183,12 +237,15 @@ func (a *vstreamAdapter) Recv() ([]*binlogdatapb.VEvent, error) {
 	return r.Events, nil
 }
 
-func (conn *vtgateConn) VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid, filter *binlogdatapb.Filter) (vtgateconn.VStreamReader, error) {
+func (conn *vtgateConn) VStream(ctx context.Context, tabletType topodatapb.TabletType, vgtid *binlogdatapb.VGtid,
+	filter *binlogdatapb.Filter, flags *vtgatepb.VStreamFlags) (vtgateconn.VStreamReader, error) {
+
 	req := &vtgatepb.VStreamRequest{
 		CallerId:   callerid.EffectiveCallerIDFromContext(ctx),
 		TabletType: tabletType,
 		Vgtid:      vgtid,
 		Filter:     filter,
+		Flags:      flags,
 	}
 	stream, err := conn.c.VStream(ctx, req)
 	if err != nil {
@@ -202,3 +259,6 @@ func (conn *vtgateConn) VStream(ctx context.Context, tabletType topodatapb.Table
 func (conn *vtgateConn) Close() {
 	conn.cc.Close()
 }
+
+// Make sure vtgateConn implements vtgateconn.Impl
+var _ vtgateconn.Impl = (*vtgateConn)(nil)

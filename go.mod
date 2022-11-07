@@ -20,7 +20,7 @@ require (
 	github.com/stretchr/testify v1.8.1
 	go.uber.org/atomic v1.10.0
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	google.golang.org/grpc v1.45.0
+	google.golang.org/grpc v1.50.1
 	gopkg.in/yaml.v2 v2.4.0
 	software.sslmate.com/src/go-pkcs12 v0.0.0-20200830195227-52f69702a001
 	vitess.io/vitess v0.15.0

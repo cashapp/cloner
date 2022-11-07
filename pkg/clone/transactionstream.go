@@ -38,7 +38,6 @@ type Position struct {
 // TransactionStream consumes binlog events and emits full transactions
 type TransactionStream struct {
 	config       Replicate
-	syncerCfg    replication.BinlogSyncerConfig
 	sourceSchema string
 	tables       []*Table
 
@@ -56,12 +55,17 @@ func NewTransactionStreamer(config Replicate) (*TransactionStream, error) {
 func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output chan Transaction) error {
 	var err error
 
-	position, err := s.readStartingPosition(ctx)
+	syncerCfg, err := s.config.Source.BinlogSyncerConfig(s.config.ServerID)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 
-	syncer := replication.NewBinlogSyncer(s.syncerCfg)
+	position, err := s.readStartingPosition(ctx, syncerCfg.Flavor)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	syncer := replication.NewBinlogSyncer(syncerCfg)
 	defer syncer.Close()
 
 	var streamer *replication.BinlogStreamer
@@ -196,10 +200,6 @@ func (s *TransactionStream) Init(ctx context.Context) error {
 	}
 	logrus.Infof("using replication server id: %d", s.config.ServerID)
 
-	s.syncerCfg, err = s.config.Source.BinlogSyncerConfig(s.config.ServerID)
-	if err != nil {
-		return errors.WithStack(err)
-	}
 	s.sourceSchema, err = s.config.Source.Schema()
 	if err != nil {
 		return errors.WithStack(err)
@@ -233,7 +233,7 @@ func (s *TransactionStream) Init(ctx context.Context) error {
 	return nil
 }
 
-func (s *TransactionStream) readStartingPosition(ctx context.Context) (Position, error) {
+func (s *TransactionStream) readStartingPosition(ctx context.Context, flavor string) (Position, error) {
 	logger := logrus.WithContext(ctx).WithField("task", "replicate")
 
 	file, position, executedGtidSet, err := s.readCheckpoint(ctx)
@@ -274,7 +274,7 @@ func (s *TransactionStream) readStartingPosition(ctx context.Context) (Position,
 	// We sometimes have a GTIDSet, if not we return nil
 	var gset mysql.GTIDSet
 	if executedGtidSet != "" {
-		parsed, err := mysql.ParseGTIDSet(s.syncerCfg.Flavor, executedGtidSet)
+		parsed, err := mysql.ParseGTIDSet(flavor, executedGtidSet)
 		if err != nil {
 			return Position{}, errors.WithStack(err)
 		}

@@ -6,16 +6,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/alecthomas/kong"
 
 	"github.com/go-mysql-org/go-mysql/replication"
 
@@ -34,19 +35,20 @@ import (
 )
 
 type DBConfig struct {
-	Type             DataSourceType       `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
-	Host             string               `help:"Hostname" optional:""`
-	EgressSocket     string               `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
-	Username         string               `help:"User" optional:""`
-	Password         string               `help:"Password" optional:""`
-	PasswordFile     kong.FileContentFlag `help:"File which content will be used for a password" optional:""`
-	Database         string               `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
-	MiskDatasource   string               `help:"Misk formatted config yaml file" optional:"" path:""`
-	MiskReader       bool                 `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
-	GrpcCustomHeader []string             `help:"Custom GRPC headers separated by ="`
-	CA               string               `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
-	Cert             string               `help:"Certificate file for client side authentication (PEM encoded)"`
-	Key              string               `help:"Key file for client side authentication (PEM encoded)"`
+	Type             DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
+	Host             string         `help:"Hostname" optional:""`
+	EgressSocket     string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
+	Username         string         `help:"User" optional:""`
+	Password         string         `help:"Password" optional:""`
+	PasswordFile     string         `help:"File which content will be used for a password" optional:""`
+	PasswordCommand  string         `help:"Command to run to retrieve password" optional:""`
+	Database         string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
+	MiskDatasource   string         `help:"Misk formatted config yaml file" optional:"" path:""`
+	MiskReader       bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
+	GrpcCustomHeader []string       `help:"Custom GRPC headers separated by ="`
+	CA               string         `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
+	Cert             string         `help:"Certificate file for client side authentication (PEM encoded)"`
+	Key              string         `help:"Key file for client side authentication (PEM encoded)"`
 }
 
 type DataSourceType string
@@ -122,6 +124,32 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 	})
 }
 
+type refreshPasswordConnector struct {
+	m            sync.Mutex
+	driver       driver.Driver
+	config       *mysql.Config
+	loadPassword func() (string, error)
+}
+
+func (c *refreshPasswordConnector) Driver() driver.Driver {
+	return c.driver
+}
+
+func (c *refreshPasswordConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	c.m.Lock()
+	newPassword, err := c.loadPassword()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	c.config.Passwd = newPassword
+	cc, err := mysql.NewConnector(c.config)
+	c.m.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return cc.Connect(ctx) // Safe for concurrent use. Cache cc if performance is important.
+}
+
 func (c DBConfig) openMySQL() (*sql.DB, error) {
 	host := c.Host
 	abstractSocket := false
@@ -131,7 +159,11 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		// we remove the @ sign then put it back again
 		host = strings.ReplaceAll(host, "@", "")
 	}
-	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, c.GetPassword(), host, c.Database)
+	password, err := c.GetPassword()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, password, host, c.Database)
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -151,6 +183,16 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		cfg.TLSConfig = "cloner"
 	}
 	connector, err := mysql.NewConnector(cfg)
+	if c.PasswordFile != "" || c.PasswordCommand != "" {
+		connector = &refreshPasswordConnector{
+			m:      sync.Mutex{},
+			driver: connector.Driver(),
+			config: cfg,
+			loadPassword: func() (string, error) {
+				return c.GetPassword()
+			},
+		}
+	}
 	return sql.OpenDB(connector), errors.WithStack(err)
 }
 
@@ -336,24 +378,39 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 		if err != nil {
 			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
 		}
+		password, err := c.GetPassword()
+		if err != nil {
+			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
+		}
 		return replication.BinlogSyncerConfig{
 			ServerID:                serverID,
 			Flavor:                  "mysql",
 			Host:                    host,
 			Port:                    port,
 			User:                    c.Username,
-			Password:                c.GetPassword(),
+			Password:                password,
 			TimestampStringLocation: time.UTC,
 			TLSConfig:               tlsConfig,
 		}, nil
 	}
 }
 
-func (c DBConfig) GetPassword() string {
-	if c.PasswordFile != nil {
-		return string(c.PasswordFile)
+func (c DBConfig) GetPassword() (string, error) {
+	if c.PasswordFile != "" {
+		b, err := ioutil.ReadFile(c.PasswordFile)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		return string(b), nil
 	}
-	return c.Password
+	if c.PasswordCommand != "" {
+		b, err := exec.Command("/bin/sh", "-c", c.PasswordCommand).Output()
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+		return string(b), nil
+	}
+	return c.Password, nil
 }
 
 func (c DBConfig) tlsConfig() (*tls.Config, error) {

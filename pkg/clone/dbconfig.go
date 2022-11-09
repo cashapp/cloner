@@ -165,7 +165,7 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC", c.Username, password, host, c.Database)
+	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC&allowCleartextPasswords=true", c.Username, password, host, c.Database)
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -410,7 +410,7 @@ func (c DBConfig) GetPassword() (string, error) {
 		if err != nil {
 			exitErr, ok := err.(*exec.ExitError)
 			if ok {
-				logrus.WithError(err).Errorf("command %s failed with stderr:\n%s", c.PasswordCommand, string(exitErr.Stderr))
+				logrus.WithError(err).Errorf("command failed with stderr:\n%s\n%s", c.PasswordCommand, string(exitErr.Stderr))
 			}
 			return "", errors.WithStack(err)
 		}

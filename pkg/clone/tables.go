@@ -161,8 +161,16 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 			tableNames = append(tableNames, t)
 		}
 	}
+	ignoreTables := make(map[string]bool)
+	for _, t := range config.IgnoreTables {
+		ignoreTables[t] = true
+	}
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
+		_, ignore := ignoreTables[tableName]
+		if ignore {
+			continue
+		}
 		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])
 		if err != nil {
 			return nil, err

@@ -410,11 +410,13 @@ func (c DBConfig) GetPassword() (string, error) {
 		if err != nil {
 			exitErr, ok := err.(*exec.ExitError)
 			if ok {
-				logrus.WithError(err).Errorf("command failed with stderr:\n%s\n%s", c.PasswordCommand, string(exitErr.Stderr))
+				logrus.WithError(err).Errorf("command to get password failed:\n%s\n%s", c.PasswordCommand, string(exitErr.Stderr))
 			}
 			return "", errors.WithStack(err)
 		}
-		return string(b), nil
+		password := string(b)
+		password = strings.TrimSuffix(password, "\n")
+		return password, nil
 	}
 	return c.Password, nil
 }

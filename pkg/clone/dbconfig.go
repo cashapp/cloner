@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/go-mysql-org/go-mysql/replication"
 
 	"github.com/go-sql-driver/mysql"
@@ -406,6 +408,10 @@ func (c DBConfig) GetPassword() (string, error) {
 	if c.PasswordCommand != "" {
 		b, err := exec.Command("/bin/sh", "-c", c.PasswordCommand).Output()
 		if err != nil {
+			exitErr, ok := err.(*exec.ExitError)
+			if ok {
+				logrus.WithError(err).Errorf("command %s failed with stderr:\n%s", c.PasswordCommand, string(exitErr.Stderr))
+			}
 			return "", errors.WithStack(err)
 		}
 		return string(b), nil

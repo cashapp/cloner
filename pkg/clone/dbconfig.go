@@ -37,20 +37,21 @@ import (
 )
 
 type DBConfig struct {
-	Type             DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
-	Host             string         `help:"Hostname" optional:""`
-	EgressSocket     string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
-	Username         string         `help:"User" optional:""`
-	Password         string         `help:"Password" optional:""`
-	PasswordFile     string         `help:"File which content will be used for a password" optional:""`
-	PasswordCommand  string         `help:"Command to run to retrieve password" optional:""`
-	Database         string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
-	MiskDatasource   string         `help:"Misk formatted config yaml file" optional:"" path:""`
-	MiskReader       bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
-	GrpcCustomHeader []string       `help:"Custom GRPC headers separated by ="`
-	CA               string         `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
-	Cert             string         `help:"Certificate file for client side authentication (PEM encoded)"`
-	Key              string         `help:"Key file for client side authentication (PEM encoded)"`
+	Type               DataSourceType `help:"Datasource name" enum:"mysql,vitess" optional:"" default:"mysql"`
+	Host               string         `help:"Hostname" optional:""`
+	EgressSocket       string         `help:"Use an egress socket when connecting to Vitess, for example '@egress.sock'" optional:""`
+	Username           string         `help:"User" optional:""`
+	Password           string         `help:"Password" optional:""`
+	PasswordFile       string         `help:"File which content will be used for a password" optional:""`
+	PasswordCommand    string         `help:"Command to run to retrieve password" optional:""`
+	Database           string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
+	MiskDatasource     string         `help:"Misk formatted config yaml file" optional:"" path:""`
+	MiskReader         bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
+	GrpcCustomHeader   []string       `help:"Custom GRPC headers separated by ="`
+	CA                 string         `help:"CA root file, if this is specified then TLS will be enabled (PEM encoded)"`
+	Cert               string         `help:"Certificate file for client side authentication (PEM encoded)"`
+	Key                string         `help:"Key file for client side authentication (PEM encoded)"`
+	InsecureSkipVerify bool           `help:"Insecurely skip verifying that the certificate of the server matches the host name'"`
 }
 
 type DataSourceType string
@@ -435,6 +436,12 @@ func (c DBConfig) tlsConfig() (*tls.Config, error) {
 
 	tlsConfig := &tls.Config{
 		RootCAs: caCertPool,
+	}
+
+	if c.InsecureSkipVerify {
+		tlsConfig.InsecureSkipVerify = true
+	} else {
+		tlsConfig.ServerName = c.Host
 	}
 
 	if c.Key != "" {

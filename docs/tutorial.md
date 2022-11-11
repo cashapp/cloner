@@ -26,13 +26,13 @@ CREATE TABLE IF NOT EXISTS _cloner_heartbeat (
 );
 
 CREATE TABLE IF NOT EXISTS _cloner_watermark (
-    task       VARCHAR(255) NOT NULL,
     id         BIGINT(20)   NOT NULL AUTO_INCREMENT,
+    task       VARCHAR(255) NOT NULL,
     table_name VARCHAR(255) NOT NULL,
     chunk_seq  BIGINT(20)   NOT NULL,
     low        TINYINT      DEFAULT 0,
     high       TINYINT      DEFAULT 0,
-    PRIMARY KEY (task, id)
+    PRIMARY KEY (id)
 );
 ```
 

@@ -131,7 +131,7 @@ type refreshPasswordConnector struct {
 	m            sync.Mutex
 	driver       driver.Driver
 	config       *mysql.Config
-	loadPassword func() (string, error)
+	loadPassword func(context.Context) (string, error)
 }
 
 func (c *refreshPasswordConnector) Driver() driver.Driver {
@@ -140,7 +140,7 @@ func (c *refreshPasswordConnector) Driver() driver.Driver {
 
 func (c *refreshPasswordConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	c.m.Lock()
-	newPassword, err := c.loadPassword()
+	newPassword, err := c.loadPassword(ctx)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -162,11 +162,7 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		// we remove the @ sign then put it back again
 		host = strings.ReplaceAll(host, "@", "")
 	}
-	password, err := c.GetPassword()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	dsn := fmt.Sprintf("%s:%s@(%s)/%s?parseTime=true&loc=UTC&allowCleartextPasswords=true", c.Username, password, host, c.Database)
+	dsn := fmt.Sprintf("%s@(%s)/%s?parseTime=true&loc=UTC&allowCleartextPasswords=true", c.Username, host, c.Database)
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -191,8 +187,8 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 			m:      sync.Mutex{},
 			driver: connector.Driver(),
 			config: cfg,
-			loadPassword: func() (string, error) {
-				return c.GetPassword()
+			loadPassword: func(ctx context.Context) (string, error) {
+				return c.GetPassword(ctx)
 			},
 		}
 	}
@@ -342,7 +338,7 @@ func (c DBConfig) VitessTarget() (*query.Target, error) {
 	return nil, nil
 }
 
-func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerConfig, error) {
+func (c DBConfig) BinlogSyncerConfig(ctx context.Context, serverID uint32) (replication.BinlogSyncerConfig, error) {
 	if c.Type == Vitess {
 		return replication.BinlogSyncerConfig{},
 			errors.Errorf("can't stream binlogs from Vitess, you need to connect directly to underlying database")
@@ -381,7 +377,7 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 		if err != nil {
 			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
 		}
-		password, err := c.GetPassword()
+		password, err := c.GetPassword(ctx)
 		if err != nil {
 			return replication.BinlogSyncerConfig{}, errors.WithStack(err)
 		}
@@ -398,7 +394,7 @@ func (c DBConfig) BinlogSyncerConfig(serverID uint32) (replication.BinlogSyncerC
 	}
 }
 
-func (c DBConfig) GetPassword() (string, error) {
+func (c DBConfig) GetPassword(ctx context.Context) (string, error) {
 	if c.PasswordFile != "" {
 		b, err := ioutil.ReadFile(c.PasswordFile)
 		if err != nil {
@@ -407,7 +403,7 @@ func (c DBConfig) GetPassword() (string, error) {
 		return string(b), nil
 	}
 	if c.PasswordCommand != "" {
-		b, err := exec.Command("/bin/sh", "-c", c.PasswordCommand).Output()
+		b, err := exec.CommandContext(ctx, "/bin/sh", "-c", c.PasswordCommand).Output()
 		if err != nil {
 			exitErr, ok := err.(*exec.ExitError)
 			if ok {

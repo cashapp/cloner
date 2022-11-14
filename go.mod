@@ -7,7 +7,7 @@ require (
 	github.com/alecthomas/kong v0.7.0
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/dlmiddlecote/sqlstats v1.0.2
-	github.com/go-mysql-org/go-mysql v1.4.1-0.20220119050903-d8b74c3a01e1
+	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
@@ -45,6 +45,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/golang/snappy v0.0.3 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
+	github.com/google/uuid v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/imdario/mergo v0.3.12 // indirect
@@ -62,7 +63,6 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.29.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
-	github.com/satori/go.uuid v1.2.0 // indirect
 	github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24 // indirect
 	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07 // indirect

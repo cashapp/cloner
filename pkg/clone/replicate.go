@@ -101,13 +101,14 @@ type Replicate struct {
 	// TODO should this just be ReadParallelism
 	ChunkParallelism int `help:"Number of chunks to snapshot concurrently" default:"10"`
 
-	CheckpointTable    string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`
-	WatermarkTable     string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
-	HeartbeatTable     string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
-	HeartbeatFrequency time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
-	CreateTables       bool          `help:"Create the required tables if they do not exist" default:"true"`
-	ChunkBufferSize    int           `help:"Size of internal queues" default:"100"`
-	ReconnectTimeout   time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
+	CheckpointTable      string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`
+	WatermarkTable       string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
+	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	SnapshotRequestTable string        `help:"Name of the table the user can requests snapshots from" optional:"" default:"_cloner_snapshot"`
+	HeartbeatFrequency   time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
+	CreateTables         bool          `help:"Create the required tables if they do not exist" default:"true"`
+	ChunkBufferSize      int           `help:"Size of internal queues" default:"100"`
+	ReconnectTimeout     time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
 
 	DoSnapshot      bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
 	DoSnapshotDelay time.Duration `help:"How long to wait until running a snapshot" default:"60s"`
@@ -156,7 +157,7 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	if cmd.DoSnapshot {
 		go func() {
 			time.Sleep(cmd.DoSnapshotDelay)
-			err := replicator.snapshot(ctx)
+			err := replicator.snapshotter.start(ctx)
 			if err != nil {
 				logrus.Errorf("failed to snapshot: %v", err)
 			}
@@ -295,8 +296,4 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (r *Replicator) snapshot(ctx context.Context) error {
-	return r.snapshotter.snapshot(ctx)
 }

@@ -229,6 +229,12 @@ func (s *TransactionStream) Init(ctx context.Context) error {
 		return errors.WithStack(err)
 	}
 	s.tables = append(s.tables, watermarkTable)
+	snapshotRequestTable, err := loadTable(ctx, s.config.ReaderConfig, s.config.Source.Type, source, s.sourceSchema, s.config.SnapshotRequestTable, TableConfig{})
+	if err != nil {
+		// If the snapshot request table is missing then we're simply not using that feature
+	} else {
+		s.tables = append(s.tables, snapshotRequestTable)
+	}
 
 	return nil
 }

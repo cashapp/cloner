@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
@@ -40,6 +41,9 @@ type Snapshotter struct {
 
 	sourceRetry RetryOptions
 
+	isSnapshotting *atomic.Bool
+	isChunking     *atomic.Bool
+
 	// chunks receives chunks from the chunker, they are processed on the main replication thread and appended to ongoingChunks below
 	chunks chan Chunk
 
@@ -57,7 +61,9 @@ func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 			MaxRetries:    config.ReadRetries,
 			Timeout:       config.ReadTimeout,
 		},
-		chunks: make(chan Chunk, config.ChunkParallelism),
+		isSnapshotting: atomic.NewBool(false),
+		isChunking:     atomic.NewBool(false),
+		chunks:         make(chan Chunk, config.ChunkParallelism),
 	}
 	s.sourceSchema, err = s.config.Source.Schema()
 	if err != nil {
@@ -85,6 +91,10 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		err = s.createSnapshotRequestTable(ctx)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 
 	return nil
@@ -93,6 +103,11 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
 	prometheus.MustRegister(s.sourceCollector)
 	defer prometheus.Unregister(s.sourceCollector)
+
+	err := s.checkSnapshotStartRequested(ctx)
+	if err != nil {
+		logrus.WithError(err).Errorf("failed to check if snapshot has been requested")
+	}
 
 	for {
 		err := s.maybeSnapshotChunks(ctx)
@@ -106,6 +121,8 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+
+		transaction, _ = s.handleSnapshotRequest(ctx, transaction)
 
 		// If we have chunks to process then we will process the watermarks in the transactions
 		if len(s.ongoingChunks) > 0 {
@@ -151,6 +168,29 @@ func (s *Snapshotter) createWatermarkTable(ctx context.Context) error {
 			PRIMARY KEY (id)
 		)
 		`, "`"+s.config.WatermarkTable+"`")
+	_, err := s.source.ExecContext(timeoutCtx, stmt)
+	if err != nil {
+		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)
+	}
+	return nil
+}
+
+func (s *Snapshotter) createSnapshotRequestTable(ctx context.Context) error {
+	// TODO retries with backoff?
+	timeoutCtx, cancel := context.WithTimeout(ctx, s.config.WriteTimeout)
+	defer cancel()
+	// TODO we should probably have a "task VARCHAR" column as well so we can run multiple snapshots from the same database
+	// TODO primary key here should probably be (task,table_name,chunk_seq)
+	stmt := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			id           BIGINT(20)   NOT NULL AUTO_INCREMENT,
+      task         VARCHAR(255) NOT NULL,
+      requested_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  started_at   TIMESTAMP,
+		  completed_at TIMESTAMP,
+			PRIMARY KEY (id)
+		)
+		`, "`"+s.config.SnapshotRequestTable+"`")
 	_, err := s.source.ExecContext(timeoutCtx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not create checkpoint table in target database:\n%s", stmt)
@@ -308,16 +348,25 @@ func (s *Snapshotter) removeOngoingChunk(chunk *ChunkSnapshot) {
 	s.ongoingChunks = s.ongoingChunks[:n]
 }
 
-// snapshot runs a snapshot asynchronously unless a snapshot is already running
-func (s *Snapshotter) snapshot(ctx context.Context) error {
+// start a snapshot asynchronously unless a snapshot is already running (in which case an error is returned)
+func (s *Snapshotter) start(ctx context.Context) error {
+	swapped := s.isSnapshotting.CompareAndSwap(false, true)
+
+	if !swapped {
+		return errors.Errorf("snapshot already running")
+	}
+
 	go func() {
-		logger := logrus.WithContext(ctx).WithField("task", "chunking")
+		logger := logrus.WithContext(ctx)
+		logger.Infof("starting snapshot")
+
 		err := s.clearWatermarkTable(ctx)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to clear watermark table ahead of snapshot: %v", err)
 			return
 		}
 
+		logger = logger.WithField("task", "chunking")
 		err = s.chunkTables(ctx)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
@@ -399,6 +448,11 @@ func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, r
 }
 
 func (s *Snapshotter) chunkTables(ctx context.Context) error {
+	swapped := s.isChunking.CompareAndSwap(false, true)
+	if !swapped {
+		return errors.Errorf("chunking already running")
+	}
+
 	tables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
 	if err != nil {
 		return errors.WithStack(err)
@@ -432,6 +486,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	}
 
 	err = g.Wait()
+	s.isChunking.Store(false)
 	logger.Infof("all tables chunking done")
 	return errors.WithStack(err)
 }
@@ -495,6 +550,11 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
 		default:
 			if i == 0 {
 				// There are no chunks queued up, let's bail fast
+				// If we are done chunking at this point we're also done snapshotting
+				if s.isSnapshotting.Load() && !s.isChunking.Load() {
+					s.isSnapshotting.Store(false)
+					s.snapshotDone(ctx)
+				}
 				return nil
 			}
 		}
@@ -534,6 +594,15 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
 	return nil
 }
 
+func (s *Snapshotter) snapshotDone(ctx context.Context) {
+	logrus.Infof("snapshot done")
+
+	err := s.checkSnapshotStartRequested(ctx)
+	if err != nil {
+		logrus.WithError(err).Errorf("failed to check if snapshot has been requested")
+	}
+}
+
 func (s *Snapshotter) clearWatermarkTable(ctx context.Context) error {
 	retry := s.sourceRetry
 	// wiping the watermark table might take quite a long time after a failed snapshot,
@@ -566,4 +635,102 @@ func (s *Snapshotter) deleteWatermark(ctx context.Context, mutation Mutation) er
 			s.config.TaskName, tableName, chunkSeq)
 		return err
 	})
+}
+
+func (s *Snapshotter) handleSnapshotRequest(ctx context.Context, transaction Transaction) (Transaction, error) {
+	hasSnapshotRequest := false
+	for _, mutation := range transaction.Mutations {
+		if mutation.Table.Name == s.config.SnapshotRequestTable {
+			hasSnapshotRequest = true
+		}
+	}
+	if !hasSnapshotRequest {
+		return transaction, nil
+	}
+
+	startSnapshot := false
+	newMutations := make([]Mutation, 0, len(transaction.Mutations))
+	for _, mutation := range transaction.Mutations {
+		if mutation.Table.Name != s.config.SnapshotRequestTable {
+			// Nothing to do, we just add the mutation untouched and return
+			newMutations = append(newMutations, mutation)
+			continue
+		}
+		tableSchema := mutation.Table.MysqlTable
+		taskI, err := tableSchema.GetColumnValue("task", mutation.Rows[0])
+		if err != nil {
+			return transaction, errors.WithStack(err)
+		}
+		task := taskI.(string)
+		if task != s.config.TaskName {
+			// Not for us
+			continue
+		}
+		startedAtI, err := tableSchema.GetColumnValue("started_at", mutation.Rows[0])
+		if err != nil {
+			return transaction, errors.WithStack(err)
+		}
+		if startedAtI == nil {
+			startSnapshot = true
+			continue
+		}
+		startedAt, ok := startedAtI.(string)
+		if !ok {
+			continue
+		}
+		if startedAt == "0000-00-00 00:00:00" {
+			startSnapshot = true
+			continue
+		}
+	}
+	transaction.Mutations = newMutations
+
+	if startSnapshot {
+		err := s.markSnapshotStarted(ctx)
+		if err != nil {
+			logrus.WithError(err).Errorf("could not mark snapshot as started in the database, won't start snapshots")
+			return transaction, nil
+		}
+		err = s.start(ctx)
+		if err != nil {
+			// This means a snapshot is already running, we do a poll on the table after the snapshot is done instead
+		}
+	}
+
+	return transaction, nil
+}
+
+func (s *Snapshotter) markSnapshotStarted(ctx context.Context) error {
+	return errors.WithStack(Retry(ctx, s.sourceRetry, func(ctx context.Context) error {
+		return autotx.Transact(ctx, s.source, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx,
+				fmt.Sprintf("UPDATE %s SET started_at = NOW() WHERE started_at IS NULL AND task = ?",
+					s.config.SnapshotRequestTable),
+				s.config.TaskName)
+			return errors.WithStack(err)
+		})
+	}))
+}
+
+func (s *Snapshotter) checkSnapshotStartRequested(ctx context.Context) error {
+	row := s.source.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE task = ?", s.config.SnapshotRequestTable),
+		s.config.TaskName)
+	var count int
+	err := row.Scan(&count)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if count > 1 {
+		err := s.markSnapshotStarted(ctx)
+		if err != nil {
+			return errors.Wrapf(err, "could not mark snapshot as started in the database, won't start snapshots")
+		}
+		err = s.start(ctx)
+		if err != nil {
+			// This means a snapshot is already running, we do a poll on the table after the snapshot is done instead
+			return nil
+		}
+	}
+	return nil
 }

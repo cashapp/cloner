@@ -318,7 +318,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		if isCancelledError(err) {
 			return nil
 		}
-		require.NoError(t, err)
+		logrus.WithError(err).Errorf("replication failed: %+v", err)
 		return err
 	})
 
@@ -326,9 +326,12 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	time.Sleep(5 * time.Second)
 
 	// Now do the snapshot (runs in the background)
-	g.Go(func() error {
-		return replicator.snapshot(ctx)
-	})
+	sourceDirectDB, err := sourceDirect.DB()
+	require.NoError(t, err)
+	defer sourceDirectDB.Close()
+	_, err = sourceDirectDB.ExecContext(ctx,
+		"INSERT INTO _cloner_snapshot (task) VALUES (?)", "customer/-80")
+	require.NoError(t, err)
 
 	// Wait for the snapshot to complete
 	time.Sleep(5 * time.Second)
@@ -353,6 +356,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		if isCancelledError(err) {
 			return nil
 		}
+		logrus.WithError(err).Errorf("replication failed: %+v", err)
 		return err
 	})
 	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))

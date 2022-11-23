@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS _cloner_watermark (
     high       TINYINT      DEFAULT 0,
     PRIMARY KEY (id)
 );
+
+; This one is only needed if you will requests snapshots using the table
+CREATE TABLE IF NOT EXISTS _cloner_snapshot (
+    id           BIGINT(20)   NOT NULL AUTO_INCREMENT,
+    task         VARCHAR(255) NOT NULL,
+    requested_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at   TIMESTAMP    NULL DEFAULT NULL,
+    completed_at TIMESTAMP    NULL DEFAULT NULL,
+    PRIMARY KEY (id)
+);
+
 ```
 
 In the target database create the heartbeat and the checkpoint tables:

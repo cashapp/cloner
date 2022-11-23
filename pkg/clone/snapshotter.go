@@ -186,8 +186,8 @@ func (s *Snapshotter) createSnapshotRequestTable(ctx context.Context) error {
 			id           BIGINT(20)   NOT NULL AUTO_INCREMENT,
       task         VARCHAR(255) NOT NULL,
       requested_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		  started_at   TIMESTAMP,
-		  completed_at TIMESTAMP,
+		  started_at   TIMESTAMP    NULL DEFAULT NULL,
+		  completed_at TIMESTAMP    NULL DEFAULT NULL,
 			PRIMARY KEY (id)
 		)
 		`, "`"+s.config.SnapshotRequestTable+"`")
@@ -453,9 +453,16 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 		return errors.Errorf("chunking already running")
 	}
 
-	tables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
+	allTables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
 	if err != nil {
 		return errors.WithStack(err)
+	}
+
+	var tables []*Table
+	for _, table := range allTables {
+		if s.shouldSnapshot(table.Name) {
+			tables = append(tables, table)
+		}
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -733,4 +740,13 @@ func (s *Snapshotter) checkSnapshotStartRequested(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Snapshotter) shouldSnapshot(name string) bool {
+	switch name {
+	case s.config.SnapshotRequestTable, s.config.HeartbeatTable, s.config.WatermarkTable, s.config.CheckpointTable:
+		return false
+	default:
+		return true
+	}
 }

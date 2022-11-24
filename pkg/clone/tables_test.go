@@ -62,6 +62,9 @@ func TestLoadTablesUnshardedVitess(t *testing.T) {
 		},
 		SourceTargetConfig: SourceTargetConfig{Source: vitessContainer.Config()}}
 
+	err = deleteAllData(vitessContainer.Config())
+	assert.NoError(t, err)
+
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
 	assert.Equal(t, []*Table{
@@ -127,6 +130,7 @@ func TestLoadTablesTiDB(t *testing.T) {
 		SourceTargetConfig: SourceTargetConfig{Source: tidbContainer.Config()}}
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
+	tables[0].EstimatedRows = 0
 	assert.Equal(t, []*Table{
 		{
 			Name:             "customers",

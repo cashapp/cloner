@@ -115,6 +115,7 @@ func insertBaseData(config DBConfig) error {
 
 type DatabaseContainer struct {
 	pool     *dockertest.Pool
+	cleanups []func()
 	resource *dockertest.Resource
 	config   DBConfig
 }
@@ -149,21 +150,27 @@ func startVitess() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	dataDir, err := os.MkdirTemp("/tmp", "vtdataroot*")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	// TODO delete the directory when we close this container
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "vitess/base",
-		Tag:        "v12.0.0",
+		Tag:        "v15.0.0",
 		Cmd: []string{
 			"vttestserver",
-			"-port=15000",
-			"-mysql_bind_host=0.0.0.0",
-			"-keyspaces=main,customer",
-			"-data_dir=/vt/vtdataroot",
-			"-schema_dir=schema",
-			"-num_shards=1,2",
+			"--port=15000",
+			"--mysql_bind_host=0.0.0.0",
+			"--keyspaces=main,customer",
+			"--data_dir=/vt/vtdataroot",
+			"--schema_dir=schema",
+			"--num_shards=1,2",
 		},
 		ExposedPorts: []string{"15000", "15001", "15002", "15003"},
 		Mounts: []string{
 			path + "/../../test/schema:/vt/src/vitess.io/vitess/schema",
+			dataDir + ":/vt/vtdataroot",
 		},
 	})
 	if err != nil {
@@ -237,13 +244,13 @@ func startVitess() error {
 		return errors.Errorf("non-zero exit code: %d", exitCode)
 	}
 
-	err = insertBaseData(config)
-	if err != nil {
-		_ = pool.Purge(resource)
-		return errors.WithStack(err)
-	}
-
 	vitessContainer = &DatabaseContainer{pool: pool, resource: resource, config: config}
+	vitessContainer.cleanups = append(vitessContainer.cleanups, func() {
+		_ = resource.Close()
+	})
+	vitessContainer.cleanups = append(vitessContainer.cleanups, func() {
+		_ = os.RemoveAll(dataDir)
+	})
 
 	return nil
 }
@@ -267,11 +274,11 @@ func deleteAllData(config DBConfig) error {
 	}
 	defer db.Close()
 
-	_, err = db.Exec("TRUNCATE TABLE customers")
+	_, err = db.Exec("DELETE FROM customers")
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	_, err = db.Exec("TRUNCATE TABLE transactions")
+	_, err = db.Exec("DELETE FROM transactions")
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -335,13 +342,10 @@ func startTidb() error {
 
 	config.Database = "mydatabase"
 
-	err = insertBaseData(config)
-	if err != nil {
-		_ = pool.Purge(resource)
-		return errors.WithStack(err)
-	}
-
 	tidbContainer = &DatabaseContainer{pool: pool, resource: resource, config: config}
+	tidbContainer.cleanups = append(tidbContainer.cleanups, func() {
+		_ = resource.Close()
+	})
 
 	return nil
 }
@@ -404,13 +408,11 @@ func startMysql() (*DatabaseContainer, error) {
 
 	config.Database = "mydatabase"
 
-	err = insertBaseData(config)
-	if err != nil {
-		_ = pool.Purge(resource)
-		return nil, errors.WithStack(err)
-	}
-
-	return &DatabaseContainer{pool: pool, resource: resource, config: config}, nil
+	container := &DatabaseContainer{pool: pool, resource: resource, config: config}
+	container.cleanups = append(container.cleanups, func() {
+		_ = resource.Close()
+	})
+	return container, nil
 }
 
 // startAll (re)starts both Vitess and TiDB in parallel

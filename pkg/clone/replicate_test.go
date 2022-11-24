@@ -203,10 +203,6 @@ func doStartReplication(ctx context.Context, task string, g *errgroup.Group, sou
 func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	vitessContainer, tidbContainer, err := startAll()
 	require.NoError(t, err)
-	defer func() {
-		vitessContainer.Close()
-		tidbContainer.Close()
-	}()
 
 	rowCount := 5000
 	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)

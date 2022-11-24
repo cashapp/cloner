@@ -19,6 +19,7 @@ func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error 
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	defer db.Close()
 
 	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 		for i := 0; i < rowCount; i++ {
@@ -57,6 +58,7 @@ func clearTables(ctx context.Context, config DBConfig) error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	defer db.Close()
 
 	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
 		_, err = tx.ExecContext(ctx, `DELETE FROM customers`)
@@ -81,6 +83,7 @@ func countRows(target DBConfig, tableName string) (int, error) {
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
+	defer db.Close()
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -92,11 +95,12 @@ func countRows(target DBConfig, tableName string) (int, error) {
 	return rowCount, err
 }
 
-func countRowsShardFilter(target DBConfig, shard string) (int, error) {
+func countRowsShardFilter(target DBConfig, tableName string, shard string) (int, error) {
 	db, err := target.DB()
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
+	defer db.Close()
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -106,7 +110,7 @@ func countRowsShardFilter(target DBConfig, shard string) (int, error) {
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
-	rows, err := conn.QueryContext(ctx, "SELECT id FROM customers")
+	rows, err := conn.QueryContext(ctx, "SELECT id FROM "+tableName)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
@@ -152,7 +156,7 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
-	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
+	rightRowCountBefore, err := countRowsShardFilter(target, "customers", "80-")
 	assert.NoError(t, err)
 
 	source.Database = "customer/-80@replica"
@@ -194,12 +198,12 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 	// Sanity check the number of rows
 	sourceRowCount, err := countRows(source, "customers")
 	assert.NoError(t, err)
-	targetRowCount, err := countRowsShardFilter(target, "-80")
+	targetRowCount, err := countRowsShardFilter(target, "customers", "-80")
 	assert.NoError(t, err)
 	assert.Equal(t, sourceRowCount, targetRowCount)
 
 	// Check we didn't delete the rows in the right shard in the target
-	rightRowCountAfter, err := countRowsShardFilter(target, "80-")
+	rightRowCountAfter, err := countRowsShardFilter(target, "customers", "80-")
 	assert.NoError(t, err)
 	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
 
@@ -278,6 +282,10 @@ func TestCloneNoDiff(t *testing.T) {
 	source := vitessContainer.Config()
 	target := tidbContainer.Config()
 
+	err = deleteAllData(source)
+	assert.NoError(t, err)
+	err = deleteAllData(target)
+	assert.NoError(t, err)
 	rowCount := 1000
 	err = insertBunchaData(context.Background(), source, rowCount)
 	assert.NoError(t, err)
@@ -289,13 +297,14 @@ func TestCloneNoDiff(t *testing.T) {
 	err = insertBunchaData(context.Background(), target, 50)
 	assert.NoError(t, err)
 	// The clone should not touch the rows in the right 80- shard
-	rightRowCountBefore, err := countRowsShardFilter(target, "80-")
+	rightRowCountBefore, err := countRowsShardFilter(target, "customers", "80-")
 	assert.NoError(t, err)
 
-	source.Database = "customer/-80@replica"
+	sourceLeft := vitessContainer.Config()
+	sourceLeft.Database = "customer/-80@master"
 	readerConfig := ReaderConfig{
 		SourceTargetConfig: SourceTargetConfig{
-			Source: source,
+			Source: sourceLeft,
 			Target: target,
 		},
 		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
@@ -322,14 +331,14 @@ func TestCloneNoDiff(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Sanity check the number of rows
-	sourceRowCount, err := countRows(source, "customers")
+	sourceRowCount, err := countRows(sourceLeft, "customers")
 	assert.NoError(t, err)
-	targetRowCount, err := countRowsShardFilter(target, "-80")
+	targetRowCount, err := countRowsShardFilter(target, "customers", "-80")
 	assert.NoError(t, err)
 	assert.Equal(t, sourceRowCount, targetRowCount)
 
 	// Check we didn't delete the rows in the right shard in the target
-	rightRowCountAfter, err := countRowsShardFilter(target, "80-")
+	rightRowCountAfter, err := countRowsShardFilter(target, "customers", "80-")
 	assert.NoError(t, err)
 	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
 
@@ -342,7 +351,7 @@ func TestCloneNoDiff(t *testing.T) {
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
-	assert.Equal(t, 52, len(diffs))
+	assert.Equal(t, 53, len(diffs))
 }
 
 func TestAllShardsCloneWithTargetData(t *testing.T) {

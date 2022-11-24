@@ -59,6 +59,7 @@ func TestReverseReplication(t *testing.T) {
 	defer target.Close()
 	targetDB, err := target.Config().DB()
 	require.NoError(t, err)
+	defer targetDB.Close()
 	err = deleteAllData(target.Config())
 	require.NoError(t, err)
 
@@ -273,6 +274,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 
 	targetDB, err := target.DB()
 	require.NoError(t, err)
+	defer targetDB.Close()
 
 	// Write rows in a separate thread
 	writerCount := 5
@@ -284,6 +286,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 			if err != nil {
 				return errors.WithStack(err)
 			}
+			defer db.Close()
 			for {
 				if doWrite.Load() {
 					err := write(ctx, db)

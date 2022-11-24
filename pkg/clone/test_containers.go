@@ -129,7 +129,11 @@ func (c *DatabaseContainer) Config() DBConfig {
 
 func startVitess() error {
 	if vitessContainer != nil {
-		vitessContainer.Close()
+		err := resetData(vitessContainer.config)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
 	}
 
 	log.Debugf("starting Vitess")
@@ -138,6 +142,7 @@ func startVitess() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+	pool.MaxWait = 20 * time.Second // Things are kinda slow on GitHub Actions
 
 	// pulls an image, creates a container based on it and runs it
 	path, err := os.Getwd()
@@ -243,9 +248,44 @@ func startVitess() error {
 	return nil
 }
 
+func resetData(config DBConfig) error {
+	err := deleteAllData(config)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = insertBaseData(config)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func deleteAllData(config DBConfig) error {
+	db, err := config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec("TRUNCATE TABLE customers")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = db.Exec("TRUNCATE TABLE transactions")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	return nil
+}
+
 func startTidb() error {
 	if tidbContainer != nil {
-		tidbContainer.Close()
+		err := resetData(tidbContainer.config)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
 	}
 
 	log.Debugf("starting TiDB")

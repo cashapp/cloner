@@ -5,27 +5,8 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
-
-func deleteAllData(config DBConfig) error {
-	db, err := config.DB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer db.Close()
-
-	_, err = db.Exec("DELETE FROM customers")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = db.Exec("DELETE FROM transactions")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
-}
 
 func TestChecksum(t *testing.T) {
 	_, _, err := startAll()

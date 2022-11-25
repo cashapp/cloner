@@ -181,6 +181,9 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		}
 		cfg.TLSConfig = "cloner"
 	}
+	if c.Password != "" {
+		cfg.Passwd = c.Password
+	}
 	connector, err := mysql.NewConnector(cfg)
 	if c.PasswordFile != "" || c.PasswordCommand != "" {
 		connector = &refreshPasswordConnector{

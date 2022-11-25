@@ -99,20 +99,6 @@ func createMysqlSchema(config DBConfig, database string) error {
 	return nil
 }
 
-func insertBaseData(config DBConfig) error {
-	db, err := config.DB()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = db.Exec(`
-		INSERT INTO customers (name) VALUES (?)
-	`, "Jon Tirsen")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	return nil
-}
-
 type DatabaseContainer struct {
 	pool     *dockertest.Pool
 	cleanups []func()
@@ -150,11 +136,6 @@ func startVitess() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	dataDir, err := os.MkdirTemp("/tmp", "vtdataroot*")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	// TODO delete the directory when we close this container
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "vitess/base",
 		Tag:        "v15.0.0",
@@ -170,7 +151,6 @@ func startVitess() error {
 		ExposedPorts: []string{"15000", "15001", "15002", "15003"},
 		Mounts: []string{
 			path + "/../../test/schema:/vt/src/vitess.io/vitess/schema",
-			dataDir + ":/vt/vtdataroot",
 		},
 	})
 	if err != nil {
@@ -248,19 +228,12 @@ func startVitess() error {
 	vitessContainer.cleanups = append(vitessContainer.cleanups, func() {
 		_ = resource.Close()
 	})
-	vitessContainer.cleanups = append(vitessContainer.cleanups, func() {
-		_ = os.RemoveAll(dataDir)
-	})
 
 	return nil
 }
 
 func resetData(config DBConfig) error {
 	err := deleteAllData(config)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	err = insertBaseData(config)
 	if err != nil {
 		return errors.WithStack(err)
 	}

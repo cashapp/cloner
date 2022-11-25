@@ -275,80 +275,80 @@ func TestUnshardedClone(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-//func TestCloneNoDiff(t *testing.T) {
-//	_, _, err := startAll()
-//	assert.NoError(t, err)
-//
-//	source := vitessContainer.Config()
-//	target := tidbContainer.Config()
-//
-//	rowCount := 1000
-//	err = insertBunchaData(context.Background(), source, rowCount)
-//	assert.NoError(t, err)
-//
-//	// Insert some stuff that matches
-//	err = insertBunchaData(context.Background(), target, 50)
-//	assert.NoError(t, err)
-//	// Insert some stuff that DOES NOT match to trigger updates
-//	err = insertBunchaData(context.Background(), target, 50)
-//	assert.NoError(t, err)
-//	// The clone should not touch the rows in the right 80- shard
-//	rightRowCountBefore, err := countRowsShardFilter(target, "customers", "80-")
-//	assert.NoError(t, err)
-//
-//	sourceLeft := vitessContainer.Config()
-//	sourceLeft.Database = "customer/-80@master"
-//	readerConfig := ReaderConfig{
-//		SourceTargetConfig: SourceTargetConfig{
-//			Source: sourceLeft,
-//			Target: target,
-//		},
-//		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
-//		Config: Config{
-//			Tables: map[string]TableConfig{
-//				"customers": {
-//					// equivalent to -80
-//					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
-//					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
-//				},
-//			},
-//		},
-//	}
-//	clone := &Clone{
-//		WriterConfig{
-//			ReaderConfig:            readerConfig,
-//			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
-//			NoDiff:                  true,
-//		},
-//	}
-//	err = kong.ApplyDefaults(clone)
-//	assert.NoError(t, err)
-//	err = clone.Run()
-//	assert.NoError(t, err)
-//
-//	// Sanity check the number of rows
-//	sourceRowCount, err := countRows(sourceLeft, "customers")
-//	assert.NoError(t, err)
-//	targetRowCount, err := countRowsShardFilter(target, "customers", "-80")
-//	assert.NoError(t, err)
-//	assert.Equal(t, sourceRowCount, targetRowCount)
-//
-//	// Check we didn't delete the rows in the right shard in the target
-//	rightRowCountAfter, err := countRowsShardFilter(target, "customers", "80-")
-//	assert.NoError(t, err)
-//	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
-//
-//	// Do a full checksum
-//	checksum := &Checksum{
-//		ReaderConfig: readerConfig,
-//	}
-//	err = kong.ApplyDefaults(checksum)
-//	assert.NoError(t, err)
-//	diffs, err := checksum.run(context.Background())
-//	assert.NoError(t, err)
-//	// Nothing is deleted so some stuff will be left around
-//	assert.Equal(t, 53, len(diffs))
-//}
+func TestCloneNoDiff(t *testing.T) {
+	_, _, err := startAll()
+	assert.NoError(t, err)
+
+	source := vitessContainer.Config()
+	target := tidbContainer.Config()
+
+	rowCount := 1000
+	err = insertBunchaData(context.Background(), source, rowCount)
+	assert.NoError(t, err)
+
+	// Insert some stuff that matches
+	err = insertBunchaData(context.Background(), target, 50)
+	assert.NoError(t, err)
+	// Insert some stuff that DOES NOT match to trigger updates
+	err = insertBunchaData(context.Background(), target, 50)
+	assert.NoError(t, err)
+	// The clone should not touch the rows in the right 80- shard
+	rightRowCountBefore, err := countRowsShardFilter(target, "customers", "80-")
+	assert.NoError(t, err)
+
+	sourceLeft := vitessContainer.Config()
+	sourceLeft.Database = "customer/-80@master"
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: sourceLeft,
+			Target: target,
+		},
+		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+			},
+		},
+	}
+	clone := &Clone{
+		WriterConfig{
+			ReaderConfig:            readerConfig,
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+			NoDiff:                  true,
+		},
+	}
+	err = kong.ApplyDefaults(clone)
+	assert.NoError(t, err)
+	err = clone.Run()
+	assert.NoError(t, err)
+
+	// Sanity check the number of rows
+	sourceRowCount, err := countRows(sourceLeft, "customers")
+	assert.NoError(t, err)
+	targetRowCount, err := countRowsShardFilter(target, "customers", "-80")
+	assert.NoError(t, err)
+	assert.Equal(t, sourceRowCount, targetRowCount)
+
+	// Check we didn't delete the rows in the right shard in the target
+	rightRowCountAfter, err := countRowsShardFilter(target, "customers", "80-")
+	assert.NoError(t, err)
+	assert.Equal(t, rightRowCountBefore, rightRowCountAfter)
+
+	// Do a full checksum
+	checksum := &Checksum{
+		ReaderConfig: readerConfig,
+	}
+	err = kong.ApplyDefaults(checksum)
+	assert.NoError(t, err)
+	diffs, err := checksum.run(context.Background())
+	assert.NoError(t, err)
+	// Nothing is deleted so some stuff will be left around
+	assert.Equal(t, 43, len(diffs))
+}
 
 func TestAllShardsCloneWithTargetData(t *testing.T) {
 	_, _, err := startAll()

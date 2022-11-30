@@ -658,6 +658,9 @@ func (s *Snapshotter) handleSnapshotRequest(ctx context.Context, transaction Tra
 	startSnapshot := false
 	newMutations := make([]Mutation, 0, len(transaction.Mutations))
 	for _, mutation := range transaction.Mutations {
+		if mutation.Type != Insert {
+			continue
+		}
 		if mutation.Table.Name != s.config.SnapshotRequestTable {
 			// Nothing to do, we just add the mutation untouched and return
 			newMutations = append(newMutations, mutation)
@@ -721,7 +724,7 @@ func (s *Snapshotter) markSnapshotStarted(ctx context.Context) error {
 
 func (s *Snapshotter) checkSnapshotStartRequested(ctx context.Context) error {
 	row := s.source.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE task = ?", s.config.SnapshotRequestTable),
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE task = ? AND started_at IS NULL", s.config.SnapshotRequestTable),
 		s.config.TaskName)
 	var count int
 	err := row.Scan(&count)

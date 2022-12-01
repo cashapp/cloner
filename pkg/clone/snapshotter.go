@@ -42,7 +42,6 @@ type Snapshotter struct {
 	sourceRetry RetryOptions
 
 	isSnapshotting *atomic.Bool
-	isChunking     *atomic.Bool
 
 	// chunks receives chunks from the chunker, they are processed on the main replication thread and appended to ongoingChunks below
 	chunks chan Chunk
@@ -62,7 +61,6 @@ func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 			Timeout:       config.ReadTimeout,
 		},
 		isSnapshotting: atomic.NewBool(false),
-		isChunking:     atomic.NewBool(false),
 		chunks:         make(chan Chunk, config.ChunkParallelism),
 	}
 	s.sourceSchema, err = s.config.Source.Schema()
@@ -104,6 +102,8 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 	prometheus.MustRegister(s.sourceCollector)
 	defer prometheus.Unregister(s.sourceCollector)
 
+	tablesLeft := make(map[string]bool)
+
 	err := s.checkSnapshotStartRequested(ctx)
 	if err != nil {
 		logrus.WithError(err).Errorf("failed to check if snapshot has been requested")
@@ -144,6 +144,26 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 		case sink <- transaction:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+
+		for _, mutation := range transaction.Mutations {
+			if mutation.Type == Repair {
+				if mutation.Chunk.First {
+					tablesLeft[mutation.Table.Name] = true
+				}
+				if mutation.Chunk.Last {
+					logrus.WithContext(ctx).
+						WithField("task", "replicate").
+						WithField("table", mutation.Table.Name).
+						Infof("'%v' snapshot done", mutation.Table.Name)
+
+					delete(tablesLeft, mutation.Table.Name)
+					if len(tablesLeft) == 0 {
+						// We're done with all tables
+						s.snapshotDone(ctx)
+					}
+				}
+			}
 		}
 
 		// We've committed a transaction, we can reset the backoff
@@ -448,11 +468,6 @@ func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, r
 }
 
 func (s *Snapshotter) chunkTables(ctx context.Context) error {
-	swapped := s.isChunking.CompareAndSwap(false, true)
-	if !swapped {
-		return errors.Errorf("chunking already running")
-	}
-
 	allTables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
 	if err != nil {
 		return errors.WithStack(err)
@@ -493,7 +508,6 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	}
 
 	err = g.Wait()
-	s.isChunking.Store(false)
 	logger.Infof("all tables chunking done")
 	return errors.WithStack(err)
 }
@@ -557,11 +571,6 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
 		default:
 			if i == 0 {
 				// There are no chunks queued up, let's bail fast
-				// If we are done chunking at this point we're also done snapshotting
-				if s.isSnapshotting.Load() && !s.isChunking.Load() {
-					s.isSnapshotting.Store(false)
-					s.snapshotDone(ctx)
-				}
 				return nil
 			}
 		}
@@ -604,9 +613,15 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
 func (s *Snapshotter) snapshotDone(ctx context.Context) {
 	logrus.Infof("snapshot done")
 
+	s.isSnapshotting.Store(false)
+
 	err := s.checkSnapshotStartRequested(ctx)
 	if err != nil {
 		logrus.WithError(err).Errorf("failed to check if snapshot has been requested")
+	}
+	err = s.markSnapshotCompleted(ctx)
+	if err != nil {
+		logrus.WithError(err).Errorf("failed to update completed_at")
 	}
 }
 
@@ -715,6 +730,18 @@ func (s *Snapshotter) markSnapshotStarted(ctx context.Context) error {
 		return autotx.Transact(ctx, s.source, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx,
 				fmt.Sprintf("UPDATE %s SET started_at = NOW() WHERE started_at IS NULL AND task = ?",
+					s.config.SnapshotRequestTable),
+				s.config.TaskName)
+			return errors.WithStack(err)
+		})
+	}))
+}
+
+func (s *Snapshotter) markSnapshotCompleted(ctx context.Context) error {
+	return errors.WithStack(Retry(ctx, s.sourceRetry, func(ctx context.Context) error {
+		return autotx.Transact(ctx, s.source, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx,
+				fmt.Sprintf("UPDATE %s SET completed_at = NOW() WHERE completed_at IS NULL AND started_at IS NOT NULL AND task = ?",
 					s.config.SnapshotRequestTable),
 				s.config.TaskName)
 			return errors.WithStack(err)

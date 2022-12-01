@@ -535,13 +535,6 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, muta
 		return errors.WithStack(err)
 	}
 
-	if mutation.Type == Repair && mutation.Chunk.Last {
-		logrus.WithContext(ctx).
-			WithField("task", "replicate").
-			WithField("table", mutation.Table.Name).
-			Infof("'%v' snapshot done", mutation.Table.Name)
-	}
-
 	return nil
 }
 

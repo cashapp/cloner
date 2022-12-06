@@ -334,7 +334,8 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	require.NoError(t, err)
 
 	// Wait for the snapshot to complete
-	time.Sleep(5 * time.Second)
+	err = waitFor(ctx, snapshotCompleted(ctx, "customer/-80", sourceDirectDB))
+	require.NoError(t, err)
 
 	// Stop writing and make sure replication lag drops to heartbeat frequency
 	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))
@@ -387,6 +388,22 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		err := reportDiffs(diffs)
 		assert.NoError(t, err)
 		assert.Fail(t, "there were diffs (see above)")
+	}
+}
+
+func snapshotCompleted(ctx context.Context, task string, db *sql.DB) func() error {
+	return func() error {
+		stmt := fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE completed_at IS NULL AND task = ?", "_cloner_snapshot")
+		row := db.QueryRowContext(ctx, stmt, task)
+		var incompleteCount int
+		err := row.Scan(&incompleteCount)
+		if err != nil {
+			return backoff.Permanent(errors.WithStack(err))
+		}
+		if incompleteCount > 0 {
+			return errors.Errorf("snapshot not completed")
+		}
+		return nil
 	}
 }
 
@@ -476,7 +493,6 @@ func littleReplicationLag(ctx context.Context, task string, db *sql.DB) func() e
 }
 
 func readReplicationLag(ctx context.Context, task string, db *sql.DB) (time.Duration, time.Time, error) {
-	// TODO retries with backoff?
 	stmt := fmt.Sprintf("SELECT time FROM `%s` WHERE task = ?", "_cloner_heartbeat")
 	row := db.QueryRowContext(ctx, stmt, task)
 	var lastHeartbeat time.Time

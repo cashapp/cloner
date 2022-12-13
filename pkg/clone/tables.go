@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -153,7 +154,7 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 		}
 		err = rows.Close()
 		if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 	} else {
 		tableNames = make([]string, 0, len(config.Config.Tables))
@@ -165,10 +166,20 @@ func loadTables(ctx context.Context, config ReaderConfig, dbConfig DBConfig, db 
 	for _, t := range config.IgnoreTables {
 		ignoreTables[t] = true
 	}
+	var ignoreTablePattern *regexp.Regexp
+	if config.IgnoreTablePattern != "" {
+		ignoreTablePattern, err = regexp.Compile(config.IgnoreTablePattern)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
 	tables := make([]*Table, 0, len(tableNames))
 	for _, tableName := range tableNames {
 		_, ignore := ignoreTables[tableName]
 		if ignore {
+			continue
+		}
+		if ignoreTablePattern != nil && ignoreTablePattern.MatchString(tableName) {
 			continue
 		}
 		table, err := loadTable(ctx, config, dbConfig.Type, db, schema, tableName, config.Config.Tables[tableName])

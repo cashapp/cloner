@@ -31,6 +31,7 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 	assert.Equal(t, 1, len(tables))
 	// not testing the content of this one
 	tables[0].MysqlTable = nil
+	tables[0].EstimatedRows = 0
 	assert.Equal(t, []*Table{
 		{
 			Name:             "customers",

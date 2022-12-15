@@ -175,11 +175,12 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		return nil, errors.WithStack(err)
 	}
 	if tlsConfig != nil {
-		err = mysql.RegisterTLSConfig("cloner", tlsConfig)
+		tlsConfigName := fmt.Sprintf("cloner_%d", time.Now().UnixNano())
+		err = mysql.RegisterTLSConfig(tlsConfigName, tlsConfig)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		cfg.TLSConfig = "cloner"
+		cfg.TLSConfig = tlsConfigName
 	}
 	if c.Password != "" {
 		cfg.Passwd = c.Password

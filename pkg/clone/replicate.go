@@ -38,7 +38,7 @@ var (
 	replicationLag = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "replication_lag",
-			Help: "The time in milliseconds between a change applied to source is replicated to the target",
+			Help: "The time in seconds between a change applied to source is replicated to the target",
 		},
 		[]string{"task"},
 	)
@@ -106,6 +106,7 @@ type Replicate struct {
 	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
 	SnapshotRequestTable string        `help:"Name of the table the user can requests snapshots from" optional:"" default:"_cloner_snapshot"`
 	HeartbeatFrequency   time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
+	LogReplicationLag    bool          `help:"Log the replication lag after each heartbeat" default:"true"`
 	CreateTables         bool          `help:"Create the required tables if they do not exist" default:"true"`
 	ChunkBufferSize      int           `help:"Size of internal queues" default:"100"`
 	ReconnectTimeout     time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`

@@ -439,7 +439,7 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 				return errors.Errorf("chunk %s[%d-%d) had diffs",
 					chunk.Table.Name, chunk.Start, chunk.End)
 			}
-		}, backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(r.config.FailedChunkRetryCount)))
+		}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(r.config.FailedChunkRetryCount)), ctx))
 		if len(diffs) > 0 {
 			return diffs, nil
 		} else {

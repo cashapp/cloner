@@ -212,8 +212,9 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 		ReaderConfig: readerConfig,
 	}
 	err = kong.ApplyDefaults(checksum)
+	checksum.IgnoreReplicationLag = true
 	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
-	clone.UseCRC32Checksum = true
+	checksum.UseCRC32Checksum = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
@@ -269,6 +270,7 @@ func TestUnshardedClone(t *testing.T) {
 		},
 	}
 	err = kong.ApplyDefaults(checksum)
+	checksum.IgnoreReplicationLag = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
@@ -343,6 +345,7 @@ func TestCloneNoDiff(t *testing.T) {
 		ReaderConfig: readerConfig,
 	}
 	err = kong.ApplyDefaults(checksum)
+	checksum.IgnoreReplicationLag = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
@@ -454,7 +457,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 	}
 	err = kong.ApplyDefaults(checksum)
 	// Turn on CRC32 checksum, it works on shard targeted clones from Vitess!
-	clone.UseCRC32Checksum = true
+	checksum.UseCRC32Checksum = true
+	checksum.IgnoreReplicationLag = true
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)

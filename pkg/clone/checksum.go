@@ -2,6 +2,8 @@ package clone
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	_ "net/http/pprof"
 	"time"
 
@@ -17,6 +19,11 @@ import (
 
 type Checksum struct {
 	ReaderConfig
+
+	IgnoreReplicationLag bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
+	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	TaskName             string        `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
+	MaxReplicationLag    time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
 }
 
 // Run finds any differences between source and target
@@ -91,6 +98,39 @@ func (cmd *Checksum) reportDiffs(diffs []Diff) {
 	}
 }
 
+func (cmd *Checksum) readLag(ctx context.Context, target *sql.DB) (time.Duration, error) {
+	retry := RetryOptions{
+		Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
+		MaxRetries:    cmd.ReadRetries,
+		Timeout:       cmd.ReadTimeout,
+	}
+
+	lag := time.Hour
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		stmt := fmt.Sprintf("SELECT time FROM %s WHERE task = ?", cmd.HeartbeatTable)
+		row := target.QueryRowContext(ctx, stmt, cmd.TaskName)
+		var lastHeartbeat time.Time
+		err := row.Scan(&lastHeartbeat)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// We haven't received the first heartbeat yet, maybe we're an hour behind, who knows?
+				// We're definitely more than 0 ms so let's go with one hour just to pick a number >0
+				lag = time.Hour
+			} else {
+				return errors.WithStack(err)
+			}
+		} else {
+			lag = time.Now().UTC().Sub(lastHeartbeat)
+		}
+		return nil
+	})
+	if err != nil {
+		return lag, errors.WithStack(err)
+	}
+	return lag, nil
+}
+
 func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	if cmd.TableParallelism == 0 {
 		return nil, errors.Errorf("need more parallelism")
@@ -131,6 +171,20 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	targetReaderCollector := sqlstats.NewStatsCollector("target_reader", targetReader)
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
+
+	if !cmd.IgnoreReplicationLag {
+		lag, err := cmd.readLag(ctx, targetReader)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if lag > cmd.MaxReplicationLag {
+			return nil, errors.Errorf("replication lag too high: %v, "+
+				"this checksum algorithm requires relatively low replication lag to work, "+
+				"please try again when replication lag is lower", lag)
+		}
+
+		logrus.Infof("replication lag is fine: %v", lag)
+	}
 
 	var tablesToDo []string
 	for _, t := range tables {

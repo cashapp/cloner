@@ -93,7 +93,7 @@ cloner \
 
 ## 5. Wait for replication to catch up
 
-Before we start checksumming or shifting we should make sure the target database isn't too far behind the source. Every 60 s (configurable) we write a heartbeat row to the source database which should get replicated to the target. The difference between the time of these heartbeats is the row. The minimum row resolution is the heartbeat frequency so it never drops entirely to zero.
+Before we start checksumming or shifting we should make sure the target database isn't too far behind the source. Every 60 s (configurable) we write a heartbeat row to the source database which should get replicated to the target. The difference between the time of these heartbeats is the row.
 
 There is a Prometheus metric called `replication_lag` or you can simply run the following query on both the source and the target and eye ball it:
 ```

@@ -92,7 +92,6 @@ func TestReverseReplication(t *testing.T) {
 	require.NoError(t, err)
 	err = insertBunchaData(ctx, target.Config(), 50)
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
 	require.NoError(t, err)
 	diffs, err = runChecksum(ctx, target.Config(), source.Config())
@@ -129,9 +128,11 @@ func runChecksum(ctx context.Context, target DBConfig, source DBConfig) ([]Diff,
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
+	// If a chunk fails it might be because the replication is behind, so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
+	// Note: We don't disable the replication lag check here, replication is running at this point
 	checksum.FailedChunkRetryCount = 10
+	checksum.TaskName = "replication"
 	diffs, err := checksum.run(ctx)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -364,7 +365,6 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	require.NoError(t, err)
 
 	// Let replication catch up and then do a full checksum while replication is running
-	time.Sleep(5 * time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, "customer/-80", targetDB))
 	require.NoError(t, err)
 	checksum := &Checksum{
@@ -374,6 +374,7 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
 	// we should eventually catch the chunk while replication is caught up
 	checksum.FailedChunkRetryCount = 10
+	checksum.TaskName = "customer/-80"
 	require.NoError(t, err)
 	diffs, err := checksum.run(ctx)
 	require.NoError(t, err)

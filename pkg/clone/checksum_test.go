@@ -30,6 +30,7 @@ func TestChecksum(t *testing.T) {
 	assert.NoError(t, err)
 
 	checksum := &Checksum{
+		IgnoreReplicationLag: true,
 		ReaderConfig: ReaderConfig{
 			SourceTargetConfig: SourceTargetConfig{
 				Source: source,

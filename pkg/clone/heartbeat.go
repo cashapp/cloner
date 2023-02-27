@@ -119,10 +119,12 @@ func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 
 			replicationLag.WithLabelValues(h.config.TaskName).Set(float64(lag / time.Second))
 			heartbeatsRead.WithLabelValues(h.config.TaskName).Inc()
-			logrus.
-				WithField("task", "heartbeat").
-				WithField("replication-lag-seconds", float64(lag/time.Second)).
-				Infof("replication lag: %v", lag)
+			if h.config.LogReplicationLag {
+				logrus.
+					WithField("task", "heartbeat").
+					WithField("replication-lag-seconds", float64(lag/time.Second)).
+					Infof("replication lag: %v", lag)
+			}
 
 			b.Reset()
 		}

@@ -215,7 +215,8 @@ func (h *Heartbeat) findHeartbeat(ctx context.Context, count int64) (bool, error
 
 func (h *Heartbeat) waitForHeartbeat(ctx context.Context, count int64) error {
 	b := backoff.NewExponentialBackOff()
-	b.MaxInterval = HeartbeatWaitCutOff / 10
+	b.InitialInterval = 100 * time.Millisecond
+	b.MaxInterval = 1 * time.Second
 	b.MaxElapsedTime = 2 * HeartbeatWaitCutOff
 
 	err := backoff.Retry(func() error {

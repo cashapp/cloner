@@ -13,21 +13,21 @@ import (
 )
 
 var (
-	tablesTotalMetric = prometheus.NewCounter(
-		prometheus.CounterOpts{
+	tablesTotalMetric = prometheus.NewGauge(
+		prometheus.GaugeOpts{
 			Name: "tables",
 			Help: "How many total tables to do.",
 		},
 	)
-	rowCountMetric = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	rowCountMetric = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
 			Name: "estimated_rows",
 			Help: "How many total rows to do.",
 		},
 		[]string{"table"},
 	)
-	tablesDoneMetric = prometheus.NewCounter(
-		prometheus.CounterOpts{
+	tablesDoneMetric = prometheus.NewGauge(
+		prometheus.GaugeOpts{
 			Name: "tables_done",
 			Help: "How many tables done.",
 		},
@@ -48,7 +48,7 @@ type Reader struct {
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
-	speedLogger *ProgressLogger
+	speedLogger *ThroughputLogger
 }
 
 func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
@@ -161,7 +161,7 @@ func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool,
 func NewReader(
 	config ReaderConfig,
 	table *Table,
-	speedLogger *ProgressLogger,
+	speedLogger *ThroughputLogger,
 	source *sql.DB,
 	sourceLimiter core.Limiter,
 	target *sql.DB,

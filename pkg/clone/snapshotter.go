@@ -47,6 +47,7 @@ type Snapshotter struct {
 
 	// ongoingChunks holds the currently ongoing chunks, only access from the replication thread
 	ongoingChunks []*ChunkSnapshot
+	readLogger    *ThroughputLogger
 }
 
 func NewSnapshotter(config Replicate) (*Snapshotter, error) {
@@ -385,6 +386,21 @@ func (s *Snapshotter) start(ctx context.Context) error {
 			return
 		}
 
+		tables, err := LoadTables(ctx, s.config.ReaderConfig)
+		if err != nil {
+			logger.WithError(err).Errorf("failed to estimate rows for tables ahead of snapshot: %v", err)
+			return
+		}
+
+		var estimatedRows int64
+		tablesTotalMetric.Set(float64(len(tables)))
+		for _, table := range tables {
+			estimatedRows += table.EstimatedRows
+			rowCountMetric.WithLabelValues(table.Name).Set(float64(table.EstimatedRows))
+		}
+
+		s.readLogger = NewThroughputLogger("snapshot read", s.config.ThroughputLoggingFrequency, uint64(estimatedRows))
+
 		logger = logger.WithField("task", "chunking")
 		err = s.chunkTables(ctx)
 		if err != nil {
@@ -524,7 +540,7 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	//        3) when we receive low watermark in replica -> read the chunk snapshot
 	//        4) write high watermark to master
 
-	stream, _, err := bufferChunk(ctx, s.sourceRetry, s.source, "source", chunk)
+	stream, sizeBytes, err := bufferChunk(ctx, s.sourceRetry, s.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -536,6 +552,7 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	snapshot := &ChunkSnapshot{Chunk: chunk, Rows: rows}
 
 	chunksSnapshotted.WithLabelValues(s.config.TaskName, chunk.Table.Name).Inc()
+	s.readLogger.Record(len(rows), sizeBytes)
 
 	_, err = s.source.ExecContext(ctx,
 		fmt.Sprintf("INSERT INTO %s (task, table_name, chunk_seq, high) VALUES (?, ?, ?, 1)",

@@ -241,7 +241,8 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 				},
 			},
 		},
-		UseConcurrencyLimits: false,
+		UseConcurrencyLimits:       false,
+		ThroughputLoggingFrequency: heartbeatFrequency,
 	}
 	replicate := &Replicate{
 		WriterConfig: WriterConfig{

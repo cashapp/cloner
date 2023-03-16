@@ -115,10 +115,10 @@ func (cmd *Clone) run() error {
 	logrus.Infof("starting to clone tables: %v", tablesToDo)
 
 	var estimatedRows int64
-	tablesTotalMetric.Add(float64(len(tables)))
+	tablesTotalMetric.Set(float64(len(tables)))
 	for _, table := range tables {
 		estimatedRows += table.EstimatedRows
-		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
+		rowCountMetric.WithLabelValues(table.Name).Set(float64(table.EstimatedRows))
 	}
 
 	var sourceLimiter core.Limiter
@@ -130,8 +130,8 @@ func (cmd *Clone) run() error {
 		writerLimiter = makeLimiter("writer_limiter")
 	}
 
-	writeLogger := NewSpeedLogger("write", cmd.SpeedLoggingFrequency, 0)
-	readLogger := NewSpeedLogger("read", cmd.SpeedLoggingFrequency, uint64(estimatedRows))
+	writeLogger := NewThroughputLogger("write", cmd.ThroughputLoggingFrequency, 0)
+	readLogger := NewThroughputLogger("read", cmd.ThroughputLoggingFrequency, uint64(estimatedRows))
 
 	g, ctx := errgroup.WithContext(ctx)
 

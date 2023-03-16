@@ -104,7 +104,7 @@ func init() {
 	prometheus.MustRegister(writeLimiterDelay)
 }
 
-type ProgressLogger struct {
+type ThroughputLogger struct {
 	name      string
 	frequency time.Duration
 	start     time.Time
@@ -119,9 +119,9 @@ type ProgressLogger struct {
 	estimatedRows uint64
 }
 
-func NewSpeedLogger(name string, frequency time.Duration, estimatedRows uint64) *ProgressLogger {
+func NewThroughputLogger(name string, frequency time.Duration, estimatedRows uint64) *ThroughputLogger {
 	now := time.Now()
-	return &ProgressLogger{
+	return &ThroughputLogger{
 		name:      name,
 		frequency: frequency,
 		lastLog:   now,
@@ -134,14 +134,14 @@ func NewSpeedLogger(name string, frequency time.Duration, estimatedRows uint64) 
 	}
 }
 
-func (l *ProgressLogger) Record(rows int, bytes uint64) {
+func (l *ThroughputLogger) Record(rows int, bytes uint64) {
 	atomic.AddUint64(&l.rows, uint64(rows))
 	atomic.AddUint64(&l.totalRows, uint64(rows))
 	atomic.AddUint64(&l.bytes, bytes)
 	l.maybeLog()
 }
 
-func (l *ProgressLogger) maybeLog() {
+func (l *ThroughputLogger) maybeLog() {
 	if l.rows == 0 {
 		// No point logging if we haven't actually done anything
 		return
@@ -156,7 +156,7 @@ func (l *ProgressLogger) maybeLog() {
 	}
 }
 
-func (l *ProgressLogger) log() {
+func (l *ThroughputLogger) log() {
 	now := time.Now()
 	sinceLastLog := now.Sub(l.lastLog)
 	bytesPerSecond := float64(l.bytes) / sinceLastLog.Seconds()
@@ -171,16 +171,16 @@ func (l *ProgressLogger) log() {
 		percentDone := float64(100) * (1 - fractionRemaining)
 		timeRemaining := time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
 		log.Infof("%s throughput: %v/s %v rows/s, total rows: %d "+
-			"(estimated rows: %d, estimated done: %d%%, estimated time remaining: %v)",
+			"(estimated rows: %d, estimated done: %2.f%%, estimated time remaining: %v)",
 			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond),
-			l.totalRows, l.estimatedRows, int64(percentDone), l.humanizeDuration(timeRemaining))
+			l.totalRows, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
 	}
 	atomic.StoreUint64(&l.rows, 0)
 	atomic.StoreUint64(&l.bytes, 0)
 	l.lastLog = now
 }
 
-func (l *ProgressLogger) humanizeFloat(f float64) string {
+func (l *ThroughputLogger) humanizeFloat(f float64) string {
 	if f < 10 {
 		return fmt.Sprintf("%.1f", f)
 	} else {
@@ -188,7 +188,7 @@ func (l *ProgressLogger) humanizeFloat(f float64) string {
 	}
 }
 
-func (l *ProgressLogger) humanizeDuration(d time.Duration) string {
+func (l *ThroughputLogger) humanizeDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
@@ -610,12 +610,12 @@ type Writer struct {
 	db    *sql.DB
 	retry RetryOptions
 
-	speedLogger *ProgressLogger
+	speedLogger *ThroughputLogger
 
 	writerParallelism *semaphore.Weighted
 }
 
-func NewWriter(config WriterConfig, table *Table, writer *sql.DB, speedLogger *ProgressLogger, limiter core.Limiter) *Writer {
+func NewWriter(config WriterConfig, table *Table, writer *sql.DB, speedLogger *ThroughputLogger, limiter core.Limiter) *Writer {
 	return &Writer{
 		config:      config,
 		table:       table,

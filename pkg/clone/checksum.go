@@ -193,10 +193,10 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	logrus.Infof("starting to diff tables: %v", tablesToDo)
 
 	var estimatedRows int64
-	tablesTotalMetric.Add(float64(len(tables)))
+	tablesTotalMetric.Set(float64(len(tables)))
 	for _, table := range tables {
 		estimatedRows += table.EstimatedRows
-		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
+		rowCountMetric.WithLabelValues(table.Name).Set(float64(table.EstimatedRows))
 	}
 
 	var sourceLimiter core.Limiter
@@ -206,7 +206,7 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		targetLimiter = makeLimiter("target_reader_limiter")
 	}
 
-	readLogger := NewSpeedLogger("read", cmd.SpeedLoggingFrequency, uint64(estimatedRows))
+	readLogger := NewThroughputLogger("read", cmd.ThroughputLoggingFrequency, uint64(estimatedRows))
 
 	g, ctx := errgroup.WithContext(ctx)
 

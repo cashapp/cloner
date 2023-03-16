@@ -46,7 +46,7 @@ type ReaderConfig struct {
 	ReadTimeout       time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries       uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
 
-	SpeedLoggingFrequency time.Duration `help:"How often to log the speed of rows/bytes" default:"1m"`
+	ThroughputLoggingFrequency time.Duration `help:"How often to log the speed of rows/bytes" default:"1m"`
 
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 

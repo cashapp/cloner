@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dlmiddlecote/sqlstats"
@@ -34,13 +35,20 @@ type TransactionWriter struct {
 	target          *sql.DB
 	targetCollector *sqlstats.StatsCollector
 
-	targetRetry RetryOptions
+	targetRetry     RetryOptions
+	replicateLogger *ThroughputLogger
+	repairLogger    *ThroughputLogger
 }
 
 func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
+	replicateLogger := NewThroughputLogger("replication", config.ThroughputLoggingFrequency, 0)
+	snapshotLogger := NewThroughputLogger("snapshot write", config.ThroughputLoggingFrequency, 0)
+
 	var err error
 	w := TransactionWriter{
-		config: config,
+		config:          config,
+		replicateLogger: replicateLogger,
+		repairLogger:    snapshotLogger,
 		targetRetry: RetryOptions{
 			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
 			AcquireMetric: readLimiterDelay.WithLabelValues("target"),
@@ -225,7 +233,7 @@ func (s *transactionSequence) Print(ctx context.Context) {
 				fmt.Printf("repair %v-%v\n", mutation.Chunk.Start, mutation.Chunk.End)
 			} else {
 				writer := &printingWriter{db: s.writer.target}
-				_ = mutation.Write(ctx, writer)
+				_, _, _ = mutation.Write(ctx, writer)
 			}
 		}
 	}
@@ -492,7 +500,6 @@ func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, 
 }
 
 func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions chan Transaction) (*transactionSet, error) {
-	// TODO these should probably be configurable? or auto tuning?
 	size := 0
 	nextTransactionSet := &transactionSet{writer: w}
 	transactionSetTimeout := time.After(w.config.ParallelTransactionBatchTimeout)
@@ -508,7 +515,7 @@ func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions
 			}
 		case <-transactionSetTimeout:
 			if size == 0 {
-				// We have no transactions so we might as well wait a bit longer
+				// We have no transactions, so we might as well wait a bit longer
 				transactionSetTimeout = time.After(w.config.ParallelTransactionBatchTimeout)
 				continue
 			}
@@ -519,32 +526,45 @@ func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions
 	}
 }
 
-func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, mutation Mutation) error {
-	if mutation.Table.Name == w.config.WatermarkTable {
+func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, m Mutation) error {
+	if m.Table.Name == w.config.WatermarkTable {
 		// We don't send writes to the watermark table to the target
 		return nil
 	}
-	err := mutation.Write(ctx, tx)
+	rowCount, sizeBytes, err := m.Write(ctx, tx)
 	if err != nil {
 		return errors.WithStack(err)
+	}
+
+	switch m.Type {
+	case Repair:
+		w.repairLogger.Record(rowCount, sizeBytes)
+	case Delete, Insert, Update:
+		w.replicateLogger.Record(rowCount, sizeBytes)
+	default:
+		panic(fmt.Sprintf("unknown mutation type: %d", m.Type))
 	}
 
 	return nil
 }
 
-func (m *Mutation) Write(ctx context.Context, tx DBWriter) error {
-	var err error
+func (m *Mutation) Write(ctx context.Context, tx DBWriter) (rowCount int, sizeBytes uint64, err error) {
 	switch m.Type {
 	case Repair:
-		err = m.repair(ctx, tx)
+		rowCount, sizeBytes, err = m.repair(ctx, tx)
 	case Delete:
 		err = m.delete(ctx, tx)
+		rowCount = len(m.Rows)
+		sizeBytes = m.SizeBytes()
 	case Insert, Update:
 		err = m.replace(ctx, tx)
+		rowCount = len(m.Rows)
+		sizeBytes = m.SizeBytes()
 	default:
 		panic(fmt.Sprintf("unknown mutation type: %d", m.Type))
 	}
-	return errors.WithStack(err)
+
+	return
 }
 
 func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
@@ -597,6 +617,14 @@ func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 	}
 
 	return nil
+}
+
+func (m *Mutation) SizeBytes() (size uint64) {
+	size = 0
+	for _, row := range m.Rows {
+		size += uint64(unsafe.Sizeof(row))
+	}
+	return
 }
 
 func (m *Mutation) delete(ctx context.Context, tx DBWriter) (err error) {
@@ -695,17 +723,17 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
-func (m *Mutation) repair(ctx context.Context, tx DBWriter) error {
+func (m *Mutation) repair(ctx context.Context, tx DBWriter) (rowCount int, sizeBytes uint64, err error) {
 	targetStream, _, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
-		return errors.WithStack(err)
+		return rowCount, sizeBytes, errors.WithStack(err)
 	}
 
 	// Diff the streams
 	// TODO StreamDiff should return []Mutation here instead
 	diffs, err := StreamDiff(ctx, m.Table, stream(m.Table, m.Rows), targetStream)
 	if err != nil {
-		return errors.WithStack(err)
+		return rowCount, sizeBytes, errors.WithStack(err)
 	}
 
 	if len(diffs) > 0 {
@@ -716,7 +744,8 @@ func (m *Mutation) repair(ctx context.Context, tx DBWriter) error {
 	// TODO BatchTableWritesSync should batch []Mutation into []Mutation instead
 	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
-		return errors.WithStack(err)
+		err = errors.WithStack(err)
+		return
 	}
 
 	writeCount := 0
@@ -726,16 +755,21 @@ func (m *Mutation) repair(ctx context.Context, tx DBWriter) error {
 		writeCount += len(batch.Rows)
 		// TODO we may need to split up batches across multiple transactions...?
 		m := toMutation(batch)
-		err := m.Write(ctx, tx)
+		var batchRowCount int
+		var batchBytes uint64
+		batchRowCount, batchBytes, err = m.Write(ctx, tx)
 		if err != nil {
-			return errors.WithStack(err)
+			err = errors.WithStack(err)
+			return
 		}
+		rowCount += batchRowCount
+		sizeBytes += batchBytes
 	}
 
 	chunksProcessed.WithLabelValues(m.Table.Name).Inc()
 	rowsProcessed.WithLabelValues(m.Table.Name).Add(float64(len(m.Rows)))
 
-	return nil
+	return rowCount, sizeBytes, nil
 }
 
 func toMutation(batch Batch) Mutation {

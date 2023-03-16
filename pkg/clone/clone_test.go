@@ -167,8 +167,8 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		SpeedLoggingFrequency: 100 * time.Millisecond,
-		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+		ThroughputLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -252,9 +252,9 @@ func TestUnshardedClone(t *testing.T) {
 					Source: source,
 					Target: target,
 				},
-				SpeedLoggingFrequency: 100 * time.Millisecond,
-				ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
-				WriteBatchSize:        5, // Smaller batch size to make sure we're exercising batching
+				ThroughputLoggingFrequency: 100 * time.Millisecond,
+				ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize:             5, // Smaller batch size to make sure we're exercising batching
 			},
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
@@ -309,8 +309,8 @@ func TestCloneNoDiff(t *testing.T) {
 			Source: sourceLeft,
 			Target: target,
 		},
-		SpeedLoggingFrequency: 100 * time.Millisecond,
-		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+		ThroughputLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -381,8 +381,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		SpeedLoggingFrequency: 100 * time.Millisecond,
-		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+		ThroughputLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -419,8 +419,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		SpeedLoggingFrequency: 100 * time.Millisecond,
-		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+		ThroughputLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -496,9 +496,9 @@ func TestUnshardedCloneEmptySourceTables(t *testing.T) {
 					Source: source,
 					Target: target,
 				},
-				SpeedLoggingFrequency: 100 * time.Millisecond,
-				ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
-				WriteBatchSize:        5, // Smaller batch size to make sure we're exercising batching
+				ThroughputLoggingFrequency: 100 * time.Millisecond,
+				ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize:             5, // Smaller batch size to make sure we're exercising batching
 			},
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},

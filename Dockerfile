@@ -1,4 +1,4 @@
-FROM golang:1.19 AS builder
+FROM golang:1.20 AS builder
 COPY . /go/src/github.com/cashapp/cloner
 WORKDIR /go/src/github.com/cashapp/cloner
 RUN CGO_ENABLED=0 go build -o cloner ./cmd/cloner

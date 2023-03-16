@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/mightyguava/autotx"
 	"vitess.io/vitess/go/vt/proto/topodata"
@@ -165,7 +166,8 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		SpeedLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -249,8 +251,9 @@ func TestUnshardedClone(t *testing.T) {
 					Source: source,
 					Target: target,
 				},
-				ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
-				WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				SpeedLoggingFrequency: 100 * time.Millisecond,
+				ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize:        5, // Smaller batch size to make sure we're exercising batching
 			},
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
@@ -305,7 +308,8 @@ func TestCloneNoDiff(t *testing.T) {
 			Source: sourceLeft,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		SpeedLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -376,7 +380,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		SpeedLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -413,7 +418,8 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			Source: source,
 			Target: target,
 		},
-		ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+		SpeedLoggingFrequency: 100 * time.Millisecond,
+		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers": {
@@ -489,8 +495,9 @@ func TestUnshardedCloneEmptySourceTables(t *testing.T) {
 					Source: source,
 					Target: target,
 				},
-				ChunkSize:      5, // Smaller chunk size to make sure we're exercising chunking
-				WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				SpeedLoggingFrequency: 100 * time.Millisecond,
+				ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize:        5, // Smaller batch size to make sure we're exercising batching
 			},
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},

@@ -15,7 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -481,20 +480,13 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
-
-	tableParallelism := semaphore.NewWeighted(s.config.TableParallelism)
+	g.SetLimit(s.config.TableParallelism)
 
 	logger := logrus.WithContext(ctx).WithField("task", "chunking")
 
 	for _, t := range tables {
 		table := t
-		err = tableParallelism.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
-		}
 		g.Go(func() error {
-			defer tableParallelism.Release(1)
-
 			logger := logger.WithField("table", table.Name)
 			logger.Infof("'%s' chunking start", table.Name)
 			err := generateTableChunksAsync(ctx, table, s.source, s.chunks, s.sourceRetry)
@@ -532,7 +524,7 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	//        3) when we receive low watermark in replica -> read the chunk snapshot
 	//        4) write high watermark to master
 
-	stream, err := bufferChunk(ctx, s.sourceRetry, s.source, "source", chunk)
+	stream, _, err := bufferChunk(ctx, s.sourceRetry, s.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

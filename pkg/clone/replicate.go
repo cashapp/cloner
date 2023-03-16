@@ -114,7 +114,7 @@ type Replicate struct {
 	DoSnapshot      bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
 	DoSnapshotDelay time.Duration `help:"How long to wait until running a snapshot" default:"60s"`
 
-	ReplicationParallelism          int64         `help:"Many transactions to apply in parallel during replication" default:"1"`
+	ReplicationParallelism          int           `help:"Many transactions to apply in parallel during replication" default:"1"`
 	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
 	ParallelTransactionBatchTimeout time.Duration `help:"How long to wait for a batch of transactions to fill up before executing them anyway" default:"5s"`
 	StartingGTID                    string        `help:"When starting a new replication this GTID set as the starting point" xor:"starting_gtid"`

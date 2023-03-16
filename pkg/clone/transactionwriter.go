@@ -21,7 +21,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 type DBWriter interface {
@@ -423,17 +422,12 @@ func (s *transactionSet) Start(parent context.Context) {
 			s.ordinal, len(s.sequences), s.writer.config.ReplicationParallelism)
 
 	g, ctx := errgroup.WithContext(parent)
+	g.SetLimit(s.writer.config.ReplicationParallelism)
 	s.g = g
-	writerParallelism := semaphore.NewWeighted(s.writer.config.ReplicationParallelism)
 	for _, seq := range s.sequences {
 		sequence := seq
 		s.g.Go(func() error {
-			err := writerParallelism.Acquire(ctx, 1)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer writerParallelism.Release(1)
-			err = sequence.Run(ctx)
+			err := sequence.Run(ctx)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -702,7 +696,7 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (m *Mutation) repair(ctx context.Context, tx DBWriter) error {
-	targetStream, err := readChunk(ctx, tx, "target", m.Chunk)
+	targetStream, _, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
 		return errors.WithStack(err)
 	}

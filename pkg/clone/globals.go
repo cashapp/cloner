@@ -40,11 +40,13 @@ type ReaderConfig struct {
 	ChunkSize     int  `help:"Default size of the chunks to diff (can also be overridden per table)" default:"5000"`
 	ShuffleChunks bool `help:"Process chunks in a random order, spreads out the write load but writing will be delayed because all chunks are read before writing starts" default:"false"`
 
-	TableParallelism  int64         `help:"Number of tables to process concurrently" default:"10"`
+	TableParallelism  int           `help:"Number of tables to process concurrently" default:"10"`
 	ReaderCount       int           `help:"Number of reader connections" default:"20"`
-	ReaderParallelism int64         `help:"Number of reader goroutines" default:"200"`
+	ReaderParallelism int           `help:"Number of reader goroutines" default:"200"`
 	ReadTimeout       time.Duration `help:"Timeout for faster reads like diffing a single chunk" default:"30s"`
 	ReadRetries       uint64        `help:"How many times to retry reading a single chunk (with backoff)" default:"10"`
+
+	SpeedLoggingFrequency time.Duration `help:"How often to log the speed of rows/bytes" default:"1m"`
 
 	UseCRC32Checksum bool `help:"Compare chunks using CRC32 in the database before doing a full diff in memory" name:"use-crc32-checksum" default:"false"`
 

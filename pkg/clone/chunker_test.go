@@ -239,7 +239,7 @@ func TestChunker(t *testing.T) {
 
 			var idsInChunks [][]interface{}
 			for i, chunk := range chunks {
-				buffer, err := bufferChunk(ctx, retry, db, "source", chunk)
+				buffer, _, err := bufferChunk(ctx, retry, db, "source", chunk)
 				require.NoError(t, err)
 				rows, err := readAll(buffer)
 				require.NoError(t, err)

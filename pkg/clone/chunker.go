@@ -5,15 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/cenkalti/backoff/v4"
-	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)

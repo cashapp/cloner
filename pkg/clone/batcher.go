@@ -2,12 +2,21 @@ package clone
 
 import (
 	"context"
+	"unsafe"
 )
 
 type Batch struct {
 	Type  MutationType
 	Table *Table
 	Rows  []*Row
+}
+
+func (b Batch) SizeBytes() (size uint64) {
+	size = 0
+	for _, row := range b.Rows {
+		size += uint64(unsafe.Sizeof(row.Data))
+	}
+	return
 }
 
 // BatchWrites consumes diffs and batches them up into batches by type and table

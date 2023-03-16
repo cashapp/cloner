@@ -56,7 +56,9 @@ func (cmd *Checksum) Run() error {
 
 	if len(diffs) > 0 {
 		cmd.reportDiffs(diffs)
-		return errors.Errorf("found diffs")
+		err := errors.Errorf("found diffs")
+		logger.WithError(err).Infof("found diffs")
+		return err
 	} else {
 		logger.Infof("no diffs found")
 	}

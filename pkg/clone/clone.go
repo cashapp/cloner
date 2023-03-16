@@ -2,15 +2,14 @@ package clone
 
 import (
 	"context"
+	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"time"
 
 	"github.com/dlmiddlecote/sqlstats"
+	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sync/semaphore"
-
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -114,8 +113,10 @@ func (cmd *Clone) run() error {
 	}
 	logrus.Infof("starting to clone tables: %v", tablesToDo)
 
+	var estimatedRows int64
 	tablesTotalMetric.Add(float64(len(tables)))
 	for _, table := range tables {
+		estimatedRows += table.EstimatedRows
 		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
@@ -128,9 +129,12 @@ func (cmd *Clone) run() error {
 		writerLimiter = makeLimiter("writer_limiter")
 	}
 
+	writeLogger := NewSpeedLogger("write", cmd.SpeedLoggingFrequency, 0)
+	readLogger := NewSpeedLogger("read", cmd.SpeedLoggingFrequency, uint64(estimatedRows))
+
 	g, ctx := errgroup.WithContext(ctx)
 
-	tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
+	tableParallelism := semaphore.NewWeighted(int64(cmd.TableParallelism))
 
 	for _, t := range tables {
 		table := t
@@ -145,12 +149,14 @@ func (cmd *Clone) run() error {
 
 			diffs := make(chan Diff)
 
-			writer := NewWriter(cmd.WriterConfig, table, writer, writerLimiter)
+			// TODO I think we should use a separate errgroup here
+			writer := NewWriter(cmd.WriterConfig, table, writer, writeLogger, writerLimiter)
 			writer.Write(ctx, g, diffs)
 
 			reader := NewReader(
 				cmd.ReaderConfig,
 				table,
+				readLogger,
 				sourceReader,
 				sourceLimiter,
 				targetReader,

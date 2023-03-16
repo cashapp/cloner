@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -23,7 +22,7 @@ var (
 	rowCountMetric = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "estimated_rows",
-			Help: "How many total tables to do.",
+			Help: "How many total rows to do.",
 		},
 		[]string{"table"},
 	)
@@ -49,6 +48,7 @@ type Reader struct {
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
+	speedLogger *ProgressLogger
 }
 
 func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
@@ -62,6 +62,7 @@ func (r *Reader) Read(ctx context.Context, diffs chan Diff) error {
 
 func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(r.config.ReaderParallelism)
 
 	chunkCh := make(chan Chunk)
 
@@ -96,18 +97,11 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 	// Generate diffs from all chunks
 	chunkCount := 0
 	rowCount := 0
-	readerParallelism := semaphore.NewWeighted(r.config.ReaderParallelism)
 	for c := range chunkCh {
 		chunk := c
 		chunkCount += 1
 		rowCount += c.Size
-		err := readerParallelism.Acquire(ctx, 1)
-		if err != nil {
-			return errors.WithStack(err)
-		}
 		g.Go(func() (err error) {
-			defer readerParallelism.Release(1)
-
 			return r.processChunk(ctx, diffsCh, diff, chunk)
 		})
 	}
@@ -167,15 +161,17 @@ func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool,
 func NewReader(
 	config ReaderConfig,
 	table *Table,
+	speedLogger *ProgressLogger,
 	source *sql.DB,
 	sourceLimiter core.Limiter,
 	target *sql.DB,
 	targetLimiter core.Limiter,
 ) *Reader {
 	return &Reader{
-		config: config,
-		table:  table,
-		source: source,
+		config:      config,
+		table:       table,
+		source:      source,
+		speedLogger: speedLogger,
 		sourceRetry: RetryOptions{
 			Limiter:       sourceLimiter,
 			AcquireMetric: readLimiterDelay.WithLabelValues("source"),

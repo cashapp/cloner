@@ -8,13 +8,11 @@ import (
 	"time"
 
 	"github.com/dlmiddlecote/sqlstats"
+	"github.com/pkg/errors"
 	"github.com/platinummonkey/go-concurrency-limits/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
-
-	"github.com/pkg/errors"
 )
 
 type Checksum struct {
@@ -194,8 +192,10 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	}
 	logrus.Infof("starting to diff tables: %v", tablesToDo)
 
+	var estimatedRows int64
 	tablesTotalMetric.Add(float64(len(tables)))
 	for _, table := range tables {
+		estimatedRows += table.EstimatedRows
 		rowCountMetric.WithLabelValues(table.Name).Add(float64(table.EstimatedRows))
 	}
 
@@ -205,6 +205,8 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 		sourceLimiter = makeLimiter("source_reader_limiter")
 		targetLimiter = makeLimiter("target_reader_limiter")
 	}
+
+	readLogger := NewSpeedLogger("read", cmd.SpeedLoggingFrequency, uint64(estimatedRows))
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -225,22 +227,20 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 
 	g.Go(func() error {
 		g, ctx := errgroup.WithContext(ctx)
-		tableParallelism := semaphore.NewWeighted(cmd.TableParallelism)
+		g.SetLimit(cmd.TableParallelism)
 
 		for _, t := range tables {
 			table := t
-			err = tableParallelism.Acquire(ctx, 1)
 			if err != nil {
 				return errors.WithStack(err)
 			}
 			g.Go(func() error {
-				defer tableParallelism.Release(1)
-
 				var err error
 
 				reader := NewReader(
 					cmd.ReaderConfig,
 					table,
+					readLogger,
 					sourceReader,
 					sourceLimiter,
 					targetReader,

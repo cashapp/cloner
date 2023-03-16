@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
-
 	"github.com/pkg/errors"
+	"strings"
+	"unsafe"
 )
 
 // DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can
@@ -76,8 +76,16 @@ func (b *bufferStream) Close() error {
 	return nil
 }
 
+func (b *bufferStream) SizeBytes() (size uint64) {
+	size = 0
+	for _, row := range b.rows {
+		size += uint64(unsafe.Sizeof(row.Data))
+	}
+	return
+}
+
 // buffer buffers all of the rows into memory
-func buffer(stream RowStream) (RowStream, error) {
+func buffer(stream RowStream) (*bufferStream, error) {
 	rows, err := readAll(stream)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -207,9 +215,10 @@ func chunkWhere(chunk Chunk, extraWhereClause string) (string, []interface{}) {
 }
 
 // expandRowConstructorComparison expands a row constructor comparison to make sure we use indexes properly,
-//   see this link for more detail: https://dev.mysql.com/doc/refman/5.7/en/row-constructor-optimization.html
-//   more recent versions of mysql might handle this better but TiDB doesn't yet:
-//   https://github.com/pingcap/tidb/issues/28789
+//
+//	see this link for more detail: https://dev.mysql.com/doc/refman/5.7/en/row-constructor-optimization.html
+//	more recent versions of mysql might handle this better but TiDB doesn't yet:
+//	https://github.com/pingcap/tidb/issues/28789
 func expandRowConstructorComparison(left []string, operator string, right []interface{}) (string, []interface{}) {
 	if len(left) != len(right) {
 		panic("left hand should be same size as right hand")

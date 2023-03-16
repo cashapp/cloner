@@ -4,10 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"golang.org/x/sync/semaphore"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dustin/go-humanize"
 	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
 	"github.com/pkg/errors"
@@ -15,7 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/sync/semaphore"
 )
 
 var (
@@ -41,6 +45,13 @@ var (
 		prometheus.CounterOpts{
 			Name: "writes_succeeded",
 			Help: "How many writes (rows) have succeeded, partitioned by table and type (insert, update, delete).",
+		},
+		[]string{"table", "type"},
+	)
+	writesBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "writes_bytes",
+			Help: "How many writes (bytes) have succeeded, partitioned by table and type (insert, update, delete).",
 		},
 		[]string{"table", "type"},
 	)
@@ -86,9 +97,98 @@ func init() {
 	prometheus.MustRegister(writesRequested)
 	prometheus.MustRegister(writesRowsAffected)
 	prometheus.MustRegister(writesSucceeded)
+	prometheus.MustRegister(writesBytes)
 	prometheus.MustRegister(writesFailed)
 	prometheus.MustRegister(writeDuration)
 	prometheus.MustRegister(writeLimiterDelay)
+}
+
+type ProgressLogger struct {
+	name      string
+	frequency time.Duration
+	start     time.Time
+	lastLog   time.Time
+
+	mut sync.Mutex
+
+	bytes uint64
+	rows  uint64
+
+	totalRows     uint64
+	estimatedRows uint64
+}
+
+func NewSpeedLogger(name string, frequency time.Duration, estimatedRows uint64) *ProgressLogger {
+	now := time.Now()
+	return &ProgressLogger{
+		name:      name,
+		frequency: frequency,
+		lastLog:   now,
+		start:     now,
+		bytes:     0,
+		rows:      0,
+
+		totalRows:     0,
+		estimatedRows: estimatedRows,
+	}
+}
+
+func (l *ProgressLogger) Record(rows int, bytes uint64) {
+	atomic.AddUint64(&l.rows, uint64(rows))
+	atomic.AddUint64(&l.totalRows, uint64(rows))
+	atomic.AddUint64(&l.bytes, bytes)
+	l.maybeLog()
+}
+
+func (l *ProgressLogger) maybeLog() {
+	if l.rows == 0 {
+		// No point logging if we haven't actually done anything
+		return
+	}
+	l.mut.Lock()
+	defer l.mut.Unlock()
+
+	now := time.Now()
+	sinceLastLog := now.Sub(l.lastLog)
+	if sinceLastLog > l.frequency {
+		l.log()
+	}
+}
+
+func (l *ProgressLogger) log() {
+	now := time.Now()
+	sinceLastLog := now.Sub(l.lastLog)
+	bytesPerSecond := float64(l.bytes) / sinceLastLog.Seconds()
+	rowsPerSecond := float64(l.rows) / sinceLastLog.Seconds()
+	if l.estimatedRows == 0 {
+		log.Infof("%s throughput: %v/s, %v rows/s", l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond))
+	} else {
+		totalDuration := time.Now().Sub(l.start)
+		overallRowsPerSecond := float64(l.totalRows) / totalDuration.Seconds()
+		rowsRemaining := l.estimatedRows - l.totalRows
+		fractionRemaining := float64(rowsRemaining) / float64(l.estimatedRows)
+		percentDone := float64(100) * (1 - fractionRemaining)
+		timeRemaining := time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
+		log.Infof("%s throughput: %v/s %v rows/s, total rows: %d "+
+			"(estimated rows: %d, estimated done: %2.f%%, estimated time remaining: %v)",
+			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond),
+			l.totalRows, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
+	}
+	atomic.StoreUint64(&l.rows, 0)
+	atomic.StoreUint64(&l.bytes, 0)
+	l.lastLog = now
+}
+
+func (l *ProgressLogger) humanizeFloat(f float64) string {
+	if f < 10 {
+		return fmt.Sprintf("%.1f", f)
+	} else {
+		return fmt.Sprintf("%.0f", f)
+	}
+}
+
+func (l *ProgressLogger) humanizeDuration(d time.Duration) string {
+	return d.Round(time.Second).String()
 }
 
 func (w *Writer) scheduleWriteBatch(ctx context.Context, g *errgroup.Group, batch Batch) (err error) {
@@ -189,7 +289,9 @@ func isConstraintViolation(err error) bool {
 }
 
 // isWriteConflict are errors caused by a write-write conflict between two parallel transactions:
-//   https://docs.pingcap.com/tidb/stable/error-codes
+//
+//	https://docs.pingcap.com/tidb/stable/error-codes
+//
 //nolint:deadcode
 func isWriteConflict(err error) bool {
 	me := mysqlError(err)
@@ -259,6 +361,9 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 			defer timer.ObserveDuration()
 			defer func() {
 				if err == nil {
+					sizeBytes := batch.SizeBytes()
+					w.speedLogger.Record(len(batch.Rows), sizeBytes)
+					writesBytes.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(sizeBytes))
 					writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 				} else {
 					mySQLError := mysqlError(err)
@@ -504,14 +609,17 @@ type Writer struct {
 	db    *sql.DB
 	retry RetryOptions
 
+	speedLogger *ProgressLogger
+
 	writerParallelism *semaphore.Weighted
 }
 
-func NewWriter(config WriterConfig, table *Table, writer *sql.DB, limiter core.Limiter) *Writer {
+func NewWriter(config WriterConfig, table *Table, writer *sql.DB, speedLogger *ProgressLogger, limiter core.Limiter) *Writer {
 	return &Writer{
-		config: config,
-		table:  table,
-		db:     writer,
+		config:      config,
+		table:       table,
+		db:          writer,
+		speedLogger: speedLogger,
 		retry: RetryOptions{
 			Limiter:       limiter,
 			AcquireMetric: writeLimiterDelay,

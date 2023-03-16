@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"reflect"
-	"strconv"
-	"strings"
-	"time"
-
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type MutationType byte
@@ -83,6 +82,13 @@ var (
 		},
 		[]string{"table"},
 	)
+	readsBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "reads_bytes",
+			Help: "How many bytes we have read from the source, partitioned by table.",
+		},
+		[]string{"table"},
+	)
 	readDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "read_duration",
@@ -121,6 +127,7 @@ func init() {
 	prometheus.MustRegister(readsProcessed)
 	prometheus.MustRegister(chunksEnqueued)
 	prometheus.MustRegister(chunksProcessed)
+	prometheus.MustRegister(readsBytes)
 	prometheus.MustRegister(rowsProcessed)
 	prometheus.MustRegister(chunksWithDiffs)
 	prometheus.MustRegister(diffCount)
@@ -380,14 +387,16 @@ func coerceRawArray(vals []interface{}) ([][]byte, error) {
 
 // readChunk reads a chunk without diffing producing only insert diffs
 func (r *Reader) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
+	var sizeBytes uint64
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
+		r.speedLogger.Record(chunk.Size, sizeBytes)
 		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
 
-	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, sizeBytes, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -449,10 +458,13 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 }
 
 func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
+	var sizeBytes uint64
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
 		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
+		r.speedLogger.Record(chunk.Size, sizeBytes)
+		readsBytes.WithLabelValues(chunk.Table.Name).Add(float64(sizeBytes))
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
 
@@ -472,11 +484,11 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 		}
 	}
 
-	sourceStream, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, sizeBytes, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	targetStream, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
+	targetStream, _, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -526,23 +538,24 @@ func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader 
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (RowStream, error) {
+func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (RowStream, uint64, error) {
 	var result RowStream
+	var sizeBytes uint64
 
 	err := Retry(ctx, retry, func(ctx context.Context) error {
 		var err error
-		result, err = readChunk(ctx, source, from, chunk)
+		result, sizeBytes, err = readChunk(ctx, source, from, chunk)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 		return nil
 	})
 
-	return result, err
+	return result, sizeBytes, err
 }
 
 // readChunk reads and buffers a chunk without retries
-func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (RowStream, error) {
+func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (RowStream, uint64, error) {
 	timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
 	defer timer.ObserveDuration()
 
@@ -558,14 +571,14 @@ func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (
 	}
 	stream, err := StreamChunk(ctx, source, chunk, hint, extraWhereClause)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+		return nil, 0, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
 			chunk.Start, chunk.End, chunk.Table.Name, from)
 	}
 	defer stream.Close()
 	result, err := buffer(stream)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
+		return nil, 0, errors.Wrapf(err, "failed to stream chunk [%d-%d] of %s from %s",
 			chunk.Start, chunk.End, chunk.Table.Name, from)
 	}
-	return result, err
+	return result, result.SizeBytes(), err
 }

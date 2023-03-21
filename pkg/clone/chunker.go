@@ -5,14 +5,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/cenkalti/backoff/v4"
-	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 // Chunk is an chunk of rows closed to the left [start,end)
@@ -145,20 +146,20 @@ func genericCompare(a interface{}, b interface{}) int {
 	}
 }
 
-type PeekingIdStreamer interface {
+type PeekingIDStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) ([]interface{}, bool, error)
 	// Peek returns the id ahead of the current, Next above has to be called first
 	Peek() []interface{}
 }
 
-type peekingIdStreamer struct {
-	wrapped   IdStreamer
+type peekingIDStreamer struct {
+	wrapped   IDStreamer
 	peeked    []interface{}
 	hasPeeked bool
 }
 
-func (p *peekingIdStreamer) Next(ctx context.Context) ([]interface{}, bool, error) {
+func (p *peekingIDStreamer) Next(ctx context.Context) ([]interface{}, bool, error) {
 	var err error
 	if !p.hasPeeked {
 		// first time round load the first entry
@@ -187,11 +188,11 @@ func (p *peekingIdStreamer) Next(ctx context.Context) ([]interface{}, bool, erro
 	return next, hasNext, nil
 }
 
-func (p *peekingIdStreamer) Peek() []interface{} {
+func (p *peekingIDStreamer) Peek() []interface{} {
 	return p.peeked
 }
 
-type IdStreamer interface {
+type IDStreamer interface {
 	Next(context.Context) ([]interface{}, error)
 }
 
@@ -299,8 +300,8 @@ func (p *pagingStreamer) loadPage(ctx context.Context) ([][]interface{}, error) 
 	return result, err
 }
 
-func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) PeekingIdStreamer {
-	return &peekingIdStreamer{
+func streamIds(conn DBReader, table *Table, pageSize int, retry RetryOptions) PeekingIDStreamer {
+	return &peekingIDStreamer{
 		wrapped: newPagingStreamer(conn, table, pageSize, retry),
 	}
 }
@@ -338,14 +339,14 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 
 	var err error
 	currentChunkSize := 0
-	var startId []interface{}
+	var startID []interface{}
 	seq := int64(0)
 	var id []interface{}
 	hasNext := true
 	for hasNext {
 		id, hasNext, err = ids.Next(ctx)
 		if errors.Is(err, io.EOF) {
-			if startId == nil {
+			if startID == nil {
 				// The table is empty.
 				// Emit a special chunk covering entire keyspace.
 				chunks <- Chunk{
@@ -365,15 +366,15 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		}
 		currentChunkSize++
 
-		if startId == nil {
-			startId = id
+		if startID == nil {
+			startID = id
 			// This is the minimum source ID.
 			// Emit a special chunk covering items with keys smaller than minimum ID.
 			chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
 				Start: nil,
-				End:   startId,
+				End:   startID,
 				First: true,
 				Size:  0,
 			}
@@ -381,16 +382,16 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 
 		if currentChunkSize == chunkSize {
 			chunksEnqueued.WithLabelValues(table.Name).Inc()
-			nextId := ids.Peek()
+			nextID := ids.Peek()
 			if !hasNext {
-				nextId = nextChunkPosition(id)
+				nextID = nextChunkPosition(id)
 			}
 			select {
 			case chunks <- Chunk{
 				Table: table,
 				Seq:   seq,
-				Start: startId,
-				End:   nextId,
+				Start: startID,
+				End:   nextID,
 				Size:  currentChunkSize,
 			}:
 			case <-ctx.Done():
@@ -398,7 +399,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 			}
 			seq++
 			// Next id should be the next start id
-			startId = nextId
+			startID = nextID
 			// We have no rows in the next chunk yet
 			currentChunkSize = 0
 		}
@@ -410,7 +411,7 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 		case chunks <- Chunk{
 			Table: table,
 			Seq:   seq,
-			Start: startId,
+			Start: startID,
 			// Make sure the End position is _after_ the final row by "adding one" to it
 			End:  nextChunkPosition(id),
 			Size: currentChunkSize,

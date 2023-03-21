@@ -709,7 +709,7 @@ func (s *Snapshotter) handleSnapshotRequest(ctx context.Context, transaction Tra
 			return transaction, nil
 		}
 		err = s.start(ctx)
-		if err != nil {
+		if err != nil { //nolint:staticcheck
 			// This means a snapshot is already running, we do a poll on the table after the snapshot is done instead
 		}
 	}
@@ -758,7 +758,7 @@ func (s *Snapshotter) checkSnapshotStartRequested(ctx context.Context) error {
 		err = s.start(ctx)
 		if err != nil {
 			// This means a snapshot is already running, we do a poll on the table after the snapshot is done instead
-			return nil
+			return nil //nolint:nilerr
 		}
 	}
 	return nil

@@ -105,7 +105,7 @@ type Replicate struct {
 	WatermarkTable       string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
 	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
 	SnapshotRequestTable string        `help:"Name of the table the user can requests snapshots from" optional:"" default:"_cloner_snapshot"`
-	HeartbeatFrequency   time.Duration `help:"How often to to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
+	HeartbeatFrequency   time.Duration `help:"How often to write to the heartbeat table, this will be the resolution of the real replication lag metric, set to 0 if you want to disable heartbeats" default:"30s"`
 	LogReplicationLag    bool          `help:"Log the replication lag after each heartbeat" default:"true"`
 	CreateTables         bool          `help:"Create the required tables if they do not exist" default:"true"`
 	ChunkBufferSize      int           `help:"Size of internal queues" default:"100"`

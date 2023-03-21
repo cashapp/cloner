@@ -2,9 +2,10 @@ package clone
 
 import (
 	"context"
-	"golang.org/x/sync/semaphore"
 	_ "net/http/pprof"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"

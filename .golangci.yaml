@@ -50,6 +50,14 @@ linters:
     - thelper
     - godox
     - goconst
+    - rowserrcheck
+    - wastedassign
+    - stylecheck
+    - nonamedreturns
+    - exhaustruct
+    - execinquery
+    - unused
+    - unparam
 
 linters-settings:
   govet:

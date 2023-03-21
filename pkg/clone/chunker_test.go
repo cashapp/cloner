@@ -259,6 +259,7 @@ func TestChunker(t *testing.T) {
 				test.table,
 				strings.Join(keyColumns, ",")))
 			require.NoError(t, err)
+			defer rows.Close()
 			var idsInDB [][]interface{}
 			for rows.Next() {
 				row := make([]interface{}, len(keyColumns))
@@ -290,9 +291,9 @@ func transactionRows(count int, transactionsPerCustomer int) [][]interface{} {
 	result := make([][]interface{}, count)
 	for i := range result {
 		ordinal := i + 1
-		customerId := ordinal / transactionsPerCustomer
+		customerID := ordinal / transactionsPerCustomer
 		result[i] = []interface{}{
-			customerId, ordinal, fmt.Sprintf("Description #%d", ordinal), ordinal * 1000,
+			customerID, ordinal, fmt.Sprintf("Description #%d", ordinal), ordinal * 1000,
 		}
 	}
 	return result
@@ -316,6 +317,7 @@ func insertRows(ctx context.Context, db *sql.DB, table string, columns []string,
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		defer stmt.Close()
 		for _, row := range rows {
 			_, err := stmt.ExecContext(ctx, row...)
 			if err != nil {

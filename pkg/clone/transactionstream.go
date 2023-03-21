@@ -160,6 +160,7 @@ func (s *TransactionStream) getTableSchema(event *replication.TableMapEvent) *Ta
 	return tableSchema
 }
 
+//nolint:nosnakecase
 func toMutationType(eventType replication.EventType) MutationType {
 	switch eventType {
 	case replication.DELETE_ROWS_EVENTv0:
@@ -236,7 +237,7 @@ func (s *TransactionStream) Init(ctx context.Context) error {
 		s.tables = append(s.tables, snapshotRequestTable)
 	}
 
-	return nil
+	return nil //nolint:nilerr
 }
 
 func (s *TransactionStream) readStartingPosition(ctx context.Context, flavor string) (Position, error) {

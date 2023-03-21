@@ -9,8 +9,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -235,6 +235,7 @@ func (c DBConfig) String() string {
 	}
 }
 
+//nolint:nosnakecase
 func parseTarget(targetString string) (*query.Target, error) {
 	// Default tablet type is master.
 	target := &query.Target{
@@ -400,7 +401,7 @@ func (c DBConfig) BinlogSyncerConfig(ctx context.Context, serverID uint32) (repl
 
 func (c DBConfig) GetPassword(ctx context.Context) (string, error) {
 	if c.PasswordFile != "" {
-		b, err := ioutil.ReadFile(c.PasswordFile)
+		b, err := os.ReadFile(c.PasswordFile)
 		if err != nil {
 			return "", errors.WithStack(err)
 		}
@@ -427,7 +428,7 @@ func (c DBConfig) tlsConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	caCert, err := ioutil.ReadFile(c.CA)
+	caCert, err := os.ReadFile(c.CA)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -491,7 +492,7 @@ type miskDataSourceClustersConfig struct {
 }
 
 func parseMiskDatasource(path string) (*miskDataSourceClustersConfig, error) {
-	data, err := ioutil.ReadFile(path) // nolint: gosec
+	data, err := os.ReadFile(path) //nolint: gosec
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not open database configuration file %q", path)
 	}
@@ -534,7 +535,7 @@ func miskTLSConfig(c miskDataSourceConfig) (*tls.Config, error) {
 		if !strings.HasPrefix(c.TrustCertificateKeyStoreURL, "file://") {
 			return nil, errors.Errorf("trust_certificate_key_store_url must be a file:// but is %q", c.TrustCertificateKeyStoreURL)
 		}
-		data, err := ioutil.ReadFile(c.TrustCertificateKeyStoreURL[7:])
+		data, err := os.ReadFile(c.TrustCertificateKeyStoreURL[7:])
 		if err != nil {
 			return nil, errors.Wrapf(err, "couldn't read trust store from %q", c.TrustCertificateKeyStoreURL)
 		}
@@ -562,7 +563,7 @@ func miskTLSConfig(c miskDataSourceConfig) (*tls.Config, error) {
 			if !strings.HasPrefix(c.ClientCertificateKeyStoreURL, "file://") {
 				return nil, errors.Errorf("client_certificate_key_store_url must be a file:// but is %q", c.ClientCertificateKeyStoreURL)
 			}
-			data, err := ioutil.ReadFile(c.ClientCertificateKeyStoreURL[7:])
+			data, err := os.ReadFile(c.ClientCertificateKeyStoreURL[7:])
 			if err != nil {
 				return nil, errors.Wrapf(err, "couldn't read key store from %q", c.ClientCertificateKeyStoreURL)
 			}

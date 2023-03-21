@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"golang.org/x/sync/semaphore"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dustin/go-humanize"
@@ -163,7 +164,7 @@ func (l *ProgressLogger) log() {
 	if l.estimatedRows == 0 {
 		log.Infof("%s throughput: %v/s, %v rows/s", l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond))
 	} else {
-		totalDuration := time.Now().Sub(l.start)
+		totalDuration := time.Since(l.start)
 		overallRowsPerSecond := float64(l.totalRows) / totalDuration.Seconds()
 		rowsRemaining := l.estimatedRows - l.totalRows
 		fractionRemaining := float64(rowsRemaining) / float64(l.estimatedRows)

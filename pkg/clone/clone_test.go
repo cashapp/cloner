@@ -30,7 +30,7 @@ func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error 
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			customerId, err := result.LastInsertId()
+			customerID, err := result.LastInsertId()
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -39,7 +39,7 @@ func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error 
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
 				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
-			`, customerId)
+			`, customerID)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -115,6 +115,7 @@ func countRowsShardFilter(target DBConfig, tableName string, shard string) (int,
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
+	defer rows.Close()
 	var rowCount int
 	for rows.Next() {
 		var id int64

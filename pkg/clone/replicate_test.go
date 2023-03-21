@@ -189,14 +189,12 @@ func doStartReplication(ctx context.Context, task string, g *errgroup.Group, sou
 
 	// Run replication in separate thread
 	g.Go(func() error {
-		for {
-			err := replicator.run(ctx)
-			if isCancelledError(err) {
-				return nil
-			}
-			logrus.WithError(err).Errorf("replication failed, restarting: %+v", err)
-			return errors.WithStack(err)
+		err := replicator.run(ctx)
+		if isCancelledError(err) {
+			return nil
 		}
+		logrus.WithError(err).Errorf("replication failed, restarting: %+v", err)
+		return errors.WithStack(err)
 	})
 	return nil
 }
@@ -521,9 +519,9 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 			return errors.WithStack(err)
 		}
 
-		var randomCustomerId int64
+		var randomCustomerID int64
 		row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-		err = row.Scan(&randomCustomerId)
+		err = row.Scan(&randomCustomerID)
 		if err != nil {
 			return errors.WithStack(err)
 		}
@@ -535,20 +533,20 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		insterted, err := tx.ExecContext(ctx, `
 				INSERT INTO transactions (customer_id, amount_cents, description) 
 				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
-			`, randomCustomerId)
+			`, randomCustomerID)
 		if err != nil {
 			return errors.WithStack(err)
 		}
 
 		if doMultipleUpdates {
-			transactionId, err := insterted.LastInsertId()
+			transactionID, err := insterted.LastInsertId()
 			if err != nil {
 				return errors.WithStack(err)
 			}
 			// and update it immediately to exercise insert and update in the same transaction
 			_, err = tx.ExecContext(ctx, `
 				UPDATE transactions SET description = CONCAT('Description ', LEFT(MD5(RAND()), 8)) WHERE id = ?				
-			`, transactionId)
+			`, transactionID)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -557,9 +555,9 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 		// Do some random updates
 		for i := 0; i < 2; i++ {
 			// Randomly update or delete rows
-			var randomCustomerId int64
+			var randomCustomerID int64
 			row := tx.QueryRowContext(ctx, `SELECT id FROM customers ORDER BY rand() LIMIT 1`)
-			err = row.Scan(&randomCustomerId)
+			err = row.Scan(&randomCustomerID)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -568,7 +566,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 			doDelete := rand.Intn(25) == 0
 
 			if doDelete {
-				_, err = tx.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerId)
+				_, err = tx.ExecContext(ctx, `DELETE FROM customers WHERE id = ?`, randomCustomerID)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -577,7 +575,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 				_, err = tx.ExecContext(ctx, ` 
 					UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 					WHERE id = ?
-				`, randomCustomerId)
+				`, randomCustomerID)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -585,7 +583,7 @@ func write(ctx context.Context, db *sql.DB) (err error) {
 					_, err = tx.ExecContext(ctx, ` 
 						UPDATE customers SET name = CONCAT('Updated customer ', LEFT(MD5(RAND()), 8)) 
 						WHERE id = ?
-					`, randomCustomerId)
+					`, randomCustomerID)
 					if err != nil {
 						return errors.WithStack(err)
 					}

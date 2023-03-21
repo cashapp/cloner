@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/pkg/errors"
 	"strings"
 	"unsafe"
+
+	"github.com/pkg/errors"
 )
 
 // DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can

@@ -18,19 +18,23 @@ func (cmd *Ping) Run() error {
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancelFunc()
 
-	log.Infof("pinging source")
-	err := cmd.pingDatabase(ctx, cmd.Source)
-	if err != nil {
-		return errors.WithStack(err)
+	if cmd.Source.Host != "" || cmd.Source.MiskDatasource != "" {
+		log.Infof("pinging source")
+		err := cmd.pingDatabase(ctx, cmd.Source)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		log.Infof("success")
 	}
-	log.Infof("success")
 
-	log.Infof("pinging target")
-	err = cmd.pingDatabase(ctx, cmd.Target)
-	if err != nil {
-		return errors.WithStack(err)
+	if cmd.Target.Host != "" || cmd.Target.MiskDatasource != "" {
+		log.Infof("pinging target")
+		err := cmd.pingDatabase(ctx, cmd.Target)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		log.Infof("success")
 	}
-	log.Infof("success")
 
 	return nil
 }

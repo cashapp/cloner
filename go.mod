@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/BurntSushi/toml v1.2.1
-	github.com/alecthomas/kong v0.7.0
+	github.com/alecthomas/kong v0.7.1
 	github.com/cenkalti/backoff/v4 v4.1.3
 	github.com/deckarep/golang-set/v2 v2.3.0
 	github.com/dlmiddlecote/sqlstats v1.0.2

@@ -2,4 +2,4 @@
 
 set -euxo pipefail
 
-golangci-lint run --deadline=5m
+golangci-lint run --timeout=5m

@@ -171,9 +171,9 @@ func (l *ProgressLogger) log() {
 		percentDone := float64(100) * (1 - fractionRemaining)
 		timeRemaining := time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
 		log.Infof("%s throughput: %v/s %v rows/s, total rows: %d "+
-			"(estimated rows: %d, estimated done: %2.f%%, estimated time remaining: %v)",
+			"(estimated rows: %d, estimated done: %d%%, estimated time remaining: %v)",
 			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond),
-			l.totalRows, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
+			l.totalRows, l.estimatedRows, int64(percentDone), l.humanizeDuration(timeRemaining))
 	}
 	atomic.StoreUint64(&l.rows, 0)
 	atomic.StoreUint64(&l.bytes, 0)

@@ -36,7 +36,7 @@ jobs:
         run: ./bin/hermit env -r >> $GITHUB_ENV
 
       - name: golangci-lint
-        run: golangci-lint run
+        run: script/ci-lint
 
   push-image:
     needs: build-and-test

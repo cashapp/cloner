@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"os"
@@ -175,7 +176,12 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 		return nil, errors.WithStack(err)
 	}
 	if tlsConfig != nil {
-		tlsConfigName := fmt.Sprintf("cloner_%d", time.Now().UnixNano())
+		h := fnv.New32a()
+		_, err := h.Write([]byte(fmt.Sprintf("%+v", c)))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		tlsConfigName := fmt.Sprintf("cloner_%d", h.Sum32())
 		err = mysql.RegisterTLSConfig(tlsConfigName, tlsConfig)
 		if err != nil {
 			return nil, errors.WithStack(err)

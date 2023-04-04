@@ -60,6 +60,7 @@ func NewTransactionWriter(config Replicate) (*TransactionWriter, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	target.SetConnMaxLifetime(time.Minute)
 	w.target = target
 	w.targetCollector = sqlstats.NewStatsCollector("target", target)
 

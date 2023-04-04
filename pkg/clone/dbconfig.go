@@ -45,6 +45,7 @@ type DBConfig struct {
 	Password           string         `help:"Password" optional:""`
 	PasswordFile       string         `help:"File which content will be used for a password" optional:""`
 	PasswordCommand    string         `help:"Command to run to retrieve password" optional:""`
+	PasswordExpiry     time.Duration  `help:"How long until password is refreshed (0 to never refresh)" default:"0"`
 	Database           string         `help:"Database or Vitess shard with format <keyspace>/<shard>" optional:""`
 	MiskDatasource     string         `help:"Misk formatted config yaml file" optional:"" path:""`
 	MiskReader         bool           `help:"Use the reader endpoint from Misk (defaults to writer)" optional:"" default:"false"`
@@ -129,10 +130,13 @@ func (c DBConfig) openVitess(streaming bool) (*sql.DB, error) {
 }
 
 type refreshPasswordConnector struct {
-	m            sync.Mutex
-	driver       driver.Driver
-	config       *mysql.Config
-	loadPassword func(context.Context) (string, error)
+	m                     sync.Mutex
+	driver                driver.Driver
+	config                *mysql.Config
+	lastCached            time.Time
+	loadPassword          func(context.Context) (string, error)
+	passwordCacheDuration time.Duration
+	connector             driver.Connector
 }
 
 func (c *refreshPasswordConnector) Driver() driver.Driver {
@@ -141,18 +145,21 @@ func (c *refreshPasswordConnector) Driver() driver.Driver {
 
 func (c *refreshPasswordConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	c.m.Lock()
-	newPassword, err := c.loadPassword(ctx)
-	if err != nil {
-		c.m.Unlock()
-		return nil, errors.WithStack(err)
+	defer c.m.Unlock()
+	if c.connector == nil || (c.passwordCacheDuration != 0 && time.Since(c.lastCached) > c.passwordCacheDuration) {
+		newPassword, err := c.loadPassword(ctx)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		c.config.Passwd = newPassword
+		c.lastCached = time.Now()
+		cc, err := mysql.NewConnector(c.config)
+		if err != nil {
+			return nil, err
+		}
+		c.connector = cc
 	}
-	c.config.Passwd = newPassword
-	cc, err := mysql.NewConnector(c.config)
-	c.m.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return cc.Connect(ctx) // Safe for concurrent use. Cache cc if performance is important.
+	return c.connector.Connect(ctx)
 }
 
 func (c DBConfig) openMySQL() (*sql.DB, error) {
@@ -195,9 +202,10 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 	connector, err := mysql.NewConnector(cfg)
 	if c.PasswordFile != "" || c.PasswordCommand != "" {
 		connector = &refreshPasswordConnector{
-			m:      sync.Mutex{},
-			driver: connector.Driver(),
-			config: cfg,
+			m:                     sync.Mutex{},
+			driver:                connector.Driver(),
+			config:                cfg,
+			passwordCacheDuration: c.PasswordExpiry,
 			loadPassword: func(ctx context.Context) (string, error) {
 				return c.GetPassword(ctx)
 			},

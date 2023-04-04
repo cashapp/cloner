@@ -143,6 +143,7 @@ func (c *refreshPasswordConnector) Connect(ctx context.Context) (driver.Conn, er
 	c.m.Lock()
 	newPassword, err := c.loadPassword(ctx)
 	if err != nil {
+		c.m.Unlock()
 		return nil, errors.WithStack(err)
 	}
 	c.config.Passwd = newPassword
@@ -405,7 +406,7 @@ func (c DBConfig) BinlogSyncerConfig(ctx context.Context, serverID uint32) (repl
 	}
 }
 
-func (c DBConfig) GetPassword(ctx context.Context) (string, error) {
+func (c DBConfig) GetPassword(ctx context.Context) (password string, err error) {
 	if c.PasswordFile != "" {
 		b, err := os.ReadFile(c.PasswordFile)
 		if err != nil {
@@ -414,17 +415,23 @@ func (c DBConfig) GetPassword(ctx context.Context) (string, error) {
 		return string(b), nil
 	}
 	if c.PasswordCommand != "" {
-		b, err := exec.CommandContext(ctx, "/bin/sh", "-c", c.PasswordCommand).Output()
-		if err != nil {
-			exitErr, ok := err.(*exec.ExitError)
-			if ok {
-				logrus.WithError(err).Errorf("command to get password failed:\n%s\n%s", c.PasswordCommand, string(exitErr.Stderr))
+		err = Retry(ctx, RetryOptions{
+			MaxRetries: 10,
+			Timeout:    time.Second,
+		}, func(ctx context.Context) error {
+			b, err := exec.CommandContext(ctx, "/bin/sh", "-c", c.PasswordCommand).Output()
+			if err != nil {
+				exitErr, ok := err.(*exec.ExitError)
+				if ok {
+					logrus.WithError(err).Errorf("command to get password failed:\n%s\n%s", c.PasswordCommand, string(exitErr.Stderr))
+				}
+				return errors.WithStack(err)
 			}
-			return "", errors.WithStack(err)
-		}
-		password := string(b)
-		password = strings.TrimSuffix(password, "\n")
-		return password, nil
+			password = string(b)
+			password = strings.TrimSuffix(password, "\n")
+			return nil
+		})
+		return password, errors.WithStack(err)
 	}
 	return c.Password, nil
 }

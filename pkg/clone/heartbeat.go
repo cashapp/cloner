@@ -35,16 +35,12 @@ func NewHeartbeat(config Replicate) (*Heartbeat, error) {
 	r := Heartbeat{
 		config: config,
 		sourceRetry: RetryOptions{
-			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-			AcquireMetric: readLimiterDelay.WithLabelValues("source"),
-			MaxRetries:    config.ReadRetries,
-			Timeout:       config.ReadTimeout,
+			MaxRetries: config.ReadRetries,
+			Timeout:    config.ReadTimeout,
 		},
 		targetRetry: RetryOptions{
-			Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-			AcquireMetric: readLimiterDelay.WithLabelValues("target"),
-			MaxRetries:    config.ReadRetries,
-			Timeout:       config.ReadTimeout,
+			MaxRetries: config.ReadRetries,
+			Timeout:    config.ReadTimeout,
 		},
 	}
 

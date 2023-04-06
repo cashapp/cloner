@@ -1,7 +1,11 @@
 package clone
 
 import (
+	"context"
 	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/stretchr/testify/require"
@@ -665,4 +669,67 @@ func TestTransactionSetAppend(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIgnoredColumnsReplaceStatement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	table := &Table{
+		Name: "mytable",
+		MysqlTable: &mysqlschema.Table{
+			Name: "mytable",
+			Columns: []mysqlschema.TableColumn{
+				{Name: "mycolumn1"},
+				{Name: "mycolumn2"},
+				{Name: "mycolumn3"},
+				{Name: "mycolumn4"},
+			},
+		},
+	}
+	mutation := Mutation{
+		Type:  Update,
+		Table: table,
+		Rows: [][]interface{}{
+			{"value11", "value12", "value13", "value14"},
+			{"value21", "value22", "value23", "value24"},
+		},
+		Chunk: Chunk{},
+	}
+
+	// First test without ignoring columns
+	config := ReaderConfig{}
+	table.IgnoredColumnsBitmap = ignoredColumnsBitmap(config, table.MysqlTable)
+	writer := NewMockDBWriter(ctrl)
+	writer.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Do(func(ctx context.Context, query string, args ...string) {
+		assert.Equal(t,
+			"REPLACE INTO mytable (`mycolumn1`,`mycolumn2`,`mycolumn3`,`mycolumn4`) VALUES (?,?,?,?),(?,?,?,?)",
+			query)
+		assert.Equal(t, args, []string{
+			"value11", "value12", "value13", "value14",
+			"value21", "value22", "value23", "value24",
+		})
+	})
+	err := mutation.replace(context.Background(), writer)
+	assert.NoError(t, err)
+
+	// Then test with ignored columns
+	config = ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			IgnoreColumns: []string{"mytable.mycolumn2", "mytable.mycolumn4"},
+		},
+	}
+	table.IgnoredColumnsBitmap = ignoredColumnsBitmap(config, table.MysqlTable)
+	writer = NewMockDBWriter(ctrl)
+	writer.EXPECT().ExecContext(gomock.Any(), gomock.Any(), gomock.Any()).Do(func(ctx context.Context, query string, args ...string) {
+		assert.Equal(t,
+			"REPLACE INTO mytable (`mycolumn1`,`mycolumn3`) VALUES (?,?),(?,?)",
+			query)
+		assert.Equal(t, args, []string{
+			"value11", "value13",
+			"value21", "value23",
+		})
+	})
+	err = mutation.replace(context.Background(), writer)
+	assert.NoError(t, err)
 }

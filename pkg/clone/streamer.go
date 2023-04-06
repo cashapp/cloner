@@ -10,12 +10,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// DBReader is an interface that can be implemented by sql.Conn or sql.Tx or sql.DB so that we can
-// easily change synchronization method
-type DBReader interface {
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-}
-
 type Row struct {
 	Table *Table
 	Data  []interface{}

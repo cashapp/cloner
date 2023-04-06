@@ -24,11 +24,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type DBWriter interface {
-	DBReader
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-}
-
 // TransactionWriter receives transactions and requests to snapshot and writes transactions and strongly consistent chunk snapshots
 type TransactionWriter struct {
 	config          Replicate
@@ -591,14 +586,17 @@ func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 	var questionMarks strings.Builder
 	var columnListBuilder strings.Builder
 	for i, column := range tableSchema.Columns {
+		if m.Table.IgnoredColumnsBitmap[i] {
+			continue
+		}
+		if i != 0 {
+			columnListBuilder.WriteString(",")
+			questionMarks.WriteString(",")
+		}
 		questionMarks.WriteString("?")
 		columnListBuilder.WriteString("`")
 		columnListBuilder.WriteString(column.Name)
 		columnListBuilder.WriteString("`")
-		if i != len(tableSchema.Columns)-1 {
-			columnListBuilder.WriteString(",")
-			questionMarks.WriteString(",")
-		}
 	}
 	values := fmt.Sprintf("(%s)", questionMarks.String())
 	columnList := columnListBuilder.String()
@@ -607,7 +605,11 @@ func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 	valueArgs := make([]interface{}, 0, len(m.Rows)*len(tableSchema.Columns))
 	for _, row := range m.Rows {
 		valueStrings = append(valueStrings, values)
-		valueArgs = append(valueArgs, row...)
+		for i, val := range row {
+			if !m.Table.IgnoredColumnsBitmap[i] {
+				valueArgs = append(valueArgs, val)
+			}
+		}
 	}
 	// TODO build the entire statement with a strings.Builder like in delete below. For speed.
 	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",

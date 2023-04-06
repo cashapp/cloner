@@ -10,6 +10,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-mysql-org/go-mysql v1.6.0
 	github.com/go-sql-driver/mysql v1.6.0
+	github.com/golang/mock v1.5.0
 	github.com/mightyguava/autotx v0.1.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
 	github.com/ory/dockertest/v3 v3.9.1

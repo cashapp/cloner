@@ -44,6 +44,10 @@ func TestLoadTablesShardedVitess(t *testing.T) {
 				"crc32(ifnull(`id`, 0))",
 				"crc32(ifnull(`name`, 0))",
 			},
+			IgnoredColumnsBitmap: []bool{
+				false,
+				false,
+			},
 			ColumnList: "`id`,`name`",
 		},
 	}, tables)
@@ -68,6 +72,7 @@ func TestLoadTablesUnshardedVitess(t *testing.T) {
 
 	tables, err := LoadTables(ctx, config)
 	assert.NoError(t, err)
+	tables[0].EstimatedRows = 0
 	assert.Equal(t, []*Table{
 		{
 			Name:             "customers",
@@ -81,6 +86,10 @@ func TestLoadTablesUnshardedVitess(t *testing.T) {
 				"crc32(ifnull(`name`, 0))",
 			},
 			ColumnList: "`id`,`name`",
+			IgnoredColumnsBitmap: []bool{
+				false,
+				false,
+			},
 			MysqlTable: &schema.Table{
 				Schema: "customer",
 				Name:   "customers",
@@ -145,6 +154,10 @@ func TestLoadTablesTiDB(t *testing.T) {
 				"crc32(ifnull(`name`, 0))",
 			},
 			ColumnList: "`id`,`name`",
+			IgnoredColumnsBitmap: []bool{
+				false,
+				false,
+			},
 			MysqlTable: &schema.Table{
 				Schema: "mydatabase",
 				Name:   "customers",

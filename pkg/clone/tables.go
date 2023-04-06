@@ -31,8 +31,9 @@ type Table struct {
 	ColumnsQuoted []string
 	CRC32Columns  []string
 	// ColumnList is a comma separated list of quoted strings
-	ColumnList    string
-	EstimatedRows int64
+	ColumnList           string
+	EstimatedRows        int64
+	IgnoredColumnsBitmap []bool
 
 	// MysqlTable is the go-mysql schema, we should probably start using this one as much as possible
 	MysqlTable *mysqlschema.Table
@@ -204,6 +205,21 @@ func contains(strings []string, str string) bool {
 	return false
 }
 
+func ignoredColumnsBitmap(config ReaderConfig, table *mysqlschema.Table) []bool {
+	bitmap := make([]bool, len(table.Columns))
+	tableConfig, hasConfig := config.Config.Tables[table.Name]
+	for i, column := range table.Columns {
+		if contains(config.IgnoreColumns, table.Name+"."+column.Name) {
+			bitmap[i] = true
+		} else if hasConfig && contains(tableConfig.IgnoreColumns, column.Name) {
+			bitmap[i] = true
+		} else {
+			bitmap[i] = false
+		}
+	}
+	return bitmap
+}
+
 func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSourceType, conn *sql.DB, schema, tableName string, tableConfig TableConfig) (*Table, error) {
 	var err error
 	var rows *sql.Rows
@@ -282,14 +298,15 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 	}
 
 	table := &Table{
-		Name:          tableName,
-		Columns:       columnNames,
-		ColumnsQuoted: columnNamesQuoted,
-		CRC32Columns:  columnNamesCRC32,
-		ColumnList:    strings.Join(columnNamesQuoted, ","),
-		EstimatedRows: estimatedRows,
-		Config:        tableConfig,
-		MysqlTable:    mysqlTable,
+		Name:                 tableName,
+		Columns:              columnNames,
+		ColumnsQuoted:        columnNamesQuoted,
+		CRC32Columns:         columnNamesCRC32,
+		ColumnList:           strings.Join(columnNamesQuoted, ","),
+		IgnoredColumnsBitmap: ignoredColumnsBitmap(config, mysqlTable),
+		EstimatedRows:        estimatedRows,
+		Config:               tableConfig,
+		MysqlTable:           mysqlTable,
 	}
 
 	if len(mysqlTable.PKColumns) >= 1 {

@@ -15,6 +15,7 @@ type SourceTargetConfig struct {
 
 	IgnoreTables       []string `help:"Tables to ignore" optional:"true"`
 	IgnoreTablePattern string   `help:"Regexp pattern of tables to ignore" optional:"true" default:"_cloner_.*"`
+	IgnoreColumns      []string `help:"Comma separated list of columns to ignore in the format tablename.columnname"`
 }
 
 type TableConfig struct {

@@ -253,6 +253,9 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		if contains(columnNames, columnName) {
 			continue
 		}
+		if contains(config.IgnoreColumns, tableName+"."+columnName) {
+			continue
+		}
 		if contains(tableConfig.IgnoreColumns, columnName) {
 			continue
 		}

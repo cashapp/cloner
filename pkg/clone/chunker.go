@@ -1,7 +1,6 @@
 package clone
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -54,96 +53,6 @@ func (c *Chunk) ContainsKeys(keys []interface{}) bool {
 		result = result && genericCompareKeys(keys, c.End) < 0
 	}
 	return result
-}
-
-func genericCompareKeys(a []interface{}, b []interface{}) int {
-	for i := range a {
-		compare := genericCompare(a[i], b[i])
-		if compare != 0 {
-			return compare
-		}
-	}
-	return 0
-}
-
-func genericCompare(a interface{}, b interface{}) int {
-	// Different database drivers interpret SQL types differently (it seems)
-	aType := reflect.TypeOf(a)
-	bType := reflect.TypeOf(b)
-
-	// If they do NOT have same type, we coerce the target type to the source type and then compare
-	// We only support the combinations we've encountered in the wild here
-	switch a := a.(type) {
-	case int:
-		coerced, err := coerceInt64(b)
-		if err != nil {
-			panic(err)
-		}
-		if a == int(coerced) {
-			return 0
-		} else if a < int(coerced) {
-			return -1
-		} else {
-			return 1
-		}
-	case int64:
-		coerced, err := coerceInt64(b)
-		if err != nil {
-			panic(err)
-		}
-		if a == coerced {
-			return 0
-		} else if a < coerced {
-			return -1
-		} else {
-			return 1
-		}
-	case uint64:
-		coerced, err := coerceUint64(b)
-		if err != nil {
-			panic(err)
-		}
-		if a == coerced {
-			return 0
-		} else if a < coerced {
-			return -1
-		} else {
-			return 1
-		}
-	case float64:
-		coerced, err := coerceFloat64(b)
-		if err != nil {
-			panic(err)
-		}
-		if a == coerced {
-			return 0
-		} else if a < coerced {
-			return -1
-		} else {
-			return 1
-		}
-	case string:
-		coerced, err := coerceString(b)
-		if err != nil {
-			panic(err)
-		}
-		if a == coerced {
-			return 0
-		} else if a < coerced {
-			return -1
-		} else {
-			return 1
-		}
-	case []byte:
-		coerced, err := coerceRaw(b)
-		if err != nil {
-			panic(err)
-		}
-		return bytes.Compare(a, coerced)
-	default:
-		panic(fmt.Sprintf("type combination %v -> %v not supported yet: source=%v target=%v",
-			aType, bType, a, b))
-	}
 }
 
 type PeekingIDStreamer interface {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -310,7 +311,18 @@ func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 
 func coerceInt64(value interface{}) (int64, error) {
 	switch value := value.(type) {
+	case uint:
+		return int64(value), nil
+	case uint32:
+		return int64(value), nil
+	case uint64:
+		if value > math.MaxUint32 {
+			return -1, errors.Errorf("value too large to convert to int64: %+v", value)
+		}
+		return int64(value), nil
 	case int:
+		return int64(value), nil
+	case int32:
 		return int64(value), nil
 	case int64:
 		return value, nil
@@ -324,8 +336,27 @@ func coerceInt64(value interface{}) (int64, error) {
 
 func coerceUint64(value interface{}) (uint64, error) {
 	switch value := value.(type) {
-	case int64:
+	case int:
+		if value < 0 {
+			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
+		}
 		return uint64(value), nil
+	case int32:
+		if value < 0 {
+			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
+		}
+		return uint64(value), nil
+	case int64:
+		if value < 0 {
+			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
+		}
+		return uint64(value), nil
+	case uint:
+		return uint64(value), nil
+	case uint32:
+		return uint64(value), nil
+	case uint64:
+		return value, nil
 	default:
 		return 0, errors.Errorf("can't (yet?) coerce %v to uint64: %v", reflect.TypeOf(value), value)
 	}
@@ -347,6 +378,8 @@ const mysqlTimeFormat = "2006-01-02 15:04:05"
 
 func coerceString(value interface{}) (string, error) {
 	switch value := value.(type) {
+	case string:
+		return value, nil
 	case []byte:
 		return string(value), nil
 	case int64:

@@ -99,7 +99,7 @@ func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff
 			return ctx.Err()
 		}
 
-		err := autotx.Transact(ctx, w.target, func(tx *sql.Tx) error {
+		err := autotx.TransactWithOptions(ctx, w.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 			for _, mutation := range transaction.Mutations {
 				err := w.handleMutation(ctx, tx, mutation)
 				if err != nil {
@@ -312,7 +312,7 @@ func (s *transactionSequence) Run(ctx context.Context) error {
 		if len(transaction.transaction.Mutations) == 0 {
 			continue
 		}
-		err := autotx.Transact(ctx, s.writer.target, func(tx *sql.Tx) error {
+		err := autotx.TransactWithOptions(ctx, s.writer.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 			for _, mutation := range transaction.transaction.Mutations {
 				err := s.writer.handleMutation(ctx, tx, mutation)
 				if err != nil {
@@ -479,7 +479,7 @@ func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, 
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			err = autotx.Transact(ctx, w.target, func(tx *sql.Tx) error {
+			err = autotx.TransactWithOptions(ctx, w.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 				err := w.writeCheckpoint(ctx, tx, currentlyExecutingTransactionSet.finalPosition)
 				return errors.WithStack(err)
 			})

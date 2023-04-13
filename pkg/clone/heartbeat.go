@@ -153,7 +153,7 @@ func (h *Heartbeat) createTable(ctx context.Context) error {
 func (h *Heartbeat) write(ctx context.Context) (int64, error) {
 	var count int64
 	err := Retry(ctx, h.sourceRetry, func(ctx context.Context) error {
-		return autotx.Transact(ctx, h.source, func(tx *sql.Tx) error {
+		return autotx.TransactWithOptions(ctx, h.source, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, "SET time_zone = \"+00:00\"")
 			if err != nil {
 				return errors.WithStack(err)

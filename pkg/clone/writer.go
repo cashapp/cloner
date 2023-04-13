@@ -357,7 +357,7 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 		retry.Timeout = timout
 	}
 	err = Retry(ctx, retry, func(ctx context.Context) error {
-		err = autotx.Transact(ctx, w.db, func(tx *sql.Tx) error {
+		err = autotx.TransactWithOptions(ctx, w.db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 			timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
 			defer timer.ObserveDuration()
 			defer func() {

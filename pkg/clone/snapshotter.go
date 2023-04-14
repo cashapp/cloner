@@ -153,9 +153,9 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 				}
 				if mutation.Chunk.Last {
 					logrus.WithContext(ctx).
-						WithField("task", "replicate").
+						WithField("task", "snapshot").
 						WithField("table", mutation.Table.Name).
-						Infof("'%v' snapshot done", mutation.Table.Name)
+						Infof("'%v' snapshot done, tables left: %v", mutation.Table.Name, tablesLeft)
 
 					delete(tablesLeft, mutation.Table.Name)
 					if len(tablesLeft) == 0 {
@@ -332,7 +332,7 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
 }
 
 func (s *Snapshotter) findOngoingChunkFromWatermark(mutation Mutation) (*ChunkSnapshot, error) {
-	logger := logrus.WithField("task", "snapshotter")
+	logger := logrus.WithField("task", "snapshot")
 
 	tableSchema := mutation.Table.MysqlTable
 	tableNameI, err := tableSchema.GetColumnValue("table_name", mutation.Rows[0])
@@ -401,7 +401,7 @@ func (s *Snapshotter) start(ctx context.Context) error {
 
 		s.readLogger = NewThroughputLogger("snapshot read", s.config.ThroughputLoggingFrequency, uint64(estimatedRows))
 
-		logger = logger.WithField("task", "chunking")
+		logger = logger.WithField("task", "snapshot")
 		err = s.chunkTables(ctx)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
@@ -498,7 +498,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(s.config.TableParallelism)
 
-	logger := logrus.WithContext(ctx).WithField("task", "chunking")
+	logger := logrus.WithContext(ctx).WithField("task", "snapshot")
 
 	for _, t := range tables {
 		table := t
@@ -620,7 +620,7 @@ func (s *Snapshotter) maybeSnapshotChunks(ctx context.Context) error {
 }
 
 func (s *Snapshotter) snapshotDone(ctx context.Context) {
-	logrus.Infof("snapshot done")
+	logrus.WithField("task", "snapshot").Infof("snapshot done")
 
 	s.isSnapshotting.Store(false)
 

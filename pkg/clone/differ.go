@@ -2,13 +2,8 @@ package clone
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"math"
-	"reflect"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
@@ -237,187 +232,21 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 
 func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 	for i := range sourceRow.Data {
-		sourceValue := sourceRow.Data[i]
-		targetValue := targetRow.Data[i]
-
-		// Different database drivers interpret SQL types differently (it seems)
-		sourceType := reflect.TypeOf(sourceValue)
-		targetType := reflect.TypeOf(targetValue)
-		if sourceType == targetType {
-			// If they have the same type we just use reflect.DeepEqual and trust that
-			if reflect.DeepEqual(sourceValue, targetValue) {
-				continue
-			} else {
-				return false, nil
-			}
+		compare, err := genericCompare(sourceRow.Data[i], targetRow.Data[i])
+		if err != nil {
+			return false, errors.WithStack(err)
 		}
-
-		if targetValue == nil {
-			if sourceValue == nil {
-				continue
-			} else {
-				return false, nil
-			}
-		}
-
-		// If they do NOT have same type, we coerce the target type to the source type and then compare
-		// We only support the combinations we've encountered in the wild here
-		switch sourceValue := sourceValue.(type) {
-		case nil:
-			if targetValue != nil {
-				return false, nil
-			} else {
-				continue
-			}
-		case int64:
-			coerced, err := coerceInt64(targetValue)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			if sourceValue != coerced {
-				return false, nil
-			}
-		case uint64:
-			coerced, err := coerceUint64(targetValue)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			if sourceValue != coerced {
-				return false, nil
-			}
-		case float64:
-			coerced, err := coerceFloat64(targetValue)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			if sourceValue != coerced {
-				return false, nil
-			}
-		case string:
-			coerced, err := coerceString(targetValue)
-			if err != nil {
-				return false, errors.WithStack(err)
-			}
-			if sourceValue != coerced {
-				return false, nil
-			}
-		default:
-			return false, errors.Errorf("type combination %v -> %v not supported yet: source=%v target=%v",
-				sourceType, targetType, sourceValue, targetValue)
+		if compare != 0 {
+			return false, nil
 		}
 	}
 	return true, nil
-}
-
-func coerceInt64(value interface{}) (int64, error) {
-	switch value := value.(type) {
-	case uint:
-		return int64(value), nil
-	case uint32:
-		return int64(value), nil
-	case uint64:
-		if value > math.MaxUint32 {
-			return -1, errors.Errorf("value too large to convert to int64: %+v", value)
-		}
-		return int64(value), nil
-	case int:
-		return int64(value), nil
-	case int32:
-		return int64(value), nil
-	case int64:
-		return value, nil
-	case []byte:
-		// This means it was sent as a unicode encoded string
-		return strconv.ParseInt(string(value), 10, 64)
-	default:
-		return 0, errors.Errorf("can't (yet?) coerce %v to int64: %v", reflect.TypeOf(value), value)
-	}
-}
-
-func coerceUint64(value interface{}) (uint64, error) {
-	switch value := value.(type) {
-	case int:
-		if value < 0 {
-			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
-		}
-		return uint64(value), nil
-	case int32:
-		if value < 0 {
-			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
-		}
-		return uint64(value), nil
-	case int64:
-		if value < 0 {
-			return 0, errors.Errorf("can't coerce negative number to uint64: %+v", value)
-		}
-		return uint64(value), nil
-	case uint:
-		return uint64(value), nil
-	case uint32:
-		return uint64(value), nil
-	case uint64:
-		return value, nil
-	default:
-		return 0, errors.Errorf("can't (yet?) coerce %v to uint64: %v", reflect.TypeOf(value), value)
-	}
-}
-
-func coerceFloat64(value interface{}) (float64, error) {
-	switch value := value.(type) {
-	case float32:
-		return float64(value), nil
-	default:
-		return 0, errors.Errorf("can't (yet?) coerce %v to float64: %v", reflect.TypeOf(value), value)
-	}
 }
 
 // mysqlTimeFormat is the standard time format recognized by MySQL
 // note that it does not contain timezone, it will be interpreted in the configured timezone of the server
 // if this is used to copy data between databases we need to make sure they are using the same timezone
 const mysqlTimeFormat = "2006-01-02 15:04:05"
-
-func coerceString(value interface{}) (string, error) {
-	switch value := value.(type) {
-	case string:
-		return value, nil
-	case []byte:
-		return string(value), nil
-	case int64:
-		return fmt.Sprintf("%d", value), nil
-	case time.Time:
-		return value.Format(mysqlTimeFormat), nil
-	default:
-		return "", errors.Errorf("can't (yet?) coerce %v to string: %v", reflect.TypeOf(value), value)
-	}
-}
-
-func coerceRaw(value interface{}) ([]byte, error) {
-	switch value := value.(type) {
-	case []byte:
-		return value, nil
-	case string:
-		return []byte(value), nil
-	case int64:
-		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, uint64(value))
-		return b, nil
-	default:
-		return nil, errors.Errorf("can't (yet?) coerce %v to []byte: %v", reflect.TypeOf(value), value)
-	}
-}
-
-//nolint:deadcode
-func coerceRawArray(vals []interface{}) ([][]byte, error) {
-	var err error
-	raw := make([][]byte, len(vals))
-	for i, val := range vals {
-		raw[i], err = coerceRaw(val)
-		if err != nil {
-			return raw, err
-		}
-	}
-	return raw, err
-}
 
 // readChunk reads a chunk without diffing producing only insert diffs
 func (r *Reader) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {

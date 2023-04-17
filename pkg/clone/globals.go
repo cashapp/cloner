@@ -61,6 +61,8 @@ type ReaderConfig struct {
 
 	FailedChunkRetryCount int `help:"Retry a chunk if it fails the checksum, this can be used to checksum across a replica with a master" default:"0"`
 
+	Tables []string `help:"Which tables to process, default is all in the source schema"`
+
 	Config Config `kong:"-"`
 }
 

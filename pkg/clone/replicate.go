@@ -2,6 +2,8 @@ package clone
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	_ "net/http/pprof"
 	"time"
 
@@ -111,8 +113,9 @@ type Replicate struct {
 	ChunkBufferSize      int           `help:"Size of internal queues" default:"100"`
 	ReconnectTimeout     time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
 
-	DoSnapshot      bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
-	DoSnapshotDelay time.Duration `help:"How long to wait until running a snapshot" default:"60s"`
+	DoSnapshot                  bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
+	DoSnapshotTables            []string      `help:"Snapshot only these tables" default:"false"`
+	DoSnapshotMaxReplicationLag time.Duration `help:"Start snapshot when replication lag drops below this" default:"10s"`
 
 	ReplicationParallelism          int           `help:"Many transactions to apply in parallel during replication" default:"1"`
 	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
@@ -157,7 +160,22 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	}
 	if cmd.DoSnapshot {
 		go func() {
-			time.Sleep(cmd.DoSnapshotDelay)
+			delay := time.Minute
+			time.Sleep(delay)
+			logger := logrus.WithField("task", "snapshot")
+			for {
+				lag, err := cmd.readLag(ctx)
+				if err != nil {
+					logger.WithError(err).Warnf("failed to check replication lag, checking again in %v", delay)
+					continue
+				}
+				if lag < cmd.DoSnapshotMaxReplicationLag {
+					break
+				}
+
+				logger.Infof("replication lag %v is still > %v, checking again in %v",
+					lag, cmd.DoSnapshotMaxReplicationLag, delay)
+			}
 			err := replicator.snapshotter.start(ctx)
 			if err != nil {
 				logrus.Errorf("failed to snapshot: %v", err)
@@ -174,6 +192,44 @@ func (cmd *Replicate) ReconnectBackoff() backoff.BackOff {
 	// on Kubernetes that generally means we will get restarted with a backoff
 	b.MaxElapsedTime = cmd.ReconnectTimeout
 	return b
+}
+
+func (cmd *Replicate) readLag(ctx context.Context) (time.Duration, error) {
+	retry := RetryOptions{
+		Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
+		MaxRetries:    cmd.ReadRetries,
+		Timeout:       cmd.ReadTimeout,
+	}
+
+	lag := time.Hour
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		target, err := cmd.Target.DB()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		stmt := fmt.Sprintf("SELECT time FROM %s WHERE task = ?", cmd.HeartbeatTable)
+		row := target.QueryRowContext(ctx, stmt, cmd.TaskName)
+		var lastHeartbeat time.Time
+		err = row.Scan(&lastHeartbeat)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// We haven't received the first heartbeat yet, maybe we're an hour behind, who knows?
+				// We're definitely more than 0 ms so let's go with one hour just to pick a number >0
+				lag = time.Hour
+			} else {
+				return errors.WithStack(err)
+			}
+		} else {
+			lag = time.Now().UTC().Sub(lastHeartbeat)
+		}
+		return nil
+	})
+	if err != nil {
+		return lag, errors.WithStack(err)
+	}
+	return lag, nil
 }
 
 // Replicator replicates from source to target

@@ -3,6 +3,7 @@ package clone
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -19,6 +20,14 @@ func TestGenericCompare(t *testing.T) {
 	assert.Equal(t, genericCompareOrPanic(1001, 1000), 1)
 	assert.Equal(t, genericCompareOrPanic(1000, 1000), 0)
 	assert.Equal(t, genericCompareOrPanic(1000, 1001), -1)
+
+	assert.Equal(t, genericCompareOrPanic(nil, nil), 0)
+	assert.Equal(t, genericCompareOrPanic(nil, "a"), -1)
+	assert.Equal(t, genericCompareOrPanic("a", nil), 1)
+
+	assert.Equal(t, genericCompareOrPanic(time.Time{}, time.Time{}), 0)
+	assert.Equal(t, genericCompareOrPanic(time.Time{}, time.Time{}.Add(time.Second)), -1)
+	assert.Equal(t, genericCompareOrPanic(time.Time{}.Add(time.Second), time.Time{}), 1)
 
 	// A few weird corner cases comparing uintNN and intNN
 	assert.Equal(t, genericCompareOrPanic(math.MaxUint32-1, uint64(math.MaxUint64)), -1)

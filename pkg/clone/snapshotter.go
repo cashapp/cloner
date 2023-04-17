@@ -386,10 +386,17 @@ func (s *Snapshotter) start(ctx context.Context) error {
 			return
 		}
 
-		tables, err := LoadTables(ctx, s.config.ReaderConfig)
+		allTables, err := LoadTables(ctx, s.config.ReaderConfig)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to load tables: %v", err)
 			return
+		}
+
+		var tables []*Table
+		for _, table := range allTables {
+			if s.shouldSnapshot(table.Name) {
+				tables = append(tables, table)
+			}
 		}
 
 		if len(s.config.DoSnapshotTables) > 0 {
@@ -421,7 +428,7 @@ func (s *Snapshotter) start(ctx context.Context) error {
 		s.readLogger = NewThroughputLogger("snapshot read", s.config.ThroughputLoggingFrequency, uint64(estimatedRows))
 
 		logger = logger.WithField("task", "snapshot")
-		err = s.chunkTables(ctx)
+		err = s.chunkTables(ctx, tables)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
 		}
@@ -501,19 +508,7 @@ func (s *Snapshotter) handleWatermark(ctx context.Context, watermark Mutation, r
 	return result, nil
 }
 
-func (s *Snapshotter) chunkTables(ctx context.Context) error {
-	allTables, err := loadTables(ctx, s.config.ReaderConfig, s.config.Source, s.source)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	var tables []*Table
-	for _, table := range allTables {
-		if s.shouldSnapshot(table.Name) {
-			tables = append(tables, table)
-		}
-	}
-
+func (s *Snapshotter) chunkTables(ctx context.Context, tables []*Table) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(s.config.TableParallelism)
 
@@ -534,7 +529,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context) error {
 		})
 	}
 
-	err = g.Wait()
+	err := g.Wait()
 	logger.Infof("all tables chunking done")
 	return errors.WithStack(err)
 }
@@ -805,6 +800,14 @@ func (s *Snapshotter) shouldSnapshot(name string) bool {
 	case s.config.SnapshotRequestTable, s.config.HeartbeatTable, s.config.WatermarkTable, s.config.CheckpointTable:
 		return false
 	default:
-		return true
 	}
+	if len(s.config.DoSnapshotTables) > 0 {
+		for _, doSnapshotTable := range s.config.DoSnapshotTables {
+			if doSnapshotTable == name {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }

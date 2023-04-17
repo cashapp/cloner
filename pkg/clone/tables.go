@@ -108,6 +108,19 @@ func LoadTables(ctx context.Context, config ReaderConfig) ([]*Table, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	if len(config.Tables) > 0 {
+		var filteredTables []*Table
+		for _, table := range tables {
+			for _, checksumTable := range config.Tables {
+				if checksumTable == table.Name {
+					filteredTables = append(filteredTables, table)
+				}
+			}
+		}
+		tables = filteredTables
+	}
+
 	// Shuffle the tables so they are processed in random order (which spreads out load)
 	rand.Shuffle(len(tables), func(i, j int) { tables[i], tables[j] = tables[j], tables[i] })
 	return tables, nil

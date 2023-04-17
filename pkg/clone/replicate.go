@@ -160,20 +160,22 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	}
 	if cmd.DoSnapshot {
 		go func() {
-			delay := time.Minute
-			time.Sleep(delay)
 			logger := logrus.WithField("task", "snapshot")
 			for {
+				delay := time.Minute
+				time.Sleep(delay)
 				lag, err := cmd.readLag(ctx)
 				if err != nil {
 					logger.WithError(err).Warnf("failed to check replication lag, checking again in %v", delay)
 					continue
 				}
 				if lag < cmd.DoSnapshotMaxReplicationLag {
+					logger.Infof("replication lag %v below %v, starting snapshot",
+						lag, cmd.DoSnapshotMaxReplicationLag)
 					break
 				}
 
-				logger.Infof("replication lag %v is still > %v, checking again in %v",
+				logger.Infof("replication lag %v is still above %v, checking again in %v",
 					lag, cmd.DoSnapshotMaxReplicationLag, delay)
 			}
 			err := replicator.snapshotter.start(ctx)

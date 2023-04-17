@@ -46,6 +46,14 @@ func genericCompare(a interface{}, b interface{}) (int, error) {
 		return compareFloat64(a, b)
 	case float64:
 		return compareFloat64(a, b)
+	case nil:
+		if b == nil {
+			return 0, nil
+		} else {
+			return -1, nil
+		}
+	case time.Time:
+		return compareTime(a, b)
 	case string:
 		coerced, err := coerceString(b)
 		if err != nil {
@@ -65,7 +73,7 @@ func genericCompare(a interface{}, b interface{}) (int, error) {
 		}
 		return bytes.Compare(a, coerced), nil
 	default:
-		return 0, errors.Errorf("type combination %v -> %v not supported yet: source=%v target=%v",
+		return 0, errors.Errorf("type combination %v to %v not supported yet: source=%v target=%v",
 			aType, bType, a, b)
 	}
 }
@@ -127,6 +135,34 @@ func compareFloat64(a interface{}, b interface{}) (int, error) {
 		return -1, nil
 	} else {
 		return 1, nil
+	}
+}
+
+// compareTime coerces both numbers to its widest float form (float64) and compares them
+func compareTime(a interface{}, b interface{}) (int, error) {
+	coercedA, err := coerceTime(a)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	coercedB, err := coerceTime(b)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	if coercedA.Equal(coercedB) {
+		return 0, nil
+	} else if coercedA.Before(coercedB) {
+		return -1, nil
+	} else {
+		return 1, nil
+	}
+}
+
+func coerceTime(value interface{}) (time.Time, error) {
+	switch value := value.(type) {
+	case time.Time:
+		return value, nil
+	default:
+		return time.Time{}, errors.Errorf("can't (yet?) coerce %v to time.Time: %v", reflect.TypeOf(value), value)
 	}
 }
 
@@ -227,6 +263,8 @@ func coerceString(value interface{}) (string, error) {
 		return value, nil
 	case []byte:
 		return string(value), nil
+	case nil:
+		return "", nil
 	case int64:
 		return fmt.Sprintf("%d", value), nil
 	case time.Time:

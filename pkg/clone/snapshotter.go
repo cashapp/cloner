@@ -388,7 +388,7 @@ func (s *Snapshotter) start(ctx context.Context) error {
 
 		tables, err := LoadTables(ctx, s.config.ReaderConfig)
 		if err != nil {
-			logger.WithError(err).Errorf("failed to estimate rows for tables ahead of snapshot: %v", err)
+			logger.WithError(err).Errorf("failed to load tables: %v", err)
 			return
 		}
 
@@ -404,6 +404,12 @@ func (s *Snapshotter) start(ctx context.Context) error {
 			}
 			tables = tablesToSnapshot
 		}
+
+		tableNames := make([]string, len(tables))
+		for i, table := range tables {
+			tableNames[i] = table.Name
+		}
+		logger.Infof("tables to snapshot: %v", tableNames)
 
 		var estimatedRows int64
 		tablesTotalMetric.Set(float64(len(tables)))

@@ -392,6 +392,19 @@ func (s *Snapshotter) start(ctx context.Context) error {
 			return
 		}
 
+		if len(s.config.DoSnapshotTables) > 0 {
+			var tablesToSnapshot []*Table
+			for _, table := range tables {
+				for _, doSnapshotTable := range s.config.DoSnapshotTables {
+					if doSnapshotTable == table.Name {
+						tablesToSnapshot = append(tablesToSnapshot, table)
+						break
+					}
+				}
+			}
+			tables = tablesToSnapshot
+		}
+
 		var estimatedRows int64
 		tablesTotalMetric.Set(float64(len(tables)))
 		for _, table := range tables {

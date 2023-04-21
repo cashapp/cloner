@@ -186,7 +186,7 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 		},
 	}
 	clone := &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
@@ -246,7 +246,7 @@ func TestUnshardedClone(t *testing.T) {
 
 	source.Database = "@replica"
 	clone := &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig: ReaderConfig{
 				SourceTargetConfig: SourceTargetConfig{
 					Source: source,
@@ -322,7 +322,7 @@ func TestCloneNoDiff(t *testing.T) {
 		},
 	}
 	clone := &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 			NoDiff:                  true,
@@ -400,7 +400,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 		},
 	}
 	clone := &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
@@ -438,7 +438,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 		},
 	}
 	clone = &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
 		},
@@ -490,7 +490,7 @@ func TestUnshardedCloneEmptySourceTables(t *testing.T) {
 
 	source.Database = "@replica"
 	clone := &Clone{
-		WriterConfig{
+		WriterConfig: WriterConfig{
 			ReaderConfig: ReaderConfig{
 				SourceTargetConfig: SourceTargetConfig{
 					Source: source,

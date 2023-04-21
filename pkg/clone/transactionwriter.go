@@ -370,7 +370,7 @@ func (s *transactionSet) Append(t Transaction) {
 	}
 	var sequence *transactionSequence
 	if len(sequences) == 0 {
-		// Non-causal with any of the existing sequences so we create a new sequence for this transaction
+		// Non-causal with any of the existing sequences, so we create a new sequence for this transaction
 		sequence = &transactionSequence{writer: s.writer, primaryKeys: make(map[string]*pkSet)}
 		s.sequences = append(s.sequences, sequence)
 	} else if len(sequences) == 1 {
@@ -534,9 +534,9 @@ func (w *TransactionWriter) handleMutation(ctx context.Context, tx *sql.Tx, m Mu
 
 	switch m.Type {
 	case Repair:
-		w.repairLogger.Record(rowCount, sizeBytes)
+		w.repairLogger.Record(m.Table.Name, rowCount, sizeBytes)
 	case Delete, Insert, Update:
-		w.replicateLogger.Record(rowCount, sizeBytes)
+		w.replicateLogger.Record(m.Table.Name, rowCount, sizeBytes)
 	default:
 		panic(fmt.Sprintf("unknown mutation type: %d", m.Type))
 	}

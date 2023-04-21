@@ -6,6 +6,9 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"sort"
+	"strings"
+
+	mapset "github.com/deckarep/golang-set/v2"
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/dlmiddlecote/sqlstats"
@@ -41,6 +44,7 @@ type Snapshotter struct {
 	sourceRetry RetryOptions
 
 	isSnapshotting *atomic.Bool
+	tablesLeft     mapset.Set[string]
 
 	// chunks receives chunks from the chunker, they are processed on the main replication thread and appended to ongoingChunks below
 	chunks chan Chunk
@@ -62,6 +66,7 @@ func NewSnapshotter(config Replicate) (*Snapshotter, error) {
 		},
 		isSnapshotting: atomic.NewBool(false),
 		chunks:         make(chan Chunk, config.ChunkParallelism),
+		tablesLeft:     mapset.NewSet[string](),
 	}
 	s.sourceSchema, err = s.config.Source.Schema()
 	if err != nil {
@@ -101,8 +106,6 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
 	prometheus.MustRegister(s.sourceCollector)
 	defer prometheus.Unregister(s.sourceCollector)
-
-	tablesLeft := make(map[string]bool)
 
 	err := s.checkSnapshotStartRequested(ctx)
 	if err != nil {
@@ -148,17 +151,14 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 
 		for _, mutation := range transaction.Mutations {
 			if mutation.Type == Repair {
-				if mutation.Chunk.First {
-					tablesLeft[mutation.Table.Name] = true
-				}
 				if mutation.Chunk.Last {
+					s.tablesLeft.Remove(mutation.Table.Name)
 					logrus.WithContext(ctx).
 						WithField("task", "snapshot").
 						WithField("table", mutation.Table.Name).
-						Infof("'%v' snapshot done, tables left: %v", mutation.Table.Name, tablesLeft)
+						Infof("table done: %v tables left: %v", mutation.Table.Name, strings.Join(s.tablesLeft.ToSlice(), ","))
 
-					delete(tablesLeft, mutation.Table.Name)
-					if len(tablesLeft) == 0 {
+					if s.tablesLeft.Cardinality() == 0 {
 						// We're done with all tables
 						s.snapshotDone(ctx)
 					}
@@ -227,9 +227,10 @@ type ChunkSnapshot struct {
 }
 
 func (c *ChunkSnapshot) findRow(row []interface{}) (*Row, int, error) {
+	c.assertSorted()
 	n := len(c.Rows)
 	i := sort.Search(n, func(i int) bool {
-		return c.Rows[i].PkAfterOrEqual(row)
+		return c.Rows[i].PkMoreOrEqual(row)
 	})
 	var candidate *Row
 	if n == i {
@@ -243,15 +244,36 @@ func (c *ChunkSnapshot) findRow(row []interface{}) (*Row, int, error) {
 	return candidate, i, nil
 }
 
+func (c *ChunkSnapshot) assertSorted() {
+	isSorted := sort.SliceIsSorted(c.Rows, func(i, j int) bool {
+		return c.Rows[i].PkLess(c.Rows[j].Data)
+	})
+	if !isSorted {
+		panic(fmt.Sprintf("rows are not sorted! %v", c.Chunk.String()))
+	}
+}
+
+func (c *ChunkSnapshot) sort() {
+	sort.Slice(c.Rows, func(i, j int) bool {
+		return c.Rows[i].PkLess(c.Rows[j].Data)
+	})
+}
+
 func (c *ChunkSnapshot) updateRow(i int, row []interface{}) {
+	//logrus.WithField("task", "snapshot").Infof(
+	//	"reconciling binlog event inside watermarks by UPDATE chunk=%s index=%d old=%v new=%v", c.Chunk.String(), i, c.Rows[i], row)
 	c.Rows[i] = c.Rows[i].Updated(row)
 }
 
 func (c *ChunkSnapshot) deleteRow(i int) {
+	//logrus.WithField("task", "snapshot").Infof(
+	//	"reconciling binlog event inside watermarks by DELETE chunk=%s index=%d old=%v", c.Chunk.String(), i, c.Rows[i])
 	c.Rows = append(c.Rows[:i], c.Rows[i+1:]...)
 }
 
 func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
+	//logrus.WithField("task", "snapshot").Infof(
+	//	"reconciling binlog event inside watermarks by INSERT chunk=%s index=%d new=%v", c.Chunk.String(), i, row)
 	r := &Row{
 		Table: c.Chunk.Table,
 		Data:  row,
@@ -393,6 +415,10 @@ func (s *Snapshotter) start(ctx context.Context) error {
 		}
 
 		var tables []*Table
+		tableNames := make([]string, len(allTables))
+		for i, table := range allTables {
+			tableNames[i] = table.Name
+		}
 		for _, table := range allTables {
 			if s.shouldSnapshot(table.Name) {
 				tables = append(tables, table)
@@ -412,7 +438,7 @@ func (s *Snapshotter) start(ctx context.Context) error {
 			tables = tablesToSnapshot
 		}
 
-		tableNames := make([]string, len(tables))
+		tableNames = make([]string, len(tables))
 		for i, table := range tables {
 			tableNames[i] = table.Name
 		}
@@ -428,6 +454,7 @@ func (s *Snapshotter) start(ctx context.Context) error {
 		s.readLogger = NewThroughputLogger("snapshot read", s.config.ThroughputLoggingFrequency, uint64(estimatedRows))
 
 		logger = logger.WithField("task", "snapshot")
+		s.tablesLeft.Append(tableNames...)
 		err = s.chunkTables(ctx, tables)
 		if err != nil {
 			logger.WithError(err).Errorf("failed to chunk tables: %v", err)
@@ -517,10 +544,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context, tables []*Table) error {
 	for _, t := range tables {
 		table := t
 		g.Go(func() error {
-			logger := logger.WithField("table", table.Name)
-			logger.Infof("'%s' chunking start", table.Name)
 			err := generateTableChunksAsync(ctx, table, s.source, s.chunks, s.sourceRetry)
-			logger.Infof("'%s' chunking done", table.Name)
 			if err != nil {
 				return errors.Wrapf(err, "failed to chunk: '%s'", table.Name)
 			}
@@ -530,7 +554,7 @@ func (s *Snapshotter) chunkTables(ctx context.Context, tables []*Table) error {
 	}
 
 	err := g.Wait()
-	logger.Infof("all tables chunking done")
+	logger.Infof("chunking done")
 	return errors.WithStack(err)
 }
 
@@ -564,9 +588,10 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	}
 
 	snapshot := &ChunkSnapshot{Chunk: chunk, Rows: rows}
+	snapshot.sort()
 
 	chunksSnapshotted.WithLabelValues(s.config.TaskName, chunk.Table.Name).Inc()
-	s.readLogger.Record(len(rows), sizeBytes)
+	s.readLogger.Record(chunk.Table.Name, len(rows), sizeBytes)
 
 	_, err = s.source.ExecContext(ctx,
 		fmt.Sprintf("INSERT INTO %s (task, table_name, chunk_seq, high) VALUES (?, ?, ?, 1)",

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -20,6 +21,8 @@ var cli struct {
 	Checksum  clone.Checksum  `cmd:"" help:"Find differences between databases"`
 	Replicate clone.Replicate `cmd:"" help:"Replicate from one database to another and consistent clone"`
 	Ping      clone.Ping      `cmd:"" help:"Ping the databases to check the config is right"`
+
+	MetricsPort int `help:"Which port to publish metrics and debugging info to" default:"9102"`
 }
 
 func inKubernetes() bool {
@@ -28,9 +31,9 @@ func inKubernetes() bool {
 
 func startMetricsServer() {
 	go func() {
-		bindAddr := "localhost:9102"
+		bindAddr := fmt.Sprintf("localhost:%d", cli.MetricsPort)
 		if inKubernetes() {
-			bindAddr = ":9102"
+			bindAddr = fmt.Sprintf(":%d", cli.MetricsPort)
 		}
 		log.Infof("Serving diagnostics on http://%s/metrics and http://%s/debug/pprof", bindAddr, bindAddr)
 		http.Handle("/metrics", promhttp.Handler())

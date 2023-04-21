@@ -117,13 +117,6 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 }
 
 func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool, chunk Chunk) (err error) {
-	if chunk.First {
-		log.Infof("processing first chunk of a table, %s", chunk.String())
-	}
-	if chunk.Last {
-		log.Infof("processing last chunk of a table, %s", chunk.String())
-	}
-
 	var diffs []Diff
 	if diff {
 		diffs, err = r.diffChunk(ctx, chunk)

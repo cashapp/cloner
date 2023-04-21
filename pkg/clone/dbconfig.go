@@ -202,7 +202,6 @@ func (c DBConfig) openMySQL() (*sql.DB, error) {
 	connector, err := mysql.NewConnector(cfg)
 	if c.PasswordFile != "" || c.PasswordCommand != "" {
 		connector = &refreshPasswordConnector{
-			m:                     sync.Mutex{},
 			driver:                connector.Driver(),
 			config:                cfg,
 			passwordCacheDuration: c.PasswordExpiry,

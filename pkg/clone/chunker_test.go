@@ -21,6 +21,18 @@ type testChunk struct {
 	Last  bool
 }
 
+func TestContainsRow(t *testing.T) {
+	chunk := Chunk{
+		Table: &Table{Name: "reward_slots", KeyColumnIndexes: []int{0}},
+		Start: []interface{}{89392756},
+		End:   []interface{}{89426234},
+		First: false,
+		Last:  false,
+		Size:  20000,
+	}
+	assert.True(t, chunk.ContainsRow([]interface{}{89397991}))
+}
+
 func TestChunker(t *testing.T) {
 	tests := []struct {
 		name    string

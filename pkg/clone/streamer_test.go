@@ -16,7 +16,7 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 		params    []interface{}
 	}{
 		{
-			name:      "one operand >",
+			name:      "> with 1 param",
 			left:      []string{"id"},
 			operator:  ">",
 			right:     []interface{}{1000},
@@ -54,6 +54,15 @@ func TestExpandRowConstructorComparison(t *testing.T) {
 			right:     []interface{}{1000, 2000},
 			expansion: "`customer_id` < ? or (`customer_id` = ? and `id` <= ?)",
 			params:    []interface{}{1000, 1000, 2000},
+		},
+		{
+			// For >3 parameters we don't expand
+			name:      "<= with 3 params",
+			left:      []string{"bank_id", "customer_id", "id"},
+			operator:  "<=",
+			right:     []interface{}{1000, 2000, 3000},
+			expansion: "(`bank_id`,`customer_id`,`id`) <= (?,?,?)",
+			params:    []interface{}{1000, 2000, 3000},
 		},
 	}
 	for _, test := range tests {

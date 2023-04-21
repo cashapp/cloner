@@ -15,14 +15,19 @@ type Row struct {
 	Data  []interface{}
 }
 
-// PkAfterOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
-func (r *Row) PkAfterOrEqual(row []interface{}) bool {
+// PkMoreOrEqual returns true if the pk of the row is higher or equal to the PK of the receiver row
+func (r *Row) PkMoreOrEqual(row []interface{}) bool {
 	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) >= 0
+}
+
+// PkLess returns true if the pk of the row is sorts after the PK of the receiver row
+func (r *Row) PkLess(row []interface{}) bool {
+	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) < 0
 }
 
 // PkEqual returns true if the pk of the row is equal to the PK of the receiver row
 func (r *Row) PkEqual(row []interface{}) bool {
-	return genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) == 0
+	return genericEqualKeys(r.KeyValues(), r.Table.KeysOfRow(row))
 }
 
 func (r *Row) Updated(row []interface{}) *Row {
@@ -36,10 +41,10 @@ func (r *Row) Updated(row []interface{}) *Row {
 }
 
 func (r *Row) KeyValues() []interface{} {
-	if len(r.Table.KeyColumns) == 0 {
+	if len(r.Table.KeyColumnIndexes) == 0 {
 		panic("need key columns")
 	}
-	values := make([]interface{}, len(r.Table.KeyColumns))
+	values := make([]interface{}, len(r.Table.KeyColumnIndexes))
 	for i, index := range r.Table.KeyColumnIndexes {
 		values[i] = r.Data[index]
 	}
@@ -171,11 +176,14 @@ func StreamChunk(ctx context.Context, conn DBReader, chunk Chunk, hint string, e
 	columns := table.ColumnList
 
 	where, params := chunkWhere(chunk, extraWhereClause)
-	stmt := fmt.Sprintf("select %s %s from %s %s order by %s", columns, hint, table.Name, where,
+	if len(table.KeyColumnList) == 0 {
+		return nil, errors.Errorf("table has no key columns: %s", table.Name)
+	}
+	stmt := fmt.Sprintf("select %s %s from `%s` %s order by %s", columns, hint, table.Name, where,
 		table.KeyColumnList)
 	rows, err := conn.QueryContext(ctx, stmt, params...)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrapf(err, "failed to execute: %s", stmt)
 	}
 	return newRowStream(table, rows)
 }
@@ -223,8 +231,17 @@ func expandRowConstructorComparison(left []string, operator string, right []inte
 		return fmt.Sprintf("`%s` %s ?", left[0], operator), right
 	}
 	if len(left) > 2 {
-		// TODO I'm just too tired to figure out how to expand this with more than two columns
-		panic("currently only support two operands")
+		var leftQuoted = make([]string, len(left))
+		var questionMarks = make([]string, len(left))
+		for i, s := range left {
+			leftQuoted[i] = "`" + s + "`"
+			questionMarks[i] = "?"
+		}
+		return fmt.Sprintf("(%s) %s (%s)",
+				strings.Join(leftQuoted, ","),
+				operator,
+				strings.Join(questionMarks, ",")),
+			right
 	}
 	if operator == "=" {
 		return fmt.Sprintf("`%s` = ? and `%s` = ?", left[0], left[1]), right

@@ -232,11 +232,11 @@ func StreamDiff(ctx context.Context, table *Table, source RowStream, target RowS
 
 func RowsEqual(sourceRow *Row, targetRow *Row) (bool, error) {
 	for i := range sourceRow.Data {
-		compare, err := genericCompare(sourceRow.Data[i], targetRow.Data[i])
+		equals, err := genericEquals(sourceRow.Data[i], targetRow.Data[i])
 		if err != nil {
 			return false, errors.WithStack(err)
 		}
-		if compare != 0 {
+		if !equals {
 			return false, nil
 		}
 	}
@@ -254,7 +254,7 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
 		timer.ObserveDuration()
-		r.speedLogger.Record(chunk.Size, sizeBytes)
+		r.speedLogger.Record(chunk.Table.Name, chunk.Size, sizeBytes)
 		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
@@ -326,7 +326,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	defer func() {
 		timer.ObserveDuration()
 		chunksProcessed.WithLabelValues(chunk.Table.Name).Inc()
-		r.speedLogger.Record(chunk.Size, sizeBytes)
+		r.speedLogger.Record(chunk.Table.Name, chunk.Size, sizeBytes)
 		readsBytes.WithLabelValues(chunk.Table.Name).Add(float64(sizeBytes))
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()

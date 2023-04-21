@@ -201,3 +201,52 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 		})
 	}
 }
+
+func TestChunkSortAndFind(t *testing.T) {
+	table := &Table{
+		KeyColumnIndexes: []int{0, 1, 2},
+	}
+	c := &ChunkSnapshot{
+		Rows: []*Row{
+			{
+				Table: table,
+				Data:  []interface{}{2, 1, 2, 0, "row #3"},
+			},
+			{
+				Table: table,
+				Data:  []interface{}{1, 1, 2, 0, "row #2"},
+			},
+			{
+				Table: table,
+				Data:  []interface{}{0, 0, 1, 0, "row #1"},
+			},
+		},
+		Chunk: Chunk{
+			Table: table,
+		},
+	}
+	c.sort()
+	// First row
+	row, i, err := c.findRow([]interface{}{0, 0, 1})
+	assert.NoError(t, err)
+	assert.NotNil(t, row)
+	assert.Equal(t, "row #1", row.Data[4])
+	assert.Equal(t, 0, i)
+	// Middle row
+	row, i, err = c.findRow([]interface{}{1, 1, 2})
+	assert.NoError(t, err)
+	assert.NotNil(t, row)
+	assert.Equal(t, "row #2", row.Data[4])
+	assert.Equal(t, 1, i)
+	// Non-existing row between rows 2 and 3
+	row, i, err = c.findRow([]interface{}{2, 1, 1})
+	assert.NoError(t, err)
+	assert.Nil(t, row)
+	assert.Equal(t, 2, i)
+	// Last row
+	row, i, err = c.findRow([]interface{}{2, 1, 2, 0, 0})
+	assert.NoError(t, err)
+	assert.NotNil(t, row)
+	assert.Equal(t, "row #3", row.Data[4])
+	assert.Equal(t, 2, i)
+}

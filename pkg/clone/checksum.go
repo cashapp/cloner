@@ -18,10 +18,11 @@ import (
 type Checksum struct {
 	ReaderConfig
 
-	IgnoreReplicationLag bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
-	HeartbeatTable       string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
-	TaskName             string        `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
-	MaxReplicationLag    time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
+	HeartbeatTable                 string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	TaskName                       string        `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
+	IgnoreReplicationLag           bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
+	MaxReplicationLag              time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
+	MaxReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
 }
 
 // Run finds any differences between source and target
@@ -172,25 +173,34 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	prometheus.MustRegister(targetReaderCollector)
 	defer prometheus.Unregister(targetReaderCollector)
 
+	logger := logrus.WithField("task", "checksum")
 	if !cmd.IgnoreReplicationLag {
-		lag, err := cmd.readLag(ctx, targetReader)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		if lag > cmd.MaxReplicationLag {
-			return nil, errors.Errorf("replication lag too high: %v, "+
-				"this checksum algorithm requires relatively low replication lag to work, "+
-				"please try again when replication lag is lower", lag)
-		}
+		for {
+			delay := cmd.MaxReplicationLagCheckInterval
+			lag, err := cmd.readLag(ctx, targetReader)
+			if err != nil {
+				logger.WithError(err).Warnf("failed to check replication lag, checking again in %v", delay)
+				continue
+			}
+			if lag < cmd.MaxReplicationLag {
+				logger.Infof("replication lag %v below %v",
+					lag, cmd.MaxReplicationLag)
+				break
+			}
 
-		logrus.Infof("replication lag is fine: %v", lag)
+			delay = durationMin(lag, cmd.MaxReplicationLagCheckInterval)
+
+			logger.Infof("replication lag %v is still above %v, checking again in %v",
+				lag, cmd.MaxReplicationLag, delay)
+			time.Sleep(delay)
+		}
 	}
 
 	var tablesToDo []string
 	for _, t := range tables {
 		tablesToDo = append(tablesToDo, t.Name)
 	}
-	logrus.Infof("starting to diff tables: %v", tablesToDo)
+	logger.Infof("starting to diff tables: %v", tablesToDo)
 
 	var estimatedRows int64
 	tablesTotalMetric.Set(float64(len(tables)))

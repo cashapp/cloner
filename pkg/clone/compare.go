@@ -22,6 +22,19 @@ func genericCompareKeys(a []interface{}, b []interface{}) int {
 	return 0
 }
 
+func genericEqualKeys(a []interface{}, b []interface{}) bool {
+	for i := range a {
+		result, err := genericEquals(a[i], b[i])
+		if err != nil {
+			panic(err)
+		}
+		if !result {
+			return false
+		}
+	}
+	return true
+}
+
 func genericCompare(a interface{}, b interface{}) (int, error) {
 	// Different database drivers interpret SQL types differently (it seems)
 	aType := reflect.TypeOf(a)
@@ -46,12 +59,6 @@ func genericCompare(a interface{}, b interface{}) (int, error) {
 		return compareFloat64(a, b)
 	case float64:
 		return compareFloat64(a, b)
-	case nil:
-		if b == nil {
-			return 0, nil
-		} else {
-			return -1, nil
-		}
 	case time.Time:
 		return compareTime(a, b)
 	case string:
@@ -300,4 +307,31 @@ func coerceRawArray(vals []interface{}) ([][]byte, error) {
 		}
 	}
 	return raw, err
+}
+
+func genericEquals(a interface{}, b interface{}) (bool, error) {
+	// Different database drivers interpret SQL types differently (it seems)
+	sourceType := reflect.TypeOf(a)
+	targetType := reflect.TypeOf(b)
+	if sourceType == targetType {
+		// If they have the same type we just use reflect.DeepEqual and trust that
+		if reflect.DeepEqual(a, b) {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	}
+
+	if b == nil {
+		return a == nil, nil
+	}
+	if a == nil {
+		return b == nil, nil
+	}
+
+	compare, err := genericCompare(a, b)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	return compare == 0, nil
 }

@@ -113,9 +113,10 @@ type Replicate struct {
 	ChunkBufferSize      int           `help:"Size of internal queues" default:"100"`
 	ReconnectTimeout     time.Duration `help:"How long to try to reconnect after a replication failure (set to 0 to retry forever)" default:"5m"`
 
-	DoSnapshot                  bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
-	DoSnapshotTables            []string      `help:"Snapshot only these tables" default:"false"`
-	DoSnapshotMaxReplicationLag time.Duration `help:"Start snapshot when replication lag drops below this" default:"10s"`
+	DoSnapshot                               bool          `help:"Automatically starts a snapshot after running replication for 60s (configurable via --do-snapshot-delay)" default:"false"`
+	DoSnapshotTables                         []string      `help:"Snapshot only these tables"`
+	DoSnapshotMaxReplicationLag              time.Duration `help:"Start snapshot when replication lag drops below this" default:"10s"`
+	DoSnapshotMaxReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
 
 	ReplicationParallelism          int           `help:"Many transactions to apply in parallel during replication" default:"1"`
 	ParallelTransactionBatchMaxSize int           `help:"How large batch of transactions to parallelize" default:"100"`
@@ -162,21 +163,23 @@ func (cmd *Replicate) run(ctx context.Context) error {
 		go func() {
 			logger := logrus.WithField("task", "snapshot")
 			for {
-				delay := time.Minute
-				time.Sleep(delay)
-				lag, err := cmd.readLag(ctx)
+				delay := cmd.DoSnapshotMaxReplicationLagCheckInterval
+				lag := replicator.GetReplicationLag()
 				if err != nil {
 					logger.WithError(err).Warnf("failed to check replication lag, checking again in %v", delay)
 					continue
 				}
 				if lag < cmd.DoSnapshotMaxReplicationLag {
-					logger.Infof("replication lag %v below %v, starting snapshot",
+					logger.Infof("replication lag %v below %v",
 						lag, cmd.DoSnapshotMaxReplicationLag)
 					break
 				}
 
+				delay = durationMin(lag, cmd.DoSnapshotMaxReplicationLagCheckInterval)
+
 				logger.Infof("replication lag %v is still above %v, checking again in %v",
 					lag, cmd.DoSnapshotMaxReplicationLag, delay)
+				time.Sleep(delay)
 			}
 			err := replicator.snapshotter.start(ctx)
 			if err != nil {
@@ -186,6 +189,14 @@ func (cmd *Replicate) run(ctx context.Context) error {
 	}
 
 	return replicator.run(ctx)
+}
+
+func durationMin(a time.Duration, b time.Duration) time.Duration {
+	if a.Microseconds() <= b.Microseconds() {
+		return a
+	} else {
+		return b
+	}
 }
 
 func (cmd *Replicate) ReconnectBackoff() backoff.BackOff {
@@ -355,4 +366,8 @@ func (r *Replicator) init(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (r *Replicator) GetReplicationLag() time.Duration {
+	return r.heartbeat.getReplicationLag()
 }

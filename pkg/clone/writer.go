@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/cenkalti/backoff/v4"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/dustin/go-humanize"
 	"github.com/go-sql-driver/mysql"
 	"github.com/mightyguava/autotx"
@@ -117,6 +118,8 @@ type ThroughputLogger struct {
 
 	totalRows     uint64
 	estimatedRows uint64
+
+	tables mapset.Set[string]
 }
 
 func NewThroughputLogger(name string, frequency time.Duration, estimatedRows uint64) *ThroughputLogger {
@@ -131,13 +134,16 @@ func NewThroughputLogger(name string, frequency time.Duration, estimatedRows uin
 
 		totalRows:     0,
 		estimatedRows: estimatedRows,
+
+		tables: mapset.NewSet[string](),
 	}
 }
 
-func (l *ThroughputLogger) Record(rows int, bytes uint64) {
+func (l *ThroughputLogger) Record(table string, rows int, bytes uint64) {
 	atomic.AddUint64(&l.rows, uint64(rows))
 	atomic.AddUint64(&l.totalRows, uint64(rows))
 	atomic.AddUint64(&l.bytes, bytes)
+	l.tables.Add(table)
 	l.maybeLog()
 }
 
@@ -161,22 +167,32 @@ func (l *ThroughputLogger) log() {
 	sinceLastLog := now.Sub(l.lastLog)
 	bytesPerSecond := float64(l.bytes) / sinceLastLog.Seconds()
 	rowsPerSecond := float64(l.rows) / sinceLastLog.Seconds()
+	tables := strings.Join(l.tables.ToSlice(), ",")
 	if l.estimatedRows == 0 {
-		log.Infof("%s throughput: %v/s, %v rows/s", l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond))
+		log.Infof("%s throughput: %v/s %v rows/s tables: %v",
+			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond), tables)
 	} else {
 		totalDuration := time.Since(l.start)
 		overallRowsPerSecond := float64(l.totalRows) / totalDuration.Seconds()
-		rowsRemaining := l.estimatedRows - l.totalRows
-		fractionRemaining := float64(rowsRemaining) / float64(l.estimatedRows)
-		percentDone := float64(100) * (1 - fractionRemaining)
-		timeRemaining := time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
-		log.Infof("%s throughput: %v/s %v rows/s, total rows: %d "+
-			"(estimated rows: %d, estimated done: %2.f%%, estimated time remaining: %v)",
+		var percentDone float64
+		var timeRemaining time.Duration
+		if l.totalRows > l.estimatedRows {
+			percentDone = 100
+			timeRemaining = 0
+		} else {
+			rowsRemaining := l.estimatedRows - l.totalRows
+			fractionRemaining := float64(rowsRemaining) / float64(l.estimatedRows)
+			percentDone = float64(100) * (1 - fractionRemaining)
+			timeRemaining = time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
+		}
+		log.Infof("%s throughput: %v/s %v rows/s total rows: %d tables: %v "+
+			"(estimated rows: %d estimated done: %2.f%% estimated time remaining: %v)",
 			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond),
-			l.totalRows, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
+			l.totalRows, tables, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
 	}
 	atomic.StoreUint64(&l.rows, 0)
 	atomic.StoreUint64(&l.bytes, 0)
+	l.tables.Clear()
 	l.lastLog = now
 }
 
@@ -363,7 +379,7 @@ func (w *Writer) writeBatch(ctx context.Context, batch Batch) (err error) {
 			defer func() {
 				if err == nil {
 					sizeBytes := batch.SizeBytes()
-					w.speedLogger.Record(len(batch.Rows), sizeBytes)
+					w.speedLogger.Record(batch.Table.Name, len(batch.Rows), sizeBytes)
 					writesBytes.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(sizeBytes))
 					writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 				} else {

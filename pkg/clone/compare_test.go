@@ -9,6 +9,9 @@ import (
 )
 
 func TestGenericCompare(t *testing.T) {
+	assert.Equal(t, genericCompareOrPanic(89397991, 89380000), 1)
+	assert.Equal(t, genericCompareOrPanic(89397991, 89400000), -1)
+
 	assert.Equal(t, genericCompareOrPanic("a", "b"), -1)
 	assert.Equal(t, genericCompareOrPanic("a", "a"), 0)
 	assert.Equal(t, genericCompareOrPanic("b", "a"), 1)
@@ -20,10 +23,6 @@ func TestGenericCompare(t *testing.T) {
 	assert.Equal(t, genericCompareOrPanic(1001, 1000), 1)
 	assert.Equal(t, genericCompareOrPanic(1000, 1000), 0)
 	assert.Equal(t, genericCompareOrPanic(1000, 1001), -1)
-
-	assert.Equal(t, genericCompareOrPanic(nil, nil), 0)
-	assert.Equal(t, genericCompareOrPanic(nil, "a"), -1)
-	assert.Equal(t, genericCompareOrPanic("a", nil), 1)
 
 	assert.Equal(t, genericCompareOrPanic(time.Time{}, time.Time{}), 0)
 	assert.Equal(t, genericCompareOrPanic(time.Time{}, time.Time{}.Add(time.Second)), -1)

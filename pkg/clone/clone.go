@@ -2,7 +2,9 @@ package clone
 
 import (
 	"context"
+	"fmt"
 	_ "net/http/pprof"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/semaphore"
@@ -17,6 +19,8 @@ import (
 
 type Clone struct {
 	WriterConfig
+
+	CopySchema bool `help:"Whether to copy the schema or not, will not do incremental schema updates" default:"false"`
 }
 
 type stackTracer interface {
@@ -133,9 +137,53 @@ func (cmd *Clone) run() error {
 	writeLogger := NewThroughputLogger("write", cmd.ThroughputLoggingFrequency, 0)
 	readLogger := NewThroughputLogger("read", cmd.ThroughputLoggingFrequency, uint64(estimatedRows))
 
+	if cmd.CopySchema {
+		for _, table := range tables {
+			rows, err := sourceReader.QueryContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %v", table.Name))
+			var name string
+			var ddl string
+			if !rows.Next() {
+				return errors.Errorf("could not find schema for table %v", table.Name)
+			}
+			err = rows.Scan(&name, &ddl)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			_, err = writer.ExecContext(ctx, ddl)
+			if err != nil {
+				me := mysqlError(err)
+				if me != nil {
+					if me.Number == 1050 {
+						// Table already exists, skip to next
+						continue
+					}
+				}
+				return errors.WithStack(err)
+			}
+		}
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	tableParallelism := semaphore.NewWeighted(int64(cmd.TableParallelism))
+
+	tablesDoneCh := make(chan string)
+	g.Go(func() error {
+		tablesLeft := tablesToDo
+		logger := logrus.WithField("task", "clone")
+		for {
+			if len(tablesLeft) == 0 {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case table := <-tablesDoneCh:
+				tablesLeft = removeElement(tablesLeft, table)
+				logger.Infof("table done: %v tables left: %v", table, strings.Join(tablesLeft, ","))
+			}
+		}
+	})
 
 	for _, t := range tables {
 		table := t
@@ -179,9 +227,31 @@ func (cmd *Clone) run() error {
 			// All diffing done, close the diffs channel
 			close(diffs)
 
+			tablesDoneCh <- table.Name
+
 			return nil
 		})
 	}
 
 	return g.Wait()
+}
+
+func removeElement[T comparable](slice []T, element T) []T {
+	return removeElementByIndex(slice, findIndex(slice, func(t T) bool {
+		return element == t
+	}))
+}
+
+func removeElementByIndex[T any](slice []T, index int) []T {
+	return append(slice[:index], slice[index+1:]...)
+}
+
+func findIndex[T any](slice []T, matchFunc func(T) bool) int {
+	for index, element := range slice {
+		if matchFunc(element) {
+			return index
+		}
+	}
+
+	return -1 // not found
 }

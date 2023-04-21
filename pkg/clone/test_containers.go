@@ -336,6 +336,7 @@ func startMysql() (*DatabaseContainer, error) {
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "mysql",
 		Tag:        "5.7",
+		Platform:   "linux/x86_64",
 		Cmd: []string{
 			"--log-bin=/tmp/binlog",
 			"--gtid_mode=ON",

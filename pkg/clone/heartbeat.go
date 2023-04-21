@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	_ "net/http/pprof"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -28,6 +29,9 @@ type Heartbeat struct {
 
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
+
+	replicationLagMutex sync.Mutex
+	replicationLag      time.Duration
 }
 
 func NewHeartbeat(config Replicate) (*Heartbeat, error) {
@@ -42,6 +46,7 @@ func NewHeartbeat(config Replicate) (*Heartbeat, error) {
 			MaxRetries: config.ReadRetries,
 			Timeout:    config.ReadTimeout,
 		},
+		replicationLag: time.Hour,
 	}
 
 	source, err := r.config.Source.DB()
@@ -113,6 +118,8 @@ func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 				}
 			}
 
+			h.setReplicationLag(lag)
+
 			replicationLag.WithLabelValues(h.config.TaskName).Set(float64(lag / time.Second))
 			heartbeatsRead.WithLabelValues(h.config.TaskName).Inc()
 			if h.config.LogReplicationLag {
@@ -125,6 +132,18 @@ func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 			b.Reset()
 		}
 	}
+}
+
+func (h *Heartbeat) setReplicationLag(lag time.Duration) {
+	h.replicationLagMutex.Lock()
+	defer h.replicationLagMutex.Unlock()
+	h.replicationLag = lag
+}
+
+func (h *Heartbeat) getReplicationLag() time.Duration {
+	h.replicationLagMutex.Lock()
+	defer h.replicationLagMutex.Unlock()
+	return h.replicationLag
 }
 
 func (h *Heartbeat) createTable(ctx context.Context) error {

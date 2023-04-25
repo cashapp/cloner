@@ -131,11 +131,14 @@ func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Tr
 		if len(s.ongoingChunks) > 0 {
 			newMutations := make([]Mutation, 0, len(transaction.Mutations))
 			for _, mutation := range transaction.Mutations {
-				err := s.reconcileOngoingChunks(mutation)
+				newMutation, err := s.reconcileOngoingChunks(mutation)
 				if err != nil {
 					return errors.WithStack(err)
 				}
-				newMutations, err = s.handleWatermark(ctx, mutation, newMutations)
+				if len(newMutation.Rows) == 0 {
+					continue
+				}
+				newMutations, err = s.handleWatermark(ctx, newMutation, newMutations)
 				if err != nil {
 					return errors.WithStack(err)
 				}
@@ -287,70 +290,103 @@ func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
 }
 
 // reconcileOngoingChunks reconciles any ongoing chunks with the changes in the binlog event
-func (s *Snapshotter) reconcileOngoingChunks(mutation Mutation) error {
+func (s *Snapshotter) reconcileOngoingChunks(mutation Mutation) (newMutation Mutation, err error) {
+	newMutation = mutation
 	// should be O(<rows in the RowsEvent> * lg <rows in the chunk>) given that we can binary chop into chunk
 	// RowsEvent is usually not that large so I don't think we need to index anything, that will probably be slower
 	for _, chunk := range s.ongoingChunks {
-		err := chunk.reconcileBinlogEvent(mutation)
+		newMutation, err = chunk.reconcileBinlogEvent(mutation)
 		if err != nil {
-			return errors.WithStack(err)
+			return newMutation, errors.WithStack(err)
 		}
 	}
-	return nil
+	return newMutation, nil
 }
 
 // reconcileBinlogEvent will apply the row
-func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) error {
+func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) (Mutation, error) {
 	tableSchema := mutation.Table.MysqlTable
 	if !c.InsideWatermarks {
-		return nil
+		return mutation, nil
 	}
 	if c.Chunk.Table.MysqlTable.Name != tableSchema.Name {
-		return nil
+		return mutation, nil
 	}
 	if c.Chunk.Table.MysqlTable.Schema != tableSchema.Schema {
-		return nil
+		return mutation, nil
 	}
-	if mutation.Type == Delete {
+	if !c.Chunk.OverlapsMutation(mutation) {
+		return mutation, nil
+	}
+	mutation.assertNoPkUpdates()
+	newMutation := mutation
+	newMutation.Before = nil
+	newMutation.Rows = nil
+	switch mutation.Type {
+	case Delete:
 		for _, row := range mutation.Rows {
 			if !c.Chunk.ContainsRow(row) {
 				// The row is outside of our range, we can skip it
+				newMutation.Rows = append(newMutation.Rows, row)
 				continue
 			}
 			snapshotChunkReconciles.WithLabelValues(mutation.Table.Name, mutation.Type.String()).Inc()
 			// find the row using binary chop (the chunk rows are sorted)
-			existingRow, i, err := c.findRow(row)
+			existingRow, index, err := c.findRow(row)
 			if existingRow == nil {
 				// Row already deleted, this event probably happened after the low watermark but before the chunk read
+				continue
 			} else {
 				if err != nil {
-					return errors.WithStack(err)
+					return newMutation, errors.WithStack(err)
 				}
-				c.deleteRow(i)
+				c.deleteRow(index)
 			}
 		}
-	} else {
+	case Insert:
 		for _, row := range mutation.Rows {
 			if !c.Chunk.ContainsRow(row) {
 				// The row is outside of our range, we can skip it
+				newMutation.Rows = append(newMutation.Rows, row)
 				continue
 			}
 			snapshotChunkReconciles.WithLabelValues(mutation.Table.Name, mutation.Type.String()).Inc()
-			existingRow, i, err := c.findRow(row)
+			existingRow, index, err := c.findRow(row)
 			if err != nil {
-				return errors.WithStack(err)
+				return newMutation, errors.WithStack(err)
 			}
 			if existingRow == nil {
-				// This is either an insert or an update of a row that is deleted after the low watermark but before
-				// the chunk read, either way we just insert it and if the delete event comes we take it away again
-				c.insertRow(i, row)
+				c.insertRow(index, row)
 			} else {
-				// We found a matching row, it must be an update
-				c.updateRow(i, row)
+				// We found a matching row for the insert, it must be a row that was deleted after the low watermark
+				// but before the chunk read
+				c.updateRow(index, row)
+			}
+		}
+	case Update:
+		for i, before := range mutation.Before {
+			after := mutation.Rows[i]
+			if !c.Chunk.ContainsRow(before) {
+				// The row is outside of our range, we can skip it
+				newMutation.Rows = append(newMutation.Before, before)
+				newMutation.Rows = append(newMutation.Rows, after)
+				continue
+			}
+			snapshotChunkReconciles.WithLabelValues(mutation.Table.Name, mutation.Type.String()).Inc()
+			existingRow, index, err := c.findRow(before)
+			if err != nil {
+				return newMutation, errors.WithStack(err)
+			}
+			if existingRow == nil {
+				// This must be an update of a row that is deleted after the low watermark but before
+				// the chunk read, we just insert it and if the delete event comes we take it away again
+				c.insertRow(index, after)
+			} else {
+				c.updateRow(index, after)
 			}
 		}
 	}
-	return nil
+	return newMutation, nil
 }
 
 func (s *Snapshotter) findOngoingChunkFromWatermark(mutation Mutation) (*ChunkSnapshot, error) {

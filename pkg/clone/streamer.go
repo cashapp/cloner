@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"unsafe"
 
@@ -82,6 +83,12 @@ func (b *bufferStream) SizeBytes() (size uint64) {
 		size += uint64(unsafe.Sizeof(row.Data))
 	}
 	return
+}
+
+func (b *bufferStream) sort() {
+	sort.Slice(b.rows, func(i, j int) bool {
+		return b.rows[i].PkLess(b.rows[j].Data)
+	})
 }
 
 // buffer buffers all of the rows into memory

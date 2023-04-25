@@ -351,6 +351,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	sourceStream.sort()
 	targetStream, _, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -359,6 +360,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	targetStream.sort()
 
 	return diffs, nil
 }
@@ -401,8 +403,8 @@ func checksumChunk(ctx context.Context, retry RetryOptions, from string, reader 
 
 // bufferChunk reads and buffers the chunk fully into memory so that we won't time out while diffing even if we have
 // to pause due to back pressure from the writer
-func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (RowStream, uint64, error) {
-	var result RowStream
+func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from string, chunk Chunk) (*bufferStream, uint64, error) {
+	var result *bufferStream
 	var sizeBytes uint64
 
 	err := Retry(ctx, retry, func(ctx context.Context) error {
@@ -418,7 +420,7 @@ func bufferChunk(ctx context.Context, retry RetryOptions, source DBReader, from 
 }
 
 // readChunk reads and buffers a chunk without retries
-func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (RowStream, uint64, error) {
+func readChunk(ctx context.Context, source DBReader, from string, chunk Chunk) (*bufferStream, uint64, error) {
 	timer := prometheus.NewTimer(readDuration.WithLabelValues(chunk.Table.Name, from))
 	defer timer.ObserveDuration()
 

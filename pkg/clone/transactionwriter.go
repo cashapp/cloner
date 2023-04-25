@@ -248,6 +248,11 @@ func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 			}
 
 			// Same table and not a Repair so go through all the PKs to check if they are inside this chunk
+			for _, row := range mutation.Before {
+				if chunk.ContainsRow(row) {
+					return true
+				}
+			}
 			for _, row := range mutation.Rows {
 				if chunk.ContainsRow(row) {
 					// Yep, causal
@@ -272,6 +277,11 @@ func (s *transactionSequence) IsCausal(transaction Transaction) bool {
 			if !exists {
 				// This sequence doesn't touch this table (yet?) so not causal with these mutations for sure
 				continue
+			}
+			for _, row := range mutation.Before {
+				if pks.ContainsRow(row) {
+					return true
+				}
 			}
 			for _, row := range mutation.Rows {
 				if pks.ContainsRow(row) {
@@ -299,6 +309,9 @@ func (s *transactionSequence) Append(transaction orderedTransaction) {
 					m:          make(map[uint64][][]interface{}),
 				}
 				s.primaryKeys[mutation.Table.Name] = pks
+			}
+			for _, row := range mutation.Before {
+				pks.AddRow(row)
 			}
 			for _, row := range mutation.Rows {
 				pks.AddRow(row)
@@ -727,6 +740,7 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (m *Mutation) repair(ctx context.Context, tx DBWriter) (rowCount int, sizeBytes uint64, err error) {
+	logrus.WithField("task", "snapshot").Infof("repairing chunk %s", m.Chunk.String())
 	targetStream, _, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
 		return rowCount, sizeBytes, errors.WithStack(err)

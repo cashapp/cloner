@@ -19,8 +19,25 @@ type Mutation struct {
 	Table *Table
 	Rows  [][]interface{}
 
+	// Before contains the value of the rows before they were updated (only for Update)
+	Before [][]interface{}
+
 	// Chunk is only sent with a Repair mutation type
 	Chunk Chunk
+}
+
+func (m *Mutation) assertNoPkUpdates() {
+	if m.Type != Update {
+		return
+	}
+	for i, after := range m.Rows {
+		before := m.Before[i]
+		if !PkEqual(m.Table, before, after) {
+			beforeKeys := m.Table.KeysOfRow(before)
+			afterKeys := m.Table.KeysOfRow(after)
+			panic(fmt.Sprintf("primary keys were updated, currently unsupported before=%v after=%v", beforeKeys, afterKeys))
+		}
+	}
 }
 
 type Transaction struct {
@@ -138,10 +155,42 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 }
 
 func (s *TransactionStream) toMutation(e *replication.BinlogEvent, event *replication.RowsEvent) Mutation {
-	return Mutation{
-		Type:  toMutationType(e.Header.EventType),
-		Table: s.getTableSchema(event.Table),
-		Rows:  event.Rows,
+	mutationType := toMutationType(e.Header.EventType)
+	switch mutationType {
+	case Update:
+		if len(event.Rows)%2 != 0 {
+			panic("before image is not sent")
+		}
+		before := make([][]interface{}, len(event.Rows)/2)
+		after := make([][]interface{}, len(event.Rows)/2)
+		for i, row := range event.Rows {
+			if i%2 == 0 {
+				before[i/2] = row
+			} else {
+				after[i/2] = row
+			}
+		}
+		mutation := Mutation{
+			Type:   Update,
+			Table:  s.getTableSchema(event.Table),
+			Before: before,
+			Rows:   after,
+		}
+		return mutation
+	case Insert:
+		return Mutation{
+			Type:  Insert,
+			Table: s.getTableSchema(event.Table),
+			Rows:  event.Rows,
+		}
+	case Delete:
+		return Mutation{
+			Type:  Delete,
+			Table: s.getTableSchema(event.Table),
+			Rows:  event.Rows,
+		}
+	default:
+		panic(fmt.Sprintf("unsupported mutation type: %v", mutationType))
 	}
 }
 

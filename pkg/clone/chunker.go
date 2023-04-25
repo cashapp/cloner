@@ -55,6 +55,20 @@ func (c *Chunk) ContainsKeys(keys []interface{}) bool {
 	return result
 }
 
+func (c *Chunk) OverlapsMutation(mutation Mutation) bool {
+	for _, row := range mutation.Before {
+		if c.ContainsRow(row) {
+			return true
+		}
+	}
+	for _, row := range mutation.Rows {
+		if c.ContainsRow(row) {
+			return true
+		}
+	}
+	return false
+}
+
 type PeekingIDStreamer interface {
 	// Next returns next id and a boolean indicating if there is a next after this one
 	Next(context.Context) ([]interface{}, bool, error)

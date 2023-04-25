@@ -182,7 +182,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 					Table: table,
 				},
 			}
-			err := chunk.reconcileBinlogEvent(
+			_, err := chunk.reconcileBinlogEvent(
 				Mutation{
 					Type:  test.eventType,
 					Table: table,

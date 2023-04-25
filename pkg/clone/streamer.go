@@ -31,6 +31,20 @@ func (r *Row) PkEqual(row []interface{}) bool {
 	return genericEqualKeys(r.KeyValues(), r.Table.KeysOfRow(row))
 }
 
+// PkEqual returns true if the pk of the row is equal to the PK of the receiver row
+func PkEqual(table *Table, a []interface{}, b []interface{}) bool {
+	for _, index := range table.KeyColumnIndexes {
+		equals, err := genericEquals(a[index], b[index])
+		if err != nil {
+			panic(err)
+		}
+		if !equals {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Row) Updated(row []interface{}) *Row {
 	if genericCompareKeys(r.KeyValues(), r.Table.KeysOfRow(row)) != 0 {
 		panic("updating row with another ID")

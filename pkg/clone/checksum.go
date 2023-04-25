@@ -88,9 +88,13 @@ func (cmd *Checksum) reportDiffs(diffs []Diff) {
 			panic("Repair diff type not supported here")
 		}
 		statsByTable[diff.Row.Table.Name] = byTable
+		var targetData []interface{}
+		if diff.Target != nil {
+			targetData = diff.Target.Data
+		}
 		logrus.WithField("table", diff.Row.Table.Name).
 			WithField("diff_type", diff.Type.String()).
-			Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
+			Errorf("diff %v %v id=%v source=%v target=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues(), diff.Row.Data, targetData)
 	}
 	logrus.Errorf("total diffs inserts=%d deletes=%d updates=%d", totalStats.inserts, totalStats.deletes, totalStats.updates)
 	for table, stat := range statsByTable {

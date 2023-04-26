@@ -140,6 +140,9 @@ func (cmd *Clone) run() error {
 	if cmd.CopySchema {
 		for _, table := range tables {
 			rows, err := sourceReader.QueryContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %v", table.Name))
+			if err != nil {
+				return errors.WithStack(err)
+			}
 			var name string
 			var ddl string
 			if !rows.Next() {
@@ -149,6 +152,7 @@ func (cmd *Clone) run() error {
 			if err != nil {
 				return errors.WithStack(err)
 			}
+			_ = rows.Close()
 			_, err = writer.ExecContext(ctx, ddl)
 			if err != nil {
 				me := mysqlError(err)

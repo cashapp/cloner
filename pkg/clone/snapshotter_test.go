@@ -16,6 +16,7 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 		end          int64
 		eventType    MutationType
 		startingRows [][]interface{}
+		beforeRows   [][]interface{}
 		eventRows    [][]interface{}
 		resultRows   [][]interface{}
 	}{
@@ -138,9 +139,13 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			},
 
 			eventType: Update,
+			beforeRows: [][]interface{}{
+				{6, "customer name"},
+				{11, "outside of chunk range"},
+			},
 			eventRows: [][]interface{}{
 				{6, "updated customer name"},
-				{11, "outside of chunk range"},
+				{11, "updated outside of chunk range"},
 			},
 
 			resultRows: [][]interface{}{
@@ -184,9 +189,10 @@ func TestOngoingChunkReconcileBinlogEvents(t *testing.T) {
 			}
 			_, err := chunk.reconcileBinlogEvent(
 				Mutation{
-					Type:  test.eventType,
-					Table: table,
-					Rows:  test.eventRows,
+					Type:   test.eventType,
+					Table:  table,
+					Before: test.beforeRows,
+					Rows:   test.eventRows,
 				},
 			)
 			require.NoError(t, err)

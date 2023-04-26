@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	_ "net/http/pprof"
+	"strings"
 	"time"
 
 	"github.com/dlmiddlecote/sqlstats"
@@ -23,6 +24,10 @@ type Checksum struct {
 	IgnoreReplicationLag           bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
 	MaxReplicationLag              time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
 	MaxReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
+	RepairAttempts                 int           `help:"How many times to try to repair diffs that are found" default:"0"`
+
+	WriteRetries uint64        `help:"Number of retries" default:"5"`
+	WriteTimeout time.Duration `help:"Timeout for each write" default:"30s"`
 }
 
 // Run finds any differences between source and target
@@ -54,6 +59,25 @@ func (cmd *Checksum) Run() error {
 	}
 
 	if len(diffs) > 0 {
+		if cmd.RepairAttempts > 0 {
+			repairer, err := NewRepairer(cmd)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			for i := 0; i < cmd.RepairAttempts; i++ {
+				logger.WithError(err).Warnf("found diffs")
+				cmd.reportDiffs(diffs)
+				logger.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
+				diffs, err = repairer.repairDiffs(ctx, diffs)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				if len(diffs) == 0 {
+					logger.Infof("all diffs repaired")
+					return nil
+				}
+			}
+		}
 		cmd.reportDiffs(diffs)
 		err := errors.Errorf("found diffs")
 		logger.WithError(err).Infof("found diffs")
@@ -286,4 +310,222 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	}
 
 	return foundDiffs, err
+}
+
+type Repairer struct {
+	config *Checksum
+	source *sql.DB
+	target *sql.DB
+}
+
+func NewRepairer(config *Checksum) (*Repairer, error) {
+	source, err := config.Source.ReaderDB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	target, err := config.Target.DB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &Repairer{
+		config: config,
+		source: source,
+		target: target,
+	}, nil
+}
+
+func (r *Repairer) repairDiffs(ctx context.Context, diffs []Diff) ([]Diff, error) {
+	var newDiffs []Diff
+	newDiffs = nil
+	for _, diff := range diffs {
+		newDiff, err := r.repairDiff(ctx, diff)
+		if err != nil {
+			return newDiffs, errors.WithStack(err)
+		}
+		if newDiff != nil {
+			newDiffs = append(newDiffs, *newDiff)
+		}
+	}
+	return newDiffs, nil
+}
+
+func (r *Repairer) repairDiff(ctx context.Context, diff Diff) (newDiff *Diff, err error) {
+	retry := RetryOptions{
+		Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+		AcquireMetric: writeLimiterDelay,
+		MaxRetries:    r.config.WriteRetries,
+		Timeout:       r.config.WriteTimeout,
+	}
+	err = Retry(ctx, retry, func(ctx context.Context) error {
+		switch diff.Type {
+		case Update:
+			row, err := r.readRow(ctx, diff)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			if row == nil {
+				newDiff = &Diff{
+					Type:   Delete,
+					Row:    diff.Row,
+					Target: nil,
+				}
+				return nil
+			}
+			err = r.writeRow(ctx, row)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		case Insert:
+			err := r.writeRow(ctx, diff.Row)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		case Delete:
+			err := r.deleteRow(ctx, diff)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+
+		sourceRow, err := r.readRow(ctx, diff)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		targetRow, err := r.readRow(ctx, diff)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if sourceRow == nil && targetRow != nil {
+			newDiff = &Diff{
+				Type:   Delete,
+				Row:    targetRow,
+				Target: nil,
+			}
+			return nil
+		}
+		if sourceRow != nil && targetRow == nil {
+			newDiff = &Diff{
+				Type:   Insert,
+				Row:    sourceRow,
+				Target: nil,
+			}
+			return nil
+		}
+		rowsEqual, err := RowsEqual(sourceRow, targetRow)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if rowsEqual {
+			newDiff = nil
+			return nil
+		} else {
+			newDiff = &Diff{
+				Type:   Update,
+				Row:    sourceRow,
+				Target: targetRow,
+			}
+			return nil
+		}
+	})
+
+	return newDiff, errors.WithStack(err)
+}
+
+func (r *Repairer) readRow(ctx context.Context, diff Diff) (*Row, error) {
+	table := diff.Row.Table
+	var whereClause strings.Builder
+	for i, column := range table.KeyColumns {
+		if i > 0 {
+			whereClause.WriteString(" AND ")
+		}
+		whereClause.WriteString("`")
+		whereClause.WriteString(column)
+		whereClause.WriteString("`")
+		whereClause.WriteString(" = ?")
+	}
+	stmt := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+		table.ColumnList, table.Name, whereClause.String())
+	rows, err := r.source.QueryContext(ctx, stmt, diff.Row.KeyValues()...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, nil
+	}
+	data := make([]interface{}, len(table.Columns))
+
+	scanArgs := make([]interface{}, len(data))
+	for i := range data {
+		scanArgs[i] = &data[i]
+	}
+	err = rows.Scan(scanArgs...)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
+	return &Row{
+		Table: table,
+		Data:  data,
+	}, nil
+}
+
+func (r *Repairer) writeRow(ctx context.Context, row *Row) error {
+	var err error
+	table := row.Table
+	tableSchema := table.MysqlTable
+	var questionMarks strings.Builder
+	var columnListBuilder strings.Builder
+	for i, column := range tableSchema.Columns {
+		if table.IgnoredColumnsBitmap[i] {
+			continue
+		}
+		if i != 0 {
+			columnListBuilder.WriteString(",")
+			questionMarks.WriteString(",")
+		}
+		questionMarks.WriteString("?")
+		columnListBuilder.WriteString("`")
+		columnListBuilder.WriteString(column.Name)
+		columnListBuilder.WriteString("`")
+	}
+	values := fmt.Sprintf("(%s)", questionMarks.String())
+	columnList := columnListBuilder.String()
+
+	args := make([]interface{}, 0, len(tableSchema.Columns))
+	for i, val := range row.Data {
+		if !table.IgnoredColumnsBitmap[i] {
+			args = append(args, val)
+		}
+	}
+	stmt := fmt.Sprintf("REPLACE INTO %s (%s) VALUES %s",
+		tableSchema.Name, columnList, values)
+	_, err = r.target.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return errors.Wrapf(err, "could not execute: %s", stmt)
+	}
+
+	return nil
+}
+
+func (r *Repairer) deleteRow(ctx context.Context, diff Diff) error {
+	table := diff.Row.Table
+	var whereClause strings.Builder
+	for i, column := range table.KeyColumns {
+		if i > 0 {
+			whereClause.WriteString(" AND ")
+		}
+		whereClause.WriteString("`")
+		whereClause.WriteString(column)
+		whereClause.WriteString("`")
+		whereClause.WriteString(" = ?")
+	}
+	_, err := r.target.ExecContext(ctx, "DELETE FROM %s WHERE %s",
+		table.Name, whereClause.String(), diff.Row.KeyValues())
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
+	return nil
 }

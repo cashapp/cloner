@@ -385,6 +385,8 @@ func (c *ChunkSnapshot) reconcileBinlogEvent(mutation Mutation) (Mutation, error
 				c.updateRow(index, after)
 			}
 		}
+	default:
+		panic(fmt.Sprintf("can't reconcile %s", mutation.Type.String()))
 	}
 	return newMutation, nil
 }

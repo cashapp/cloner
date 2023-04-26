@@ -200,8 +200,10 @@ func InDir(dir string, f func()) {
 	prev, err := os.Getwd()
 	NoErr(err)
 	err = os.Chdir(dir)
+	NoErr(err)
 	defer func() {
-		os.Chdir(prev)
+		err = os.Chdir(prev)
+		NoErr(err)
 	}()
 	f()
 }

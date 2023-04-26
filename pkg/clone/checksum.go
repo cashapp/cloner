@@ -60,22 +60,9 @@ func (cmd *Checksum) Run() error {
 
 	if len(diffs) > 0 {
 		if cmd.RepairAttempts > 0 {
-			repairer, err := NewRepairer(cmd)
+			diffs, err = cmd.repairDiffs(ctx, diffs)
 			if err != nil {
 				return errors.WithStack(err)
-			}
-			for i := 0; i < cmd.RepairAttempts; i++ {
-				logger.WithError(err).Warnf("found diffs")
-				cmd.reportDiffs(diffs)
-				logger.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
-				diffs, err = repairer.repairDiffs(ctx, diffs)
-				if err != nil {
-					return errors.WithStack(err)
-				}
-				if len(diffs) == 0 {
-					logger.Infof("all diffs repaired")
-					return nil
-				}
 			}
 		}
 		cmd.reportDiffs(diffs)
@@ -86,6 +73,27 @@ func (cmd *Checksum) Run() error {
 		logger.Infof("no diffs found")
 	}
 	return errors.WithStack(err)
+}
+
+func (cmd *Checksum) repairDiffs(ctx context.Context, diffs []Diff) ([]Diff, error) {
+	repairer, err := NewRepairer(cmd)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	for i := 0; i < cmd.RepairAttempts; i++ {
+		logrus.WithError(err).Warnf("found diffs")
+		cmd.reportDiffs(diffs)
+		logrus.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
+		diffs, err = repairer.repairDiffs(ctx, diffs)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if len(diffs) == 0 {
+			logrus.Infof("all diffs repaired")
+			return nil, nil
+		}
+	}
+	return diffs, nil
 }
 
 func (cmd *Checksum) reportDiffs(diffs []Diff) {
@@ -385,6 +393,8 @@ func (r *Repairer) repairDiff(ctx context.Context, diff Diff) (newDiff *Diff, er
 			if err != nil {
 				return errors.WithStack(err)
 			}
+		default:
+			panic(fmt.Sprintf("can't repair %s", diff.Type.String()))
 		}
 
 		sourceRow, err := r.readRow(ctx, diff)
@@ -401,31 +411,30 @@ func (r *Repairer) repairDiff(ctx context.Context, diff Diff) (newDiff *Diff, er
 				Row:    targetRow,
 				Target: nil,
 			}
-			return nil
-		}
-		if sourceRow != nil && targetRow == nil {
+		} else if sourceRow != nil && targetRow == nil {
 			newDiff = &Diff{
 				Type:   Insert,
 				Row:    sourceRow,
 				Target: nil,
 			}
-			return nil
-		}
-		rowsEqual, err := RowsEqual(sourceRow, targetRow)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		if rowsEqual {
+		} else if sourceRow == nil && targetRow == nil {
 			newDiff = nil
-			return nil
 		} else {
-			newDiff = &Diff{
-				Type:   Update,
-				Row:    sourceRow,
-				Target: targetRow,
+			rowsEqual, err := RowsEqual(sourceRow, targetRow)
+			if err != nil {
+				return errors.WithStack(err)
 			}
-			return nil
+			if rowsEqual {
+				newDiff = nil
+			} else {
+				newDiff = &Diff{
+					Type:   Update,
+					Row:    sourceRow,
+					Target: targetRow,
+				}
+			}
 		}
+		return nil
 	})
 
 	return newDiff, errors.WithStack(err)

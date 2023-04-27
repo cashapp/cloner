@@ -68,7 +68,8 @@ func TestReverseReplication(t *testing.T) {
 	defer forwardReplicationCancel()
 	err = startReplication(forwardReplicationCtx, "replication", g, source.Config(), target.Config())
 	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
+	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
+	require.NoError(t, err)
 	err = insertBunchaData(ctx, source.Config(), 50)
 	require.NoError(t, err)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
@@ -111,9 +112,10 @@ func runChecksum(ctx context.Context, target DBConfig, source DBConfig) ([]Diff,
 			Source: source,
 			Target: target,
 		},
-		ReadRetries:          1,
-		ChunkSize:            5, // Smaller chunk size to make sure we're exercising chunking
-		UseConcurrencyLimits: false,
+		ReadRetries:           1,
+		ChunkSize:             5, // Smaller chunk size to make sure we're exercising chunking
+		UseConcurrencyLimits:  false,
+		FailedChunkRetryCount: 5,
 		Config: Config{
 			Tables: map[string]TableConfig{
 				"customers":    {},

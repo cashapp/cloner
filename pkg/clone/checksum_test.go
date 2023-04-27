@@ -54,26 +54,24 @@ func TestChecksum(t *testing.T) {
 }
 
 func TestChecksumWithRepair(t *testing.T) {
-	mysql1, err := startMysql()
+	source, err := startMysql()
 	assert.NoError(t, err)
-	mysql2, err := startMysql()
-
-	assert.NoError(t, err)
-
-	err = insertBunchaData(context.Background(), mysql1.Config(), 1000)
-	assert.NoError(t, err)
-	err = insertBunchaData(context.Background(), mysql2.Config(), 10)
+	defer source.Close()
+	err = insertBunchaData(context.Background(), source.Config(), 1000)
 	assert.NoError(t, err)
 
-	source := mysql1.Config()
-	target := mysql2.Config()
+	target, err := startMysql()
+	assert.NoError(t, err)
+	defer target.Close()
+	err = insertBunchaData(context.Background(), target.Config(), 10)
+	assert.NoError(t, err)
 
 	checksum := &Checksum{
 		IgnoreReplicationLag: true,
 		ReaderConfig: ReaderConfig{
 			SourceTargetConfig: SourceTargetConfig{
-				Source: source,
-				Target: target,
+				Source: source.Config(),
+				Target: target.Config(),
 			},
 			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
 			Config: Config{

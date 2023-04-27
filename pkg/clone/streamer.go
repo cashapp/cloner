@@ -99,6 +99,10 @@ func (b *bufferStream) SizeBytes() (size uint64) {
 	return
 }
 
+// sort sorts the buffer using genericCompare. The order in the database could be different from the order we use in
+// Golang. Especially considering VARCHAR primary keys and different collations (e.g. Swedish vs Turkish sorting of
+// characters with umlauts). The diffing algorithm assumes the streams are sorted with genericCompare or it just
+// doesn't work. For that reason we sort the buffer just after we've read it from the database.
 func (b *bufferStream) sort() {
 	sort.Slice(b.rows, func(i, j int) bool {
 		return b.rows[i].PkLess(b.rows[j].Data)

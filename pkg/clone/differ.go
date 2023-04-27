@@ -351,6 +351,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	// Sort the snapshot using genericCompare which diff depends on
 	sourceStream.sort()
 	targetStream, _, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
 	if err != nil {
@@ -360,6 +361,7 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	// Sort the snapshot using genericCompare which diff depends on
 	targetStream.sort()
 
 	return diffs, nil

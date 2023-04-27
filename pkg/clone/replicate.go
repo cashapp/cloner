@@ -2,8 +2,6 @@ package clone
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	_ "net/http/pprof"
 	"time"
 
@@ -205,44 +203,6 @@ func (cmd *Replicate) ReconnectBackoff() backoff.BackOff {
 	// on Kubernetes that generally means we will get restarted with a backoff
 	b.MaxElapsedTime = cmd.ReconnectTimeout
 	return b
-}
-
-func (cmd *Replicate) readLag(ctx context.Context) (time.Duration, error) {
-	retry := RetryOptions{
-		Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
-		MaxRetries:    cmd.ReadRetries,
-		Timeout:       cmd.ReadTimeout,
-	}
-
-	lag := time.Hour
-	err := Retry(ctx, retry, func(ctx context.Context) error {
-		target, err := cmd.Target.DB()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		stmt := fmt.Sprintf("SELECT time FROM %s WHERE task = ?", cmd.HeartbeatTable)
-		row := target.QueryRowContext(ctx, stmt, cmd.TaskName)
-		var lastHeartbeat time.Time
-		err = row.Scan(&lastHeartbeat)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// We haven't received the first heartbeat yet, maybe we're an hour behind, who knows?
-				// We're definitely more than 0 ms so let's go with one hour just to pick a number >0
-				lag = time.Hour
-			} else {
-				return errors.WithStack(err)
-			}
-		} else {
-			lag = time.Now().UTC().Sub(lastHeartbeat)
-		}
-		return nil
-	})
-	if err != nil {
-		return lag, errors.WithStack(err)
-	}
-	return lag, nil
 }
 
 // Replicator replicates from source to target

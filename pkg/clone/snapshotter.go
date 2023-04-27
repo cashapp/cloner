@@ -256,6 +256,9 @@ func (c *ChunkSnapshot) assertSorted() {
 	}
 }
 
+// sort sorts the buffer using genericCompare. The order in the database can be different from the order in Golang (see
+// bufferStream.sort for an explanation why) and findRow doesn't work properly unless the snapshot has been sorted with
+// genericCompare.
 func (c *ChunkSnapshot) sort() {
 	sort.Slice(c.Rows, func(i, j int) bool {
 		return c.Rows[i].PkLess(c.Rows[j].Data)
@@ -263,20 +266,14 @@ func (c *ChunkSnapshot) sort() {
 }
 
 func (c *ChunkSnapshot) updateRow(i int, row []interface{}) {
-	//logrus.WithField("task", "snapshot").Infof(
-	//	"reconciling binlog event inside watermarks by UPDATE chunk=%s index=%d old=%v new=%v", c.Chunk.String(), i, c.Rows[i], row)
 	c.Rows[i] = c.Rows[i].Updated(row)
 }
 
 func (c *ChunkSnapshot) deleteRow(i int) {
-	//logrus.WithField("task", "snapshot").Infof(
-	//	"reconciling binlog event inside watermarks by DELETE chunk=%s index=%d old=%v", c.Chunk.String(), i, c.Rows[i])
 	c.Rows = append(c.Rows[:i], c.Rows[i+1:]...)
 }
 
 func (c *ChunkSnapshot) insertRow(i int, row []interface{}) {
-	//logrus.WithField("task", "snapshot").Infof(
-	//	"reconciling binlog event inside watermarks by INSERT chunk=%s index=%d new=%v", c.Chunk.String(), i, row)
 	r := &Row{
 		Table: c.Chunk.Table,
 		Data:  row,
@@ -626,6 +623,7 @@ func (s *Snapshotter) snapshotChunk(ctx context.Context, chunk Chunk) (*ChunkSna
 	}
 
 	snapshot := &ChunkSnapshot{Chunk: chunk, Rows: rows}
+	// Sort the snapshot using genericCompare which findRows depends on
 	snapshot.sort()
 
 	chunksSnapshotted.WithLabelValues(s.config.TaskName, chunk.Table.Name).Inc()

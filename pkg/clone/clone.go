@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	_ "net/http/pprof"
 	"strings"
@@ -138,32 +139,9 @@ func (cmd *Clone) run() error {
 	readLogger := NewThroughputLogger("read", cmd.ThroughputLoggingFrequency, uint64(estimatedRows))
 
 	if cmd.CopySchema {
-		for _, table := range tables {
-			rows, err := sourceReader.QueryContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %v", table.Name))
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			var name string
-			var ddl string
-			if !rows.Next() {
-				return errors.Errorf("could not find schema for table %v", table.Name)
-			}
-			err = rows.Scan(&name, &ddl)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			_ = rows.Close()
-			_, err = writer.ExecContext(ctx, ddl)
-			if err != nil {
-				me := mysqlError(err)
-				if me != nil {
-					if me.Number == 1050 {
-						// Table already exists, skip to next
-						continue
-					}
-				}
-				return errors.WithStack(err)
-			}
+		err := cmd.copySchema(ctx, tables, sourceReader, writer)
+		if err != nil {
+			return errors.WithStack(err)
 		}
 	}
 
@@ -238,6 +216,45 @@ func (cmd *Clone) run() error {
 	}
 
 	return g.Wait()
+}
+
+func (cmd *Clone) copySchema(ctx context.Context, tables []*Table, source *sql.DB, target *sql.DB) error {
+	for _, table := range tables {
+		err := cmd.copyTableSchema(ctx, table, source, target)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
+}
+
+func (cmd *Clone) copyTableSchema(ctx context.Context, table *Table, source *sql.DB, target *sql.DB) error {
+	rows, err := source.QueryContext(ctx, fmt.Sprintf("SHOW CREATE TABLE %v", table.Name))
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer rows.Close()
+	var name string
+	var ddl string
+	if !rows.Next() {
+		return errors.Errorf("could not find schema for table %v", table.Name)
+	}
+	err = rows.Scan(&name, &ddl)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = target.ExecContext(ctx, ddl)
+	if err != nil {
+		me := mysqlError(err)
+		if me != nil {
+			if me.Number == 1050 {
+				// Table already exists
+				return nil
+			}
+		}
+		return errors.WithStack(err)
+	}
+	return nil
 }
 
 func removeElement[T comparable](slice []T, element T) []T {

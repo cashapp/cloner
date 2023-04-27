@@ -114,7 +114,7 @@ func main() {
 	})
 	snapshotDone := OnFirstOutput(startSnapshot, "snapshot done", func() {
 		go func() {
-			checksum := exec.Command(cloner,
+			repairingChecksum := exec.Command(cloner,
 				"checksum",
 				"--metrics-port", "9103",
 				"--source-host", "127.0.0.1",
@@ -132,13 +132,42 @@ func main() {
 				"--chunk-size", "5000",
 				"--ignore-tables", "history",
 				"--failed-chunk-retry-count", "10",
-				"--read-retries", "10")
-			checksum.Stdout = os.Stdout
-			checksum.Stderr = OnFirstOutput(os.Stderr, "no diffs found", func() {
+				"--read-retries", "10",
+				"--repair-attempts", "10",
+			)
+			repairingChecksum.Stdout = os.Stdout
+			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "no diffs found", func() {
 				fmt.Println("test successful!")
 				os.Exit(0)
 			})
-			Run(checksum)
+			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "all diffs repaired", func() {
+				checksum := exec.Command(cloner,
+					"checksum",
+					"--metrics-port", "9103",
+					"--source-host", "127.0.0.1",
+					"--source-database", "tpcc",
+					"--source-username", "root",
+
+					"--target-host", "127.0.0.1",
+					"--target-database", "tpcc_clone",
+					"--target-username", "root",
+
+					"--table-parallelism", "6",
+					"--reader-parallelism", "20",
+					"--reader-count", "50",
+					"--read-timeout", "120s",
+					"--chunk-size", "5000",
+					"--ignore-tables", "history",
+					"--failed-chunk-retry-count", "10",
+					"--read-retries", "10")
+				checksum.Stdout = os.Stdout
+				checksum.Stderr = OnFirstOutput(os.Stderr, "no diffs found", func() {
+					fmt.Println("test successful!")
+					os.Exit(0)
+				})
+				Run(checksum)
+			})
+			Run(repairingChecksum)
 		}()
 	})
 	replicate.Stderr = snapshotDone

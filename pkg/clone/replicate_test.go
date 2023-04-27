@@ -63,18 +63,27 @@ func TestReverseReplication(t *testing.T) {
 	err = deleteAllData(target.Config())
 	require.NoError(t, err)
 
+	// Make sure they are equal before we start
+	diffs, err := doRunChecksum(ctx, source.Config(), target.Config(), func(config *Checksum) {
+		config.IgnoreReplicationLag = true
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, len(diffs))
+
 	// Start forward replication and insert some data
 	forwardReplicationCtx, forwardReplicationCancel := context.WithCancel(ctx)
 	defer forwardReplicationCancel()
 	err = startReplication(forwardReplicationCtx, "replication", g, source.Config(), target.Config())
 	require.NoError(t, err)
+	time.Sleep(5 * time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
 	require.NoError(t, err)
 	err = insertBunchaData(ctx, source.Config(), 50)
 	require.NoError(t, err)
+	time.Sleep(5 * time.Second)
 	err = waitFor(ctx, littleReplicationLag(ctx, "replication", targetDB))
 	require.NoError(t, err)
-	diffs, err := runChecksum(ctx, source.Config(), target.Config())
+	diffs, err = runChecksum(ctx, source.Config(), target.Config())
 	require.NoError(t, err)
 	require.Equal(t, 0, len(diffs))
 
@@ -107,6 +116,10 @@ func TestReverseReplication(t *testing.T) {
 }
 
 func runChecksum(ctx context.Context, target DBConfig, source DBConfig) ([]Diff, error) {
+	return doRunChecksum(ctx, target, source, func(config *Checksum) {})
+}
+
+func doRunChecksum(ctx context.Context, target DBConfig, source DBConfig, reconfig func(config *Checksum)) ([]Diff, error) {
 	readerConfig := ReaderConfig{
 		SourceTargetConfig: SourceTargetConfig{
 			Source: source,
@@ -135,6 +148,7 @@ func runChecksum(ctx context.Context, target DBConfig, source DBConfig) ([]Diff,
 	// Note: We don't disable the replication lag check here, replication is running at this point
 	checksum.FailedChunkRetryCount = 10
 	checksum.TaskName = "replication"
+	reconfig(checksum)
 	diffs, err := checksum.run(ctx)
 	if err != nil {
 		return nil, errors.WithStack(err)

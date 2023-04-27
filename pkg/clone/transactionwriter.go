@@ -228,7 +228,7 @@ func (s *transactionSequence) Print(ctx context.Context) {
 			if mutation.Type == Repair {
 				fmt.Printf("repair %v-%v\n", mutation.Chunk.Start, mutation.Chunk.End)
 			} else {
-				writer := &printingWriter{db: s.writer.target}
+				writer := &printingWriter{target: s.writer.target}
 				_, _, _ = mutation.Write(ctx, writer)
 			}
 		}
@@ -454,12 +454,12 @@ func (s *transactionSet) Start(parent context.Context) {
 }
 
 type printingWriter struct {
-	db *sql.DB
+	target DBWriter
 }
 
 func (l *printingWriter) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	fmt.Printf("%v %v\n", query, args)
-	return l.db.QueryContext(ctx, query, args...)
+	return l.target.QueryContext(ctx, query, args...)
 }
 
 func (l *printingWriter) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {

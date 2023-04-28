@@ -65,10 +65,13 @@ func (cmd *Checksum) Run() error {
 				return errors.WithStack(err)
 			}
 		}
-		cmd.reportDiffs(diffs)
-		err := errors.Errorf("found diffs")
-		logger.WithError(err).Infof("found diffs")
-		return err
+		// did the repair succeed?
+		if len(diffs) > 0 {
+			cmd.reportDiffs(diffs)
+			err := errors.Errorf("found diffs")
+			logger.WithError(err).Infof("found diffs")
+			return err
+		}
 	} else {
 		logger.Infof("no diffs found")
 	}

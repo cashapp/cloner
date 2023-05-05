@@ -740,7 +740,6 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 // repair synchronously diffs and writes the chunk to the target (diff and write)
 // the writes are made synchronously in the replication stream to maintain strong consistency
 func (m *Mutation) repair(ctx context.Context, tx DBWriter) (rowCount int, sizeBytes uint64, err error) {
-	logrus.WithField("task", "snapshot").Infof("repairing chunk %s", m.Chunk.String())
 	targetStream, _, err := readChunk(ctx, tx, "target", m.Chunk)
 	if err != nil {
 		return rowCount, sizeBytes, errors.WithStack(err)

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Vitess Authors.
+Copyright 2023 The Vitess Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,8 +23,6 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return nil
 	}
 	switch in := in.(type) {
-	case AccessMode:
-		return in
 	case *AddColumns:
 		return CloneRefOfAddColumns(in)
 	case *AddConstraintDefinition:
@@ -211,8 +209,6 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return CloneRefOfIntroducerExpr(in)
 	case *IsExpr:
 		return CloneRefOfIsExpr(in)
-	case IsolationLevel:
-		return in
 	case *JSONArrayExpr:
 		return CloneRefOfJSONArrayExpr(in)
 	case *JSONAttributesExpr:
@@ -227,8 +223,8 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return CloneRefOfJSONKeysExpr(in)
 	case *JSONObjectExpr:
 		return CloneRefOfJSONObjectExpr(in)
-	case JSONObjectParam:
-		return CloneJSONObjectParam(in)
+	case *JSONObjectParam:
+		return CloneRefOfJSONObjectParam(in)
 	case *JSONOverlapsExpr:
 		return CloneRefOfJSONOverlapsExpr(in)
 	case *JSONPrettyExpr:
@@ -399,8 +395,6 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return CloneRefOfSetExpr(in)
 	case SetExprs:
 		return CloneSetExprs(in)
-	case *SetTransaction:
-		return CloneRefOfSetTransaction(in)
 	case *Show:
 		return CloneRefOfShow(in)
 	case *ShowBasic:
@@ -415,6 +409,8 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return CloneRefOfShowOther(in)
 	case *ShowThrottledApps:
 		return CloneRefOfShowThrottledApps(in)
+	case *ShowThrottlerStatus:
+		return CloneRefOfShowThrottlerStatus(in)
 	case *StarExpr:
 		return CloneRefOfStarExpr(in)
 	case *Std:
@@ -475,6 +471,8 @@ func CloneSQLNode(in SQLNode) SQLNode {
 		return CloneRefOfUpdateXMLExpr(in)
 	case *Use:
 		return CloneRefOfUse(in)
+	case *VExplainStmt:
+		return CloneRefOfVExplainStmt(in)
 	case *VStream:
 		return CloneRefOfVStream(in)
 	case ValTuple:
@@ -726,6 +724,7 @@ func CloneRefOfBegin(n *Begin) *Begin {
 		return nil
 	}
 	out := *n
+	out.TxAccessModes = CloneSliceOfTxAccessMode(n.TxAccessModes)
 	return &out
 }
 
@@ -870,7 +869,7 @@ func CloneRefOfColumnDefinition(n *ColumnDefinition) *ColumnDefinition {
 	}
 	out := *n
 	out.Name = CloneIdentifierCI(n.Name)
-	out.Type = CloneColumnType(n.Type)
+	out.Type = CloneRefOfColumnType(n.Type)
 	return &out
 }
 
@@ -1578,9 +1577,15 @@ func CloneRefOfJSONObjectExpr(n *JSONObjectExpr) *JSONObjectExpr {
 	return &out
 }
 
-// CloneJSONObjectParam creates a deep clone of the input.
-func CloneJSONObjectParam(n JSONObjectParam) JSONObjectParam {
-	return *CloneRefOfJSONObjectParam(&n)
+// CloneRefOfJSONObjectParam creates a deep clone of the input.
+func CloneRefOfJSONObjectParam(n *JSONObjectParam) *JSONObjectParam {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.Key = CloneExpr(n.Key)
+	out.Value = CloneExpr(n.Value)
+	return &out
 }
 
 // CloneRefOfJSONOverlapsExpr creates a deep clone of the input.
@@ -2487,17 +2492,6 @@ func CloneSetExprs(n SetExprs) SetExprs {
 	return res
 }
 
-// CloneRefOfSetTransaction creates a deep clone of the input.
-func CloneRefOfSetTransaction(n *SetTransaction) *SetTransaction {
-	if n == nil {
-		return nil
-	}
-	out := *n
-	out.Comments = CloneRefOfParsedComments(n.Comments)
-	out.Characteristics = CloneSliceOfCharacteristic(n.Characteristics)
-	return &out
-}
-
 // CloneRefOfShow creates a deep clone of the input.
 func CloneRefOfShow(n *Show) *Show {
 	if n == nil {
@@ -2561,6 +2555,16 @@ func CloneRefOfShowOther(n *ShowOther) *ShowOther {
 
 // CloneRefOfShowThrottledApps creates a deep clone of the input.
 func CloneRefOfShowThrottledApps(n *ShowThrottledApps) *ShowThrottledApps {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.Comments = CloneComments(n.Comments)
+	return &out
+}
+
+// CloneRefOfShowThrottlerStatus creates a deep clone of the input.
+func CloneRefOfShowThrottlerStatus(n *ShowThrottlerStatus) *ShowThrottlerStatus {
 	if n == nil {
 		return nil
 	}
@@ -2900,6 +2904,17 @@ func CloneRefOfUse(n *Use) *Use {
 	}
 	out := *n
 	out.DBName = CloneIdentifierCS(n.DBName)
+	return &out
+}
+
+// CloneRefOfVExplainStmt creates a deep clone of the input.
+func CloneRefOfVExplainStmt(n *VExplainStmt) *VExplainStmt {
+	if n == nil {
+		return nil
+	}
+	out := *n
+	out.Statement = CloneStatement(n.Statement)
+	out.Comments = CloneRefOfParsedComments(n.Comments)
 	return &out
 }
 
@@ -3328,22 +3343,6 @@ func CloneCallable(in Callable) Callable {
 		return CloneRefOfValuesFuncExpr(in)
 	case *WeightStringFuncExpr:
 		return CloneRefOfWeightStringFuncExpr(in)
-	default:
-		// this should never happen
-		return nil
-	}
-}
-
-// CloneCharacteristic creates a deep clone of the input.
-func CloneCharacteristic(in Characteristic) Characteristic {
-	if in == nil {
-		return nil
-	}
-	switch in := in.(type) {
-	case AccessMode:
-		return in
-	case IsolationLevel:
-		return in
 	default:
 		// this should never happen
 		return nil
@@ -3810,14 +3809,14 @@ func CloneStatement(in Statement) Statement {
 		return CloneRefOfSelect(in)
 	case *Set:
 		return CloneRefOfSet(in)
-	case *SetTransaction:
-		return CloneRefOfSetTransaction(in)
 	case *Show:
 		return CloneRefOfShow(in)
 	case *ShowMigrationLogs:
 		return CloneRefOfShowMigrationLogs(in)
 	case *ShowThrottledApps:
 		return CloneRefOfShowThrottledApps(in)
+	case *ShowThrottlerStatus:
+		return CloneRefOfShowThrottlerStatus(in)
 	case *Stream:
 		return CloneRefOfStream(in)
 	case *TruncateTable:
@@ -3830,6 +3829,8 @@ func CloneStatement(in Statement) Statement {
 		return CloneRefOfUpdate(in)
 	case *Use:
 		return CloneRefOfUse(in)
+	case *VExplainStmt:
+		return CloneRefOfVExplainStmt(in)
 	case *VStream:
 		return CloneRefOfVStream(in)
 	default:
@@ -3915,6 +3916,16 @@ func CloneSliceOfIdentifierCI(n []IdentifierCI) []IdentifierCI {
 	return res
 }
 
+// CloneSliceOfTxAccessMode creates a deep clone of the input.
+func CloneSliceOfTxAccessMode(n []TxAccessMode) []TxAccessMode {
+	if n == nil {
+		return nil
+	}
+	res := make([]TxAccessMode, len(n))
+	copy(res, n)
+	return res
+}
+
 // CloneSliceOfRefOfWhen creates a deep clone of the input.
 func CloneSliceOfRefOfWhen(n []*When) []*When {
 	if n == nil {
@@ -3925,11 +3936,6 @@ func CloneSliceOfRefOfWhen(n []*When) []*When {
 		res[i] = CloneRefOfWhen(x)
 	}
 	return res
-}
-
-// CloneColumnType creates a deep clone of the input.
-func CloneColumnType(n ColumnType) ColumnType {
-	return *CloneRefOfColumnType(&n)
 }
 
 // CloneRefOfColumnTypeOptions creates a deep clone of the input.
@@ -4044,17 +4050,6 @@ func CloneSliceOfRefOfJSONObjectParam(n []*JSONObjectParam) []*JSONObjectParam {
 	return res
 }
 
-// CloneRefOfJSONObjectParam creates a deep clone of the input.
-func CloneRefOfJSONObjectParam(n *JSONObjectParam) *JSONObjectParam {
-	if n == nil {
-		return nil
-	}
-	out := *n
-	out.Key = CloneExpr(n.Key)
-	out.Value = CloneExpr(n.Value)
-	return &out
-}
-
 // CloneSliceOfRefOfJtColumnDefinition creates a deep clone of the input.
 func CloneSliceOfRefOfJtColumnDefinition(n []*JtColumnDefinition) []*JtColumnDefinition {
 	if n == nil {
@@ -4084,7 +4079,7 @@ func CloneRefOfJtPathColDef(n *JtPathColDef) *JtPathColDef {
 	}
 	out := *n
 	out.Name = CloneIdentifierCI(n.Name)
-	out.Type = CloneColumnType(n.Type)
+	out.Type = CloneRefOfColumnType(n.Type)
 	out.Path = CloneExpr(n.Path)
 	out.EmptyOnResponse = CloneRefOfJtOnResponse(n.EmptyOnResponse)
 	out.ErrorOnResponse = CloneRefOfJtOnResponse(n.ErrorOnResponse)
@@ -4189,18 +4184,6 @@ func CloneSliceOfTableExpr(n []TableExpr) []TableExpr {
 	res := make([]TableExpr, len(n))
 	for i, x := range n {
 		res[i] = CloneTableExpr(x)
-	}
-	return res
-}
-
-// CloneSliceOfCharacteristic creates a deep clone of the input.
-func CloneSliceOfCharacteristic(n []Characteristic) []Characteristic {
-	if n == nil {
-		return nil
-	}
-	res := make([]Characteristic, len(n))
-	for i, x := range n {
-		res[i] = CloneCharacteristic(x)
 	}
 	return res
 }

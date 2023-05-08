@@ -274,27 +274,6 @@ func (node *Set) formatFast(buf *TrackedBuffer) {
 }
 
 // formatFast formats the node.
-func (node *SetTransaction) formatFast(buf *TrackedBuffer) {
-	if node.Scope == NoScope {
-		buf.WriteString("set ")
-		node.Comments.formatFast(buf)
-		buf.WriteString("transaction ")
-	} else {
-		buf.WriteString("set ")
-		node.Comments.formatFast(buf)
-		buf.WriteString(node.Scope.ToString())
-		buf.WriteString(" transaction ")
-	}
-
-	for i, char := range node.Characteristics {
-		if i > 0 {
-			buf.WriteString(", ")
-		}
-		char.formatFast(buf)
-	}
-}
-
-// formatFast formats the node.
 func (node *DropDatabase) formatFast(buf *TrackedBuffer) {
 	exists := ""
 	if node.IfExists {
@@ -464,6 +443,11 @@ func (node *ShowMigrationLogs) formatFast(buf *TrackedBuffer) {
 // formatFast formats the node.
 func (node *ShowThrottledApps) formatFast(buf *TrackedBuffer) {
 	buf.WriteString("show vitess_throttled_apps")
+}
+
+// formatFast formats the node.
+func (node *ShowThrottlerStatus) formatFast(buf *TrackedBuffer) {
+	buf.WriteString("show vitess_throttler status")
 }
 
 // formatFast formats the node.
@@ -895,7 +879,7 @@ func (ts *TableSpec) formatFast(buf *TrackedBuffer) {
 func (col *ColumnDefinition) formatFast(buf *TrackedBuffer) {
 	col.Name.formatFast(buf)
 	buf.WriteByte(' ')
-	(&col.Type).formatFast(buf)
+	col.Type.formatFast(buf)
 }
 
 // formatFast returns a canonical string representation of the type and all relevant options
@@ -1047,35 +1031,35 @@ func (ct *ColumnType) formatFast(buf *TrackedBuffer) {
 			buf.WriteByte(' ')
 			ct.Options.SecondaryEngineAttribute.formatFast(buf)
 		}
-		if ct.Options.KeyOpt == colKeyPrimary {
+		if ct.Options.KeyOpt == ColKeyPrimary {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[PRIMARY])
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeyUnique {
+		if ct.Options.KeyOpt == ColKeyUnique {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[UNIQUE])
 		}
-		if ct.Options.KeyOpt == colKeyUniqueKey {
+		if ct.Options.KeyOpt == ColKeyUniqueKey {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[UNIQUE])
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeySpatialKey {
+		if ct.Options.KeyOpt == ColKeySpatialKey {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[SPATIAL])
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeyFulltextKey {
+		if ct.Options.KeyOpt == ColKeyFulltextKey {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[FULLTEXT])
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKey {
+		if ct.Options.KeyOpt == ColKey {
 			buf.WriteByte(' ')
 			buf.WriteString(keywordStrings[KEY])
 		}
@@ -1296,7 +1280,21 @@ func (node *Commit) formatFast(buf *TrackedBuffer) {
 
 // formatFast formats the node.
 func (node *Begin) formatFast(buf *TrackedBuffer) {
-	buf.WriteString("begin")
+	if node.TxAccessModes == nil {
+		buf.WriteString("begin")
+		return
+	}
+	buf.WriteString("start transaction")
+	for idx, accessMode := range node.TxAccessModes {
+		if idx == 0 {
+			buf.WriteByte(' ')
+			buf.WriteString(accessMode.ToString())
+			continue
+		}
+		buf.WriteString(", ")
+		buf.WriteString(accessMode.ToString())
+	}
+
 }
 
 // formatFast formats the node.
@@ -1335,6 +1333,15 @@ func (node *ExplainStmt) formatFast(buf *TrackedBuffer) {
 	buf.WriteString("explain ")
 	node.Comments.formatFast(buf)
 	buf.WriteString(format)
+	node.Statement.formatFast(buf)
+}
+
+// formatFast formats the node.
+func (node *VExplainStmt) formatFast(buf *TrackedBuffer) {
+	buf.WriteString("vexplain ")
+	node.Comments.formatFast(buf)
+	buf.WriteString(node.Type.ToString())
+	buf.WriteByte(' ')
 	node.Statement.formatFast(buf)
 }
 
@@ -2568,32 +2575,6 @@ func (node IdentifierCS) formatFast(buf *TrackedBuffer) {
 }
 
 // formatFast formats the node.
-func (node IsolationLevel) formatFast(buf *TrackedBuffer) {
-	buf.WriteString("isolation level ")
-	switch node {
-	case ReadUncommitted:
-		buf.WriteString(ReadUncommittedStr)
-	case ReadCommitted:
-		buf.WriteString(ReadCommittedStr)
-	case RepeatableRead:
-		buf.WriteString(RepeatableReadStr)
-	case Serializable:
-		buf.WriteString(SerializableStr)
-	default:
-		buf.WriteString("Unknown Isolation level value")
-	}
-}
-
-// formatFast formats the node.
-func (node AccessMode) formatFast(buf *TrackedBuffer) {
-	if node == ReadOnly {
-		buf.WriteString(TxReadOnly)
-	} else {
-		buf.WriteString(TxReadWrite)
-	}
-}
-
-// formatFast formats the node.
 func (node *Load) formatFast(buf *TrackedBuffer) {
 	buf.WriteString("AST node missing for Load type")
 }
@@ -3266,7 +3247,7 @@ func (node *JSONObjectExpr) formatFast(buf *TrackedBuffer) {
 }
 
 // formatFast formats the node.
-func (node JSONObjectParam) formatFast(buf *TrackedBuffer) {
+func (node *JSONObjectParam) formatFast(buf *TrackedBuffer) {
 	node.Key.formatFast(buf)
 	buf.WriteString(", ")
 	node.Value.formatFast(buf)
@@ -3616,11 +3597,21 @@ func (node *Variable) formatFast(buf *TrackedBuffer) {
 	case VariableScope:
 		buf.WriteString("@")
 	case SessionScope:
+		if node.Name.EqualString(TransactionIsolationStr) || node.Name.EqualString(TransactionReadOnlyStr) {
+			// @@ without session have `next transaction` scope for these system variables.
+			// so if they are in session scope it has to be printed explicitly.
+			buf.WriteString("@@")
+			buf.WriteString(node.Scope.ToString())
+			buf.WriteByte('.')
+			break
+		}
 		buf.WriteString("@@")
 	case GlobalScope, PersistSysScope, PersistOnlySysScope:
 		buf.WriteString("@@")
 		buf.WriteString(node.Scope.ToString())
 		buf.WriteByte('.')
+	case NextTxScope:
+		buf.WriteString("@@")
 	}
 	node.Name.formatFast(buf)
 }

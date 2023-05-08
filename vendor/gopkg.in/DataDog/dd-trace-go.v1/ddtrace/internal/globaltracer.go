@@ -1,37 +1,38 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2019 Datadog, Inc.
+// Copyright 2016 Datadog, Inc.
 
 package internal // import "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/internal"
 
 import (
-	"sync"
+	"sync/atomic"
 
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
 )
 
 var (
-	mu           sync.RWMutex   // guards globalTracer
-	globalTracer ddtrace.Tracer = &NoopTracer{}
+	// globalTracer stores the current tracer as *ddtrace.Tracer (pointer to interface). The
+	// atomic.Value type requires types to be consistent, which requires using *ddtrace.Tracer.
+	globalTracer atomic.Value
 )
+
+func init() {
+	var tracer ddtrace.Tracer = &NoopTracer{}
+	globalTracer.Store(&tracer)
+}
 
 // SetGlobalTracer sets the global tracer to t.
 func SetGlobalTracer(t ddtrace.Tracer) {
-	mu.Lock()
-	defer mu.Unlock()
+	old := *globalTracer.Swap(&t).(*ddtrace.Tracer)
 	if !Testing {
-		// avoid infinite loop when calling (*mocktracer.Tracer).Stop
-		globalTracer.Stop()
+		old.Stop()
 	}
-	globalTracer = t
 }
 
 // GetGlobalTracer returns the currently active tracer.
 func GetGlobalTracer() ddtrace.Tracer {
-	mu.RLock()
-	defer mu.RUnlock()
-	return globalTracer
+	return *globalTracer.Load().(*ddtrace.Tracer)
 }
 
 // Testing is set to true when the mock tracer is active. It usually signifies that we are in a test

@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2019 Datadog, Inc.
+// Copyright 2016 Datadog, Inc.
 
 package tracer
 
@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 
 	"github.com/tinylib/msgp/msgp"
 )
@@ -23,11 +24,8 @@ import (
 // payload implements io.Reader and can be used with the decoder directly. To create
 // a new payload use the newPayload method.
 //
-// payload is not safe for concurrent use.
-//
-// This structure basically allows us to push traces into the payload one at a time
-// in order to always have knowledge of the payload size, but also making it possible
-// for the agent to decode it as an array.
+// payload is not safe for concurrent use, is meant to be used only once and eventually
+// dismissed.
 type payload struct {
 	// header specifies the first few bytes in the msgpack stream
 	// indicating the type of array (fixarray, array16 or array32)
@@ -38,13 +36,10 @@ type payload struct {
 	off int
 
 	// count specifies the number of items in the stream.
-	count uint64
+	count uint32
 
 	// buf holds the sequence of msgpack-encoded items.
 	buf bytes.Buffer
-
-	// closed specifies the notification channel for each Close call.
-	closed chan struct{}
 }
 
 var _ io.Reader = (*payload)(nil)
@@ -54,7 +49,6 @@ func newPayload() *payload {
 	p := &payload{
 		header: make([]byte, 8),
 		off:    8,
-		closed: make(chan struct{}, 1),
 	}
 	return p
 }
@@ -64,14 +58,14 @@ func (p *payload) push(t spanList) error {
 	if err := msgp.Encode(&p.buf, t); err != nil {
 		return err
 	}
-	p.count++
+	atomic.AddUint32(&p.count, 1)
 	p.updateHeader()
 	return nil
 }
 
 // itemCount returns the number of items available in the srteam.
 func (p *payload) itemCount() int {
-	return int(p.count)
+	return int(atomic.LoadUint32(&p.count))
 }
 
 // size returns the payload size in bytes. After the first read the value becomes
@@ -80,16 +74,22 @@ func (p *payload) size() int {
 	return p.buf.Len() + len(p.header) - p.off
 }
 
-// reset resets the internal buffer, counter and read offset.
+// reset should *not* be used. It is not implemented and is only here to serve
+// as information on how to implement it in case the same payload object ever
+// needs to be reused.
 func (p *payload) reset() {
-	p.off = 8
-	p.count = 0
-	p.buf.Reset()
-	select {
-	case <-p.closed:
-		// ensure there is room
-	default:
-	}
+	// ⚠️  Warning!
+	//
+	// Resetting the payload for re-use requires the transport to wait for the
+	// HTTP package to Close the request body before attempting to re-use it
+	// again! This requires additional logic to be in place. See:
+	//
+	// • https://github.com/golang/go/blob/go1.16/src/net/http/client.go#L136-L138
+	// • https://github.com/DataDog/dd-trace-go/pull/475
+	// • https://github.com/DataDog/dd-trace-go/pull/549
+	// • https://github.com/DataDog/dd-trace-go/pull/976
+	//
+	panic("not implemented")
 }
 
 // https://github.com/msgpack/msgpack/blob/master/spec.md#array-format-family
@@ -102,7 +102,7 @@ const (
 // updateHeader updates the payload header based on the number of items currently
 // present in the stream.
 func (p *payload) updateHeader() {
-	n := p.count
+	n := uint64(atomic.LoadUint32(&p.count))
 	switch {
 	case n <= 15:
 		p.header[7] = msgpackArrayFix + byte(n)
@@ -120,17 +120,12 @@ func (p *payload) updateHeader() {
 
 // Close implements io.Closer
 func (p *payload) Close() error {
-	select {
-	case p.closed <- struct{}{}:
-	default:
-		// ignore subsequent Close calls
-	}
+	// Once the payload has been read, clear the buffer for garbage collection to avoid
+	// a memory leak when references to this object may still be kept by faulty transport
+	// implementations or the standard library. See dd-trace-go#976
+	p.buf = bytes.Buffer{}
 	return nil
 }
-
-// waitClose blocks until the first Close call occurs since the payload
-// was constructed or the last reset happened.
-func (p *payload) waitClose() { <-p.closed }
 
 // Read implements io.Reader. It reads from the msgpack-encoded stream.
 func (p *payload) Read(b []byte) (n int, err error) {

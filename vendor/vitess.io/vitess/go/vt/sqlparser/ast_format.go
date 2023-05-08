@@ -181,22 +181,6 @@ func (node *Set) Format(buf *TrackedBuffer) {
 }
 
 // Format formats the node.
-func (node *SetTransaction) Format(buf *TrackedBuffer) {
-	if node.Scope == NoScope {
-		buf.astPrintf(node, "set %vtransaction ", node.Comments)
-	} else {
-		buf.astPrintf(node, "set %v%s transaction ", node.Comments, node.Scope.ToString())
-	}
-
-	for i, char := range node.Characteristics {
-		if i > 0 {
-			buf.literal(", ")
-		}
-		buf.astPrintf(node, "%v", char)
-	}
-}
-
-// Format formats the node.
 func (node *DropDatabase) Format(buf *TrackedBuffer) {
 	exists := ""
 	if node.IfExists {
@@ -324,6 +308,11 @@ func (node *ShowMigrationLogs) Format(buf *TrackedBuffer) {
 // Format formats the node.
 func (node *ShowThrottledApps) Format(buf *TrackedBuffer) {
 	buf.astPrintf(node, "show vitess_throttled_apps")
+}
+
+// Format formats the node.
+func (node *ShowThrottlerStatus) Format(buf *TrackedBuffer) {
+	buf.astPrintf(node, "show vitess_throttler status")
 }
 
 // Format formats the node.
@@ -678,7 +667,7 @@ func (ts *TableSpec) Format(buf *TrackedBuffer) {
 
 // Format formats the node.
 func (col *ColumnDefinition) Format(buf *TrackedBuffer) {
-	buf.astPrintf(col, "%v %v", col.Name, &col.Type)
+	buf.astPrintf(col, "%v %v", col.Name, col.Type)
 }
 
 // Format returns a canonical string representation of the type and all relevant options
@@ -775,22 +764,22 @@ func (ct *ColumnType) Format(buf *TrackedBuffer) {
 		if ct.Options.SecondaryEngineAttribute != nil {
 			buf.astPrintf(ct, " %s %v", keywordStrings[SECONDARY_ENGINE_ATTRIBUTE], ct.Options.SecondaryEngineAttribute)
 		}
-		if ct.Options.KeyOpt == colKeyPrimary {
+		if ct.Options.KeyOpt == ColKeyPrimary {
 			buf.astPrintf(ct, " %s %s", keywordStrings[PRIMARY], keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeyUnique {
+		if ct.Options.KeyOpt == ColKeyUnique {
 			buf.astPrintf(ct, " %s", keywordStrings[UNIQUE])
 		}
-		if ct.Options.KeyOpt == colKeyUniqueKey {
+		if ct.Options.KeyOpt == ColKeyUniqueKey {
 			buf.astPrintf(ct, " %s %s", keywordStrings[UNIQUE], keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeySpatialKey {
+		if ct.Options.KeyOpt == ColKeySpatialKey {
 			buf.astPrintf(ct, " %s %s", keywordStrings[SPATIAL], keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKeyFulltextKey {
+		if ct.Options.KeyOpt == ColKeyFulltextKey {
 			buf.astPrintf(ct, " %s %s", keywordStrings[FULLTEXT], keywordStrings[KEY])
 		}
-		if ct.Options.KeyOpt == colKey {
+		if ct.Options.KeyOpt == ColKey {
 			buf.astPrintf(ct, " %s", keywordStrings[KEY])
 		}
 		if ct.Options.Reference != nil {
@@ -826,7 +815,7 @@ func (idx *IndexDefinition) Format(buf *TrackedBuffer) {
 	for _, opt := range idx.Options {
 		buf.astPrintf(idx, " %s", opt.Name)
 		if opt.String != "" {
-			buf.astPrintf(idx, " %s", opt.String)
+			buf.astPrintf(idx, " %#s", opt.String)
 		} else if opt.Value != nil {
 			buf.astPrintf(idx, " %v", opt.Value)
 		}
@@ -974,7 +963,19 @@ func (node *Commit) Format(buf *TrackedBuffer) {
 
 // Format formats the node.
 func (node *Begin) Format(buf *TrackedBuffer) {
-	buf.literal("begin")
+	if node.TxAccessModes == nil {
+		buf.literal("begin")
+		return
+	}
+	buf.literal("start transaction")
+	for idx, accessMode := range node.TxAccessModes {
+		if idx == 0 {
+			buf.astPrintf(node, " %s", accessMode.ToString())
+			continue
+		}
+		buf.astPrintf(node, ", %s", accessMode.ToString())
+	}
+
 }
 
 // Format formats the node.
@@ -1008,6 +1009,11 @@ func (node *ExplainStmt) Format(buf *TrackedBuffer) {
 		format = "format = " + node.Type.ToString() + " "
 	}
 	buf.astPrintf(node, "explain %v%s%v", node.Comments, format, node.Statement)
+}
+
+// Format formats the node.
+func (node *VExplainStmt) Format(buf *TrackedBuffer) {
+	buf.astPrintf(node, "vexplain %v%s %v", node.Comments, node.Type.ToString(), node.Statement)
 }
 
 // Format formats the node.
@@ -1767,7 +1773,7 @@ func (node *ConvertExpr) Format(buf *TrackedBuffer) {
 
 // Format formats the node.
 func (node *ConvertUsingExpr) Format(buf *TrackedBuffer) {
-	buf.astPrintf(node, "convert(%v using %s)", node.Expr, node.Type)
+	buf.astPrintf(node, "convert(%v using %#s)", node.Expr, node.Type)
 }
 
 // Format formats the node.
@@ -1939,32 +1945,6 @@ func (node IdentifierCI) Format(buf *TrackedBuffer) {
 // Format formats the node.
 func (node IdentifierCS) Format(buf *TrackedBuffer) {
 	formatID(buf, node.v, NoAt)
-}
-
-// Format formats the node.
-func (node IsolationLevel) Format(buf *TrackedBuffer) {
-	buf.literal("isolation level ")
-	switch node {
-	case ReadUncommitted:
-		buf.literal(ReadUncommittedStr)
-	case ReadCommitted:
-		buf.literal(ReadCommittedStr)
-	case RepeatableRead:
-		buf.literal(RepeatableReadStr)
-	case Serializable:
-		buf.literal(SerializableStr)
-	default:
-		buf.literal("Unknown Isolation level value")
-	}
-}
-
-// Format formats the node.
-func (node AccessMode) Format(buf *TrackedBuffer) {
-	if node == ReadOnly {
-		buf.literal(TxReadOnly)
-	} else {
-		buf.literal(TxReadWrite)
-	}
 }
 
 // Format formats the node.
@@ -2220,7 +2200,7 @@ func (node *AddColumns) Format(buf *TrackedBuffer) {
 
 // Format formats the node.
 func (node AlgorithmValue) Format(buf *TrackedBuffer) {
-	buf.astPrintf(node, "algorithm = %s", string(node))
+	buf.astPrintf(node, "algorithm = %#s", string(node))
 }
 
 // Format formats the node
@@ -2497,7 +2477,7 @@ func (node *JSONObjectExpr) Format(buf *TrackedBuffer) {
 }
 
 // Format formats the node.
-func (node JSONObjectParam) Format(buf *TrackedBuffer) {
+func (node *JSONObjectParam) Format(buf *TrackedBuffer) {
 	buf.astPrintf(node, "%v, %v", node.Key, node.Value)
 }
 
@@ -2760,9 +2740,17 @@ func (node *Variable) Format(buf *TrackedBuffer) {
 	case VariableScope:
 		buf.literal("@")
 	case SessionScope:
+		if node.Name.EqualString(TransactionIsolationStr) || node.Name.EqualString(TransactionReadOnlyStr) {
+			// @@ without session have `next transaction` scope for these system variables.
+			// so if they are in session scope it has to be printed explicitly.
+			buf.astPrintf(node, "@@%s.", node.Scope.ToString())
+			break
+		}
 		buf.literal("@@")
 	case GlobalScope, PersistSysScope, PersistOnlySysScope:
 		buf.astPrintf(node, "@@%s.", node.Scope.ToString())
+	case NextTxScope:
+		buf.literal("@@")
 	}
 	buf.astPrintf(node, "%v", node.Name)
 }

@@ -133,7 +133,6 @@ func main() {
 				"--ignore-tables", "history",
 				"--failed-chunk-retry-count", "10",
 				"--read-retries", "10",
-				"--repair-attempts", "10",
 			)
 			repairingChecksum.Stdout = os.Stdout
 			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "no diffs found", func() {

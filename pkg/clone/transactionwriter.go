@@ -99,7 +99,7 @@ func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff
 			return ctx.Err()
 		}
 
-		err := autotx.TransactWithOptions(ctx, w.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
+		err := w.transact(ctx, func(tx *sql.Tx) error {
 			for _, mutation := range transaction.Mutations {
 				err := w.handleMutation(ctx, tx, mutation)
 				if err != nil {
@@ -325,7 +325,7 @@ func (s *transactionSequence) Run(ctx context.Context) error {
 		if len(transaction.transaction.Mutations) == 0 {
 			continue
 		}
-		err := autotx.TransactWithOptions(ctx, s.writer.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
+		err := s.writer.transact(ctx, func(tx *sql.Tx) error {
 			for _, mutation := range transaction.transaction.Mutations {
 				err := s.writer.handleMutation(ctx, tx, mutation)
 				if err != nil {
@@ -735,6 +735,18 @@ func (w *TransactionWriter) writeCheckpoint(ctx context.Context, tx *sql.Tx, pos
 		return errors.WithStack(err)
 	}
 	return nil
+}
+
+func (w *TransactionWriter) transact(ctx context.Context, f func(tx *sql.Tx) error) error {
+	return errors.WithStack(autotx.TransactWithRetryAndOptions(ctx,
+		w.target,
+		&sql.TxOptions{Isolation: sql.LevelReadCommitted},
+		autotx.RetryOptions{
+			MaxRetries: int(w.config.WriteRetries),
+			IsRetryable: func(err error) bool {
+				return !isSchemaError(err)
+			},
+		}, f))
 }
 
 // repair synchronously diffs and writes the chunk to the target (diff and write)

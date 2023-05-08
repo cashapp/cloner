@@ -18,7 +18,7 @@ require (
 	github.com/pavel-v-chernykh/keystore-go v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/platinummonkey/go-concurrency-limits v0.7.0
-	github.com/prometheus/client_golang v1.15.0
+	github.com/prometheus/client_golang v1.15.1
 	github.com/sirupsen/logrus v1.9.0
 	github.com/stretchr/testify v1.8.1
 	go.uber.org/atomic v1.10.0

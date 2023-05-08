@@ -76,7 +76,7 @@ github.com/dgraph-io/ristretto/z/simd
 # github.com/dlmiddlecote/sqlstats v1.0.2
 ## explicit; go 1.11
 github.com/dlmiddlecote/sqlstats
-# github.com/docker/cli v20.10.14+incompatible
+# github.com/docker/cli v20.10.17+incompatible
 ## explicit
 github.com/docker/cli/cli/compose/interpolation
 github.com/docker/cli/cli/compose/loader
@@ -188,7 +188,7 @@ github.com/opentracing-contrib/go-grpc
 github.com/opentracing/opentracing-go
 github.com/opentracing/opentracing-go/ext
 github.com/opentracing/opentracing-go/log
-# github.com/ory/dockertest/v3 v3.9.1
+# github.com/ory/dockertest/v3 v3.10.0
 ## explicit; go 1.17
 github.com/ory/dockertest/v3
 github.com/ory/dockertest/v3/docker
@@ -329,7 +329,7 @@ go4.org/unsafe/assume-no-moving-gc
 # golang.org/x/crypto v0.5.0
 ## explicit; go 1.17
 golang.org/x/crypto/pbkdf2
-# golang.org/x/mod v0.8.0
+# golang.org/x/mod v0.9.0
 ## explicit; go 1.17
 golang.org/x/mod/semver
 # golang.org/x/net v0.8.0
@@ -345,7 +345,7 @@ golang.org/x/net/trace
 ## explicit
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
-# golang.org/x/sys v0.6.0
+# golang.org/x/sys v0.7.0
 ## explicit; go 1.17
 golang.org/x/sys/execabs
 golang.org/x/sys/internal/unsafeheader
@@ -361,12 +361,13 @@ golang.org/x/text/unicode/norm
 # golang.org/x/time v0.3.0
 ## explicit
 golang.org/x/time/rate
-# golang.org/x/tools v0.6.0
+# golang.org/x/tools v0.7.0
 ## explicit; go 1.18
 golang.org/x/tools/cmd/stringer
 golang.org/x/tools/go/gcexportdata
 golang.org/x/tools/go/internal/packagesdriver
 golang.org/x/tools/go/packages
+golang.org/x/tools/go/types/objectpath
 golang.org/x/tools/internal/event
 golang.org/x/tools/internal/event/core
 golang.org/x/tools/internal/event/keys

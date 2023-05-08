@@ -65,6 +65,12 @@ const (
 	AddSequenceStr      = "add sequence"
 	AddAutoIncStr       = "add auto_increment"
 
+	// ALTER TABLE ALGORITHM string.
+	DefaultStr = "default"
+	CopyStr    = "copy"
+	InplaceStr = "inplace"
+	InstantStr = "instant"
+
 	// Partition and subpartition type strings
 	HashTypeStr  = "hash"
 	KeyTypeStr   = "key"
@@ -228,18 +234,20 @@ const (
 	AscScr  = "asc"
 	DescScr = "desc"
 
-	// SetExpr.Expr, for SET TRANSACTION ... or START TRANSACTION
-	// TransactionStr is the Name for a SET TRANSACTION statement
-	TransactionStr = "transaction"
+	// SetExpr.Expr transaction variables
+	TransactionIsolationStr = "transaction_isolation"
+	TransactionReadOnlyStr  = "transaction_read_only"
 
 	// Transaction isolation levels
-	ReadUncommittedStr = "read uncommitted"
-	ReadCommittedStr   = "read committed"
-	RepeatableReadStr  = "repeatable read"
+	ReadUncommittedStr = "read-uncommitted"
+	ReadCommittedStr   = "read-committed"
+	RepeatableReadStr  = "repeatable-read"
 	SerializableStr    = "serializable"
 
-	TxReadOnly  = "read only"
-	TxReadWrite = "read write"
+	// Transaction access mode
+	WithConsistentSnapshotStr = "with consistent snapshot"
+	ReadWriteStr              = "read write"
+	ReadOnlyStr               = "read only"
 
 	// Explain formats
 	EmptyStr       = ""
@@ -249,6 +257,9 @@ const (
 	TraditionalStr = "traditional"
 	AnalyzeStr     = "analyze"
 	VTExplainStr   = "vtexplain"
+	QueriesStr     = "queries"
+	AllVExplainStr = "all"
+	PlanStr        = "plan"
 
 	// Lock Types
 	ReadStr             = "read"
@@ -280,7 +291,7 @@ const (
 	ProcedureStr               = " procedure status"
 	StatusGlobalStr            = " global status"
 	StatusSessionStr           = " status"
-	TableStr                   = " tables"
+	TablesStr                  = " tables"
 	TableStatusStr             = " table status"
 	TriggerStr                 = " triggers"
 	VariableGlobalStr          = " global variables"
@@ -413,20 +424,6 @@ const (
 	YearMonthStr         = "year_month"
 )
 
-// Constants for Enum type - AccessMode
-const (
-	ReadOnly AccessMode = iota
-	ReadWrite
-)
-
-// Constants for Enum type - IsolationLevel
-const (
-	ReadUncommitted IsolationLevel = iota
-	ReadCommitted
-	RepeatableRead
-	Serializable
-)
-
 // Constants for Enum Type - Insert.Action
 const (
 	InsertAct InsertAction = iota
@@ -454,13 +451,14 @@ const (
 // Constants for scope of variables
 // See https://dev.mysql.com/doc/refman/8.0/en/set-variable.html
 const (
-	NoScope             Scope = iota // This is only used for SET ISOLATION LEVEL
-	SessionScope                     // [SESSION | @@SESSION.| @@LOCAL. | @@] This is the default if no scope is given
-	GlobalScope                      // {GLOBAL | @@GLOBAL.} system_var_name
-	VitessMetadataScope              // @@vitess_metadata.system_var_name
-	PersistSysScope                  // {PERSIST_ONLY | @@PERSIST_ONLY.} system_var_name
-	PersistOnlySysScope              // {PERSIST_ONLY | @@PERSIST_ONLY.} system_var_name
-	VariableScope                    // @var_name   This is used for user defined variables.
+	NoScope             Scope = iota
+	SessionScope              // [SESSION | @@SESSION.| @@LOCAL. | @@] This is the default if no scope is given
+	GlobalScope               // {GLOBAL | @@GLOBAL.} system_var_name
+	VitessMetadataScope       // @@vitess_metadata.system_var_name
+	PersistSysScope           // {PERSIST_ONLY | @@PERSIST_ONLY.} system_var_name
+	PersistOnlySysScope       // {PERSIST_ONLY | @@PERSIST_ONLY.} system_var_name
+	VariableScope             // @var_name   This is used for user defined variables.
+	NextTxScope               // This is used for transaction related variables like transaction_isolation, transaction_read_write and set transaction statement.
 )
 
 // Constants for Enum Type - Lock
@@ -726,6 +724,13 @@ const (
 	AnalyzeType
 )
 
+// Constant for Enum Type - VExplainType
+const (
+	QueriesVExplainType VExplainType = iota
+	PlanVExplainType
+	AllVExplainType
+)
+
 // Constant for Enum Type - SelectIntoType
 const (
 	IntoOutfile SelectIntoType = iota
@@ -874,4 +879,11 @@ const (
 	IntervalHourMicrosecond
 	IntervalMinuteMicrosecond
 	IntervalSecondMicrosecond
+)
+
+// Transaction access mode
+const (
+	WithConsistentSnapshot TxAccessMode = iota
+	ReadWrite
+	ReadOnly
 )

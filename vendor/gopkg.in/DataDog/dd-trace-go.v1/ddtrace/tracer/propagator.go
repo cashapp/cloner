@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2019 Datadog, Inc.
+// Copyright 2016 Datadog, Inc.
 
 package tracer
 
@@ -41,7 +41,7 @@ type TextMapReader interface {
 
 var (
 	// ErrInvalidCarrier is returned when the carrier provided to the propagator
-	// does not implemented the correct interfaces.
+	// does not implement the correct interfaces.
 	ErrInvalidCarrier = errors.New("invalid carrier")
 
 	// ErrInvalidSpanContext is returned when the span context found in the

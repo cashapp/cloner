@@ -29,9 +29,12 @@ limitations under the License.
 package servenv
 
 import (
+	// register the HTTP handlers for profiling
+	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,8 +51,6 @@ import (
 	"vitess.io/vitess/go/vt/logutil"
 	"vitess.io/vitess/go/vt/vterrors"
 
-	// register the HTTP handlers for profiling
-	_ "net/http/pprof"
 	// register the proper init and shutdown hooks for logging
 	_ "vitess.io/vitess/go/vt/logutil"
 
@@ -78,8 +79,10 @@ var (
 var (
 	lameduckPeriod = 50 * time.Millisecond
 	onTermTimeout  = 10 * time.Second
-	onCloseTimeout = time.Nanosecond
+	onCloseTimeout = 10 * time.Second
 	catchSigpipe   bool
+	maxStackSize   = 64 * 1024 * 1024
+	initStartTime  time.Time // time when tablet init started: for debug purposes to time how long a tablet init takes
 )
 
 // RegisterFlags installs the flags used by Init, Run, and RunDefault.
@@ -92,16 +95,24 @@ func RegisterFlags() {
 		fs.DurationVar(&onTermTimeout, "onterm_timeout", onTermTimeout, "wait no more than this for OnTermSync handlers before stopping")
 		fs.DurationVar(&onCloseTimeout, "onclose_timeout", onCloseTimeout, "wait no more than this for OnClose handlers before stopping")
 		fs.BoolVar(&catchSigpipe, "catch-sigpipe", catchSigpipe, "catch and ignore SIGPIPE on stdout and stderr if specified")
+		fs.IntVar(&maxStackSize, "max-stack-size", maxStackSize, "configure the maximum stack size in bytes")
 
 		// pid_file.go
 		fs.StringVar(&pidFile, "pid_file", pidFile, "If set, the process will write its pid to the named file, and delete it on graceful shutdown.")
 	})
 }
 
+func GetInitStartTime() time.Time {
+	mu.Lock()
+	defer mu.Unlock()
+	return initStartTime
+}
+
 // Init is the first phase of the server startup.
 func Init() {
 	mu.Lock()
 	defer mu.Unlock()
+	initStartTime = time.Now()
 
 	// Ignore SIGPIPE if specified
 	// The Go runtime catches SIGPIPE for us on all fds except stdout/stderr
@@ -140,6 +151,11 @@ func Init() {
 	}
 	fdl := stats.NewGauge("MaxFds", "File descriptor limit")
 	fdl.Set(int64(fdLimit.Cur))
+
+	// Limit the stack size. We don't need huge stacks and smaller limits mean
+	// any infinite recursion fires earlier and on low memory systems avoids
+	// out of memory issues in favor of a stack overflow error.
+	debug.SetMaxStack(maxStackSize)
 
 	onInitHooks.Fire()
 }
@@ -319,6 +335,8 @@ func ParseFlags(cmd string) {
 		_flag.Usage()
 		log.Exitf("%s doesn't take any positional arguments, got '%s'", cmd, strings.Join(args, " "))
 	}
+
+	logutil.PurgeLogs()
 }
 
 // GetFlagSetFor returns the flag set for a given command.
@@ -347,6 +365,8 @@ func ParseFlagsWithArgs(cmd string) []string {
 	if len(args) == 0 {
 		log.Exitf("%s expected at least one positional argument", cmd)
 	}
+
+	logutil.PurgeLogs()
 
 	return args
 }

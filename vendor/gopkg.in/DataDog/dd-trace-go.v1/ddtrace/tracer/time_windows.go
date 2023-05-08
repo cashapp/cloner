@@ -1,7 +1,7 @@
 // Unless explicitly stated otherwise all files in this repository are licensed
 // under the Apache License Version 2.0.
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
-// Copyright 2016-2019 Datadog, Inc.
+// Copyright 2016 Datadog, Inc.
 
 package tracer
 
@@ -23,18 +23,26 @@ func highPrecisionNow() int64 {
 }
 
 func lowPrecisionNow() int64 {
-	return time.Now().UTC().UnixNano()
+	return time.Now().UnixNano()
 }
 
-var now func() int64
-
-// If GetSystemTimePreciseAsFileTime is not available we default to the less
-// precise implementation based on time.Now()
-func init() {
+// We use this method of initializing now over an init function due to dependency issues. The init
+// function may run after other declarations, such as that in payload_test:19, which results in a
+// nil dereference panic.
+var now func() int64 = func() func() int64 {
 	if err := windows.LoadGetSystemTimePreciseAsFileTime(); err != nil {
 		log.Warn("Unable to load high precison timer, defaulting to time.Now()")
-		now = lowPrecisionNow
+		return lowPrecisionNow
 	} else {
-		now = highPrecisionNow
+		return highPrecisionNow
 	}
-}
+}()
+
+var nowTime func() time.Time = func() func() time.Time {
+	if err := windows.LoadGetSystemTimePreciseAsFileTime(); err != nil {
+		log.Warn("Unable to load high precison timer, defaulting to time.Now()")
+		return func() time.Time { return time.Unix(0, lowPrecisionNow()) }
+	} else {
+		return func() time.Time { return time.Unix(0, highPrecisionNow()) }
+	}
+}()

@@ -533,8 +533,9 @@ func (r *Repairer) deleteRow(ctx context.Context, diff Diff) error {
 		whereClause.WriteString("`")
 		whereClause.WriteString(" = ?")
 	}
-	_, err := r.target.ExecContext(ctx, "DELETE FROM %s WHERE %s",
-		table.Name, whereClause.String(), diff.Row.KeyValues())
+	args := diff.Row.KeyValues()
+	_, err := r.target.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s",
+		table.Name, whereClause.String()), args...)
 	if err != nil {
 		return errors.WithStack(err)
 	}

@@ -257,7 +257,6 @@ func generateTableChunksAsync(ctx context.Context, table *Table, source *sql.DB,
 	startTime := time.Now()
 
 	chunkSize := table.Config.ChunkSize
-
 	ids := streamIds(source, table, chunkSize, retry)
 
 	var err error

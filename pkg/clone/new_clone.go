@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/mightyguava/autotx"
-
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -216,7 +214,7 @@ func (r *TableRepairer) Run(ctx context.Context) error {
 	return errors.WithStack(err)
 }
 
-func (r *TableRepairer) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
+func (r *TableRepairer) diffChunk(ctx context.Context, chunk Chunk, source *sql.Conn, target *sql.Conn) ([]Diff, error) {
 	var sizeBytes uint64
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
@@ -228,12 +226,14 @@ func (r *TableRepairer) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, err
 	}()
 
 	if r.config.UseCRC32Checksum {
+		// TODO checksumChunk should be retrying here!!
+
 		// start off by running a fast checksum query
-		sourceChecksum, err := checksumChunk(ctx, r.readRetry, "source", r.source, chunk)
+		sourceChecksum, err := checksumChunk(ctx, r.readRetry, "source", source, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		targetChecksum, err := checksumChunk(ctx, r.readRetry, "target", r.target, chunk)
+		targetChecksum, err := checksumChunk(ctx, r.readRetry, "target", target, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -243,13 +243,13 @@ func (r *TableRepairer) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, err
 		}
 	}
 
-	sourceStream, sizeBytes, err := bufferChunk(ctx, r.readRetry, r.source, "source", chunk)
+	sourceStream, sizeBytes, err := bufferChunk(ctx, r.readRetry, source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	// Sort the snapshot using genericCompare which diff depends on
 	sourceStream.sort()
-	targetStream, _, err := bufferChunk(ctx, r.readRetry, r.target, "target", chunk)
+	targetStream, _, err := bufferChunk(ctx, r.readRetry, target, "target", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -263,7 +263,7 @@ func (r *TableRepairer) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, err
 	return diffs, nil
 }
 
-func (r *TableRepairer) insertBatch(ctx context.Context, logger *logrus.Entry, tx *sql.Tx, batch Batch) error {
+func (r *TableRepairer) insertBatch(ctx context.Context, logger *logrus.Entry, target DBWriter, batch Batch) error {
 	logger = logger.WithField("op", "insert")
 	logger.Debugf("inserting %d rows", len(batch.Rows))
 
@@ -287,7 +287,7 @@ func (r *TableRepairer) insertBatch(ctx context.Context, logger *logrus.Entry, t
 		}
 		stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
+		result, err := target.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
@@ -300,7 +300,7 @@ func (r *TableRepairer) insertBatch(ctx context.Context, logger *logrus.Entry, t
 	return nil
 }
 
-func (r *TableRepairer) updateBatch(ctx context.Context, logger *logrus.Entry, tx *sql.Tx, batch Batch) error {
+func (r *TableRepairer) updateBatch(ctx context.Context, logger *logrus.Entry, target *sql.Conn, batch Batch) error {
 	logger = logger.WithField("op", "update")
 	rows := batch.Rows
 	logger.Debugf("updating %d rows", len(rows))
@@ -326,7 +326,7 @@ func (r *TableRepairer) updateBatch(ctx context.Context, logger *logrus.Entry, t
 		make([]interface{}, len(table.KeyColumns)))
 	stmt := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s",
 		table.Name, strings.Join(columnValues, ","), comparison)
-	prepared, err := tx.PrepareContext(ctx, stmt)
+	prepared, err := target.PrepareContext(ctx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
@@ -357,7 +357,7 @@ func (r *TableRepairer) updateBatch(ctx context.Context, logger *logrus.Entry, t
 	return nil
 }
 
-func (r *TableRepairer) deleteBatch(ctx context.Context, logger *logrus.Entry, tx *sql.Tx, batch Batch) error {
+func (r *TableRepairer) deleteBatch(ctx context.Context, logger *logrus.Entry, target *sql.Conn, batch Batch) error {
 	logger = logger.WithField("op", "delete")
 	rows := batch.Rows
 	table := batch.Table
@@ -370,7 +370,7 @@ func (r *TableRepairer) deleteBatch(ctx context.Context, logger *logrus.Entry, t
 		make([]interface{}, len(table.KeyColumns)))
 	stmt := fmt.Sprintf("DELETE FROM `%s` WHERE %s",
 		table.Name, comparison)
-	prepared, err := tx.PrepareContext(ctx, stmt)
+	prepared, err := target.PrepareContext(ctx, stmt)
 	if err != nil {
 		return errors.Wrapf(err, "could not prepare: %s", stmt)
 	}
@@ -392,7 +392,7 @@ func (r *TableRepairer) deleteBatch(ctx context.Context, logger *logrus.Entry, t
 	return nil
 }
 
-func (r *TableRepairer) replaceBatch(ctx context.Context, logger *logrus.Entry, tx *sql.Tx, batch Batch) error {
+func (r *TableRepairer) replaceBatch(ctx context.Context, logger *logrus.Entry, target DBWriter, batch Batch) error {
 	if batch.Type != Insert {
 		return fmt.Errorf("this method only handles inserts")
 	}
@@ -419,7 +419,7 @@ func (r *TableRepairer) replaceBatch(ctx context.Context, logger *logrus.Entry, 
 		}
 		stmt := fmt.Sprintf("INSERT IGNORE INTO %s (%s) VALUES %s",
 			table.Name, table.ColumnList, strings.Join(valueStrings, ","))
-		result, err := tx.ExecContext(ctx, stmt, valueArgs...)
+		result, err := target.ExecContext(ctx, stmt, valueArgs...)
 		if err != nil {
 			return errors.Wrapf(err, "could not execute: %s", stmt)
 		}
@@ -433,51 +433,43 @@ func (r *TableRepairer) replaceBatch(ctx context.Context, logger *logrus.Entry, 
 	return nil
 }
 
-func (r *TableRepairer) writeBatch(ctx context.Context, batch Batch) (err error) {
+func (r *TableRepairer) writeBatch(ctx context.Context, batch Batch, target *sql.Conn) (err error) {
 	logger := logrus.WithField("task", "writer").WithField("table", batch.Table.Name)
 
-	err = autotx.TransactWithRetryAndOptions(ctx, r.target, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, autotx.RetryOptions{
-		MaxRetries: int(r.config.WriteRetries),
-		IsRetryable: func(err error) bool {
-			return !isSchemaError(err) && !isConstraintViolation(err)
-		},
-	}, func(tx *sql.Tx) error {
-		timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
-		defer timer.ObserveDuration()
-		defer func() {
-			if err == nil {
-				sizeBytes := batch.SizeBytes()
-				r.writeLogger.Record(batch.Table.Name, len(batch.Rows), sizeBytes)
-				writesBytes.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(sizeBytes))
-				writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
-			} else {
-				mySQLError := mysqlError(err)
-				var errorCode uint16
-				if mySQLError != nil {
-					errorCode = mySQLError.Number
-				}
-				writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type), strconv.Itoa(int(errorCode))).
-					Add(float64(len(batch.Rows)))
-			}
-		}()
-
-		if r.config.NoDiff {
-			err = r.replaceBatch(ctx, logger, tx, batch)
+	timer := prometheus.NewTimer(writeDuration.WithLabelValues(batch.Table.Name, string(batch.Type)))
+	defer timer.ObserveDuration()
+	defer func() {
+		if err == nil {
+			sizeBytes := batch.SizeBytes()
+			r.writeLogger.Record(batch.Table.Name, len(batch.Rows), sizeBytes)
+			writesBytes.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(sizeBytes))
+			writesSucceeded.WithLabelValues(batch.Table.Name, string(batch.Type)).Add(float64(len(batch.Rows)))
 		} else {
-			switch batch.Type {
-			case Insert:
-				err = r.insertBatch(ctx, logger, tx, batch)
-			case Delete:
-				err = r.deleteBatch(ctx, logger, tx, batch)
-			case Update:
-				err = r.updateBatch(ctx, logger, tx, batch)
-			default:
-				logger.Panicf("Unknown batch type %s", batch.Type)
-				return nil
+			mySQLError := mysqlError(err)
+			var errorCode uint16
+			if mySQLError != nil {
+				errorCode = mySQLError.Number
 			}
+			writesFailed.WithLabelValues(batch.Table.Name, string(batch.Type), strconv.Itoa(int(errorCode))).
+				Add(float64(len(batch.Rows)))
 		}
-		return err
-	})
+	}()
+
+	if r.config.NoDiff {
+		err = r.replaceBatch(ctx, logger, target, batch)
+	} else {
+		switch batch.Type {
+		case Insert:
+			err = r.insertBatch(ctx, logger, target, batch)
+		case Delete:
+			err = r.deleteBatch(ctx, logger, target, batch)
+		case Update:
+			err = r.updateBatch(ctx, logger, target, batch)
+		default:
+			logger.Panicf("Unknown batch type %s", batch.Type)
+			return nil
+		}
+	}
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -497,11 +489,11 @@ func (r *TableRepairer) writeBatch(ctx context.Context, batch Batch) (err error)
 		// In either case splitting the batch is better
 		if len(batch.Rows) > 1 {
 			batch1, batch2 := splitBatch(batch)
-			err = r.writeBatch(ctx, batch1)
+			err = r.writeBatch(ctx, batch1, target)
 			if err != nil {
 				return errors.WithStack(err)
 			}
-			err = r.writeBatch(ctx, batch2)
+			err = r.writeBatch(ctx, batch2, target)
 			if err != nil {
 				return errors.WithStack(err)
 			}
@@ -514,78 +506,83 @@ func (r *TableRepairer) writeBatch(ctx context.Context, batch Batch) (err error)
 	return nil
 }
 
-func (r *TableRepairer) attemptRepair(ctx context.Context, chunk Chunk) (hadDiffs bool, err error) {
-	diffs, err := r.diffChunk(ctx, chunk)
-	if err != nil {
-		err = errors.WithStack(err)
-		return
-	}
-
-	if len(diffs) > 0 {
-		hadDiffs = true
-		chunksWithDiffs.WithLabelValues(r.table.Name).Inc()
-	} else {
-		hadDiffs = false
-		return
-	}
-
-	// Batch up the diffs
-	batches, err := BatchTableWritesSync(diffs)
-	if err != nil {
-		err = errors.WithStack(err)
-		return
-	}
-
-	// Write every batch
-	for _, batch := range batches {
-		err = r.writeBatch(ctx, batch)
-		if err != nil {
-			err = errors.WithStack(err)
-			return
-		}
-	}
-
-	return
-}
-
 func (r *TableRepairer) repair(ctx context.Context, chunk Chunk) error {
 	b := backoff.NewExponentialBackOff()
-	i := 0
+	attempt := 0
 	for {
-		diffs, err := r.diffChunk(ctx, chunk)
+		success, err := r.attemptRepair(ctx, chunk, attempt, b)
 		if err != nil {
 			return errors.WithStack(err)
 		}
-
-		if len(diffs) == 0 {
+		if success {
 			return nil
 		}
 
-		if i == 0 {
-			// Only count the chunk once
-			chunksWithDiffs.WithLabelValues(r.table.Name).Inc()
-		}
-
-		if i > r.config.RepairAttempts {
-			return errors.Errorf("failed to repair chunk %v after %d attempts, "+
-				"either increase --repair-attempts or decrease chunk size or both", chunk.String(), r.config.RepairAttempts)
-		}
-
-		err = r.writeDiffs(ctx, diffs)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		if i > 0 {
-			// Don't back off the first attempt
-			time.Sleep(b.NextBackOff())
-		}
-
-		i++
+		attempt++
 	}
 }
 
-func (r *TableRepairer) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
+func (r *TableRepairer) attemptRepair(ctx context.Context, chunk Chunk, attempt int, b *backoff.ExponentialBackOff) (success bool, err error) {
+	// Make sure we have both a source and target connection so we don't have to wait to acquire a target conn
+	// between running the diff and repairing
+	sourceConn, err := r.source.Conn(ctx)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	defer sourceConn.Close()
+
+	targetConn, err := r.target.Conn(ctx)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	defer targetConn.Close()
+
+	diffs, err := r.diffChunk(ctx, chunk, sourceConn, targetConn)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if len(diffs) == 0 {
+		return true, nil
+	}
+
+	if attempt == 0 {
+		// Only count the chunk once
+		chunksWithDiffs.WithLabelValues(r.table.Name).Inc()
+	}
+
+	if attempt > r.config.RepairAttempts {
+		return false, errors.Errorf("failed to repair chunk %v after %d attempts, "+
+			"either increase --repair-attempts or decrease chunk size or both", chunk.String(), r.config.RepairAttempts)
+	}
+	if attempt > 2 {
+		logrus.Infof("failed to repair chunk %v after %d attempts (%d diffs), "+
+			"will try another %d times", chunk.String(), attempt, len(diffs), r.config.RepairAttempts-attempt)
+	}
+
+	// TODO handle deadlock errors here if necessary
+	err = r.writeDiffs(ctx, diffs, targetConn)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	diffs, err = r.diffChunk(ctx, chunk, sourceConn, targetConn)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if len(diffs) == 0 {
+		return true, nil
+	}
+
+	if attempt > 0 {
+		// Don't back off the first attempt
+		time.Sleep(b.NextBackOff())
+	}
+	return false, nil
+}
+
+func (r *TableRepairer) readChunk(ctx context.Context, chunk Chunk, source *sql.Conn) ([]Diff, error) {
 	var sizeBytes uint64
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
@@ -595,7 +592,7 @@ func (r *TableRepairer) readChunk(ctx context.Context, chunk Chunk) ([]Diff, err
 		rowsProcessed.WithLabelValues(chunk.Table.Name).Add(float64(chunk.Size))
 	}()
 
-	sourceStream, sizeBytes, err := bufferChunk(ctx, r.readRetry, r.source, "source", chunk)
+	sourceStream, sizeBytes, err := bufferChunk(ctx, r.readRetry, source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -616,18 +613,27 @@ func (r *TableRepairer) readChunk(ctx context.Context, chunk Chunk) ([]Diff, err
 }
 
 func (r *TableRepairer) write(ctx context.Context, chunk Chunk) error {
-	diffs, err := r.readChunk(ctx, chunk)
+	sourceConn, err := r.source.Conn(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	targetConn, err := r.target.Conn(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	diffs, err := r.readChunk(ctx, chunk, sourceConn)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	if len(diffs) == 0 {
 		return nil
 	}
-	err = r.writeDiffs(ctx, diffs)
+	err = r.writeDiffs(ctx, diffs, targetConn)
 	return errors.WithStack(err)
 }
 
-func (r *TableRepairer) writeDiffs(ctx context.Context, diffs []Diff) error {
+func (r *TableRepairer) writeDiffs(ctx context.Context, diffs []Diff, target *sql.Conn) error {
 	// Batch up the diffs
 	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
@@ -636,7 +642,7 @@ func (r *TableRepairer) writeDiffs(ctx context.Context, diffs []Diff) error {
 
 	// Write every batch
 	for _, batch := range batches {
-		err = r.writeBatch(ctx, batch)
+		err = r.writeBatch(ctx, batch, target)
 		if err != nil {
 			return errors.WithStack(err)
 		}

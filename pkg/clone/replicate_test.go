@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/sirupsen/logrus"
 
@@ -35,6 +38,31 @@ func TestReplicateSingleThreaded(t *testing.T) {
 
 func TestReplicateParallel(t *testing.T) {
 	doTestReplicate(t, func(replicate *Replicate) {
+		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
+		replicate.ParallelTransactionBatchMaxSize = 50
+		replicate.ReplicationParallelism = 10
+	})
+}
+
+func startMetricsServer() {
+	go func() {
+		bindAddr := "localhost:9102"
+		logrus.Infof("Serving diagnostics on http://%s/metrics and http://%s/debug/pprof", bindAddr, bindAddr)
+		http.Handle("/metrics", promhttp.Handler())
+		err := http.ListenAndServe(bindAddr, nil)
+		logrus.Fatalf("%v", err)
+	}()
+}
+
+func TestReplicateWithNewCloneSingleThreaded(t *testing.T) {
+	startMetricsServer()
+	doTestReplicateWithNewClone(t, func(replicate *Replicate) {
+		replicate.ReplicationParallelism = 1
+	})
+}
+
+func TestReplicateWithNewCloneParallel(t *testing.T) {
+	doTestReplicateWithNewClone(t, func(replicate *Replicate) {
 		replicate.ParallelTransactionBatchTimeout = 5 * heartbeatFrequency
 		replicate.ParallelTransactionBatchMaxSize = 50
 		replicate.ReplicationParallelism = 10
@@ -405,6 +433,217 @@ func doTestReplicate(t *testing.T, replicateConfig func(*Replicate)) {
 		assert.NoError(t, err)
 		assert.Fail(t, "there were diffs (see above)")
 	}
+}
+
+func doTestReplicateWithNewClone(t *testing.T, replicateConfig func(*Replicate)) {
+	vitessContainer, tidbContainer, err := startAll()
+	require.NoError(t, err)
+
+	rowCount := 5000
+	err = insertBunchaData(context.Background(), vitessContainer.Config(), rowCount)
+	require.NoError(t, err)
+
+	source := vitessContainer.Config()
+	// We connect directly to the underlying MySQL database as vtgate does not support binlog streaming
+	sourceDirect := DBConfig{
+		Type:     MySQL,
+		Host:     "localhost:" + vitessContainer.resource.GetPort("15002/tcp"),
+		Username: "vt_dba",
+		Password: "",
+		Database: "vt_customer_-80",
+	}
+
+	target := tidbContainer.Config()
+
+	readerConfig := ReaderConfig{
+		SourceTargetConfig: SourceTargetConfig{
+			Source: sourceDirect,
+			Target: target,
+		},
+		ReadRetries: 1,
+		ChunkSize:   5, // Smaller chunk size to make sure we're exercising chunking
+		Config: Config{
+			Tables: map[string]TableConfig{
+				"customers": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+				},
+				"transactions": {
+					// equivalent to -80
+					TargetWhere:    "(vitess_hash(customer_id) >> 56) < 128",
+					WriteBatchSize: 5, // Smaller batch size to make sure we're exercising batching
+					KeyColumns:     []string{"customer_id", "id"},
+				},
+			},
+		},
+		UseConcurrencyLimits:       false,
+		ThroughputLoggingFrequency: heartbeatFrequency,
+	}
+	replicate := &Replicate{
+		WriterConfig: WriterConfig{
+			WriteRetries:            1,
+			ReaderConfig:            readerConfig,
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		},
+		TaskName:               "customer/-80",
+		HeartbeatFrequency:     heartbeatFrequency,
+		CreateTables:           true,
+		ReplicationParallelism: 10,
+	}
+	replicateConfig(replicate)
+	err = kong.ApplyDefaults(replicate)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+
+	err = deleteAllData(source)
+	require.NoError(t, err)
+
+	doWrite := atomic.NewBool(true)
+
+	targetDB, err := target.DB()
+	require.NoError(t, err)
+	defer targetDB.Close()
+
+	// Write rows in a separate thread
+	writerCount := 5
+	writerDelay := 500 * time.Millisecond
+	for i := 0; i < writerCount; i++ {
+		time.Sleep(writerDelay / 2)
+		g.Go(func() error {
+			db, err := source.DB()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer db.Close()
+			for {
+				if doWrite.Load() {
+					err := write(ctx, db)
+					if err != nil && err != errRollback {
+						return errors.WithStack(err)
+					}
+				}
+
+				// Sleep a bit to make sure the replicator can keep up
+				time.Sleep(writerDelay)
+
+				// Check if we were cancelled
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+			}
+		})
+	}
+
+	// We start writing first then wait for a bit to start replicating so that we can exercise snapshotting
+	time.Sleep(5 * time.Second)
+
+	replicator, err := NewReplicator(*replicate)
+	require.NoError(t, err)
+
+	// Run replication in separate thread
+	firstReplicationCtx, cancelFirstReplication := context.WithCancel(ctx)
+	defer cancelFirstReplication()
+	g.Go(func() error {
+		err := replicator.run(firstReplicationCtx)
+		if isCancelledError(err) {
+			return nil
+		}
+		logrus.WithError(err).Errorf("replication failed: %+v", err)
+		return err
+	})
+
+	// Wait for a little bit to let the replicator exercise
+	time.Sleep(5 * time.Second)
+
+	// Now do the snapshot
+	err = runNewClone(ctx, source, target)
+	require.NoError(t, err)
+
+	// Stop writing and make sure replication lag drops to heartbeat frequency
+	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))
+	require.NoError(t, err)
+	doWrite.Store(false)
+	err = waitFor(ctx, littleReplicationLag(ctx, "customer/-80", targetDB))
+	require.NoError(t, err)
+
+	// Restart the writes
+	doWrite.Store(true)
+
+	// "Forcefully" kill the replicator
+	cancelFirstReplication()
+
+	// Wait for a little bit to let some replication lag build up then restart the replicator
+	time.Sleep(5 * time.Second)
+	g.Go(func() error {
+		err := replicator.run(ctx)
+		if isCancelledError(err) {
+			return nil
+		}
+		logrus.WithError(err).Errorf("replication failed: %+v", err)
+		return err
+	})
+	err = waitFor(ctx, someReplicationLag(ctx, "customer/-80", targetDB))
+	require.NoError(t, err)
+
+	// Let replication catch up and then do a full checksum while replication is running
+	err = waitFor(ctx, littleReplicationLag(ctx, "customer/-80", targetDB))
+	require.NoError(t, err)
+	checksum := &Checksum{
+		ReaderConfig: readerConfig,
+	}
+	err = kong.ApplyDefaults(checksum)
+	// If a chunk fails it might be because the replication is behind so we retry a bunch of times
+	// we should eventually catch the chunk while replication is caught up
+	checksum.FailedChunkRetryCount = 10
+	checksum.TaskName = "customer/-80"
+	require.NoError(t, err)
+	diffs, err := checksum.run(ctx)
+	require.NoError(t, err)
+
+	cancel()
+	err = g.Wait()
+	if !isCancelledError(err) {
+		require.NoError(t, err)
+	}
+
+	if len(diffs) > 0 {
+		err := reportDiffs(diffs)
+		assert.NoError(t, err)
+		assert.Fail(t, "there were diffs (see above)")
+	}
+}
+
+func runNewClone(ctx context.Context, source DBConfig, target DBConfig) error {
+	clone := &NewClone{
+		WriterConfig: WriterConfig{
+			ReaderConfig: ReaderConfig{
+				SourceTargetConfig: SourceTargetConfig{
+					Source: source,
+					Target: target,
+				},
+				ThroughputLoggingFrequency: 100 * time.Millisecond,
+				ChunkSize:                  5, // Smaller chunk size to make sure we're exercising chunking
+				WriteBatchSize:             5, // Smaller batch size to make sure we're exercising batching
+			},
+			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
+		},
+		RepairAttempts: 10,
+	}
+	err := kong.ApplyDefaults(clone)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = clone.run(ctx)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
 }
 
 func snapshotCompleted(ctx context.Context, task string, db *sql.DB) func() error {

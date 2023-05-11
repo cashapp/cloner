@@ -2,14 +2,145 @@ package clone
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
+	"github.com/mightyguava/autotx"
+	"vitess.io/vitess/go/vt/proto/topodata"
+
 	"github.com/alecthomas/kong"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
+	"vitess.io/vitess/go/vt/key"
 )
 
-func TestOneShardCloneWithTargetData(t *testing.T) {
+func insertBunchaData(ctx context.Context, config DBConfig, rowCount int) error {
+	db, err := config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer db.Close()
+
+	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		for i := 0; i < rowCount; i++ {
+			result, err := tx.ExecContext(ctx, `
+				INSERT INTO customers (name) VALUES (CONCAT('Customer ', LEFT(MD5(RAND()), 8)))
+			`)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			customerID, err := result.LastInsertId()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			// Insert a new row
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO transactions (customer_id, amount_cents, description) 
+				VALUES (?, RAND()*9999+1, CONCAT('Description ', LEFT(MD5(RAND()), 8)))
+			`, customerID)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func clearTables(ctx context.Context, config DBConfig) error {
+	db, err := config.DB()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer db.Close()
+
+	err = autotx.Transact(ctx, db, func(tx *sql.Tx) error {
+		_, err = tx.ExecContext(ctx, `DELETE FROM customers`)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM transactions`)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func countRows(target DBConfig, tableName string) (int, error) {
+	db, err := target.DB()
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	row := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+tableName)
+	var rowCount int
+	err = row.Scan(&rowCount)
+	return rowCount, err
+}
+
+func countRowsShardFilter(target DBConfig, tableName string, shard string) (int, error) {
+	db, err := target.DB()
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	spec, err := key.ParseShardingSpec(shard)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	rows, err := conn.QueryContext(ctx, "SELECT id FROM "+tableName)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+	defer rows.Close()
+	var rowCount int
+	for rows.Next() {
+		var id int64
+		err = rows.Scan(&id)
+		if err != nil {
+			return 0, errors.WithStack(err)
+		}
+		if inShard(uint64(id), spec) {
+			rowCount++
+		}
+	}
+	return rowCount, err
+}
+
+func inShard(id uint64, shard []*topodata.KeyRange) bool {
+	destination := key.DestinationKeyspaceID(vhash(id))
+	for _, keyRange := range shard {
+		if key.KeyRangeContains(keyRange, destination) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOneShardNewCloneWithTargetData(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -54,7 +185,7 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 			},
 		},
 	}
-	clone := &Clone{
+	clone := &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
@@ -95,7 +226,7 @@ func TestOneShardCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestUnshardedClone(t *testing.T) {
+func TestUnshardedNewClone(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -114,7 +245,7 @@ func TestUnshardedClone(t *testing.T) {
 	assert.NoError(t, err)
 
 	source.Database = "@replica"
-	clone := &Clone{
+	clone := &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig: ReaderConfig{
 				SourceTargetConfig: SourceTargetConfig{
@@ -150,7 +281,7 @@ func TestUnshardedClone(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestCloneNoDiff(t *testing.T) {
+func TestNewCloneNoDiff(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -190,7 +321,7 @@ func TestCloneNoDiff(t *testing.T) {
 			},
 		},
 	}
-	clone := &Clone{
+	clone := &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
@@ -224,10 +355,10 @@ func TestCloneNoDiff(t *testing.T) {
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
 	// Nothing is deleted so some stuff will be left around
-	assert.Equal(t, 43, len(diffs))
+	assert.Equal(t, 50, len(diffs))
 }
 
-func TestAllShardsCloneWithTargetData(t *testing.T) {
+func TestAllShardsNewCloneWithTargetData(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -268,7 +399,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			},
 		},
 	}
-	clone := &Clone{
+	clone := &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
@@ -306,7 +437,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 			},
 		},
 	}
-	clone = &Clone{
+	clone = &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig:            readerConfig,
 			WriteBatchStatementSize: 3, // Smaller batch size to make sure we're exercising batching
@@ -343,7 +474,7 @@ func TestAllShardsCloneWithTargetData(t *testing.T) {
 	assert.Equal(t, 0, len(diffs))
 }
 
-func TestUnshardedCloneEmptySourceTables(t *testing.T) {
+func TestUnshardedNewCloneEmptySourceTables(t *testing.T) {
 	_, _, err := startAll()
 	assert.NoError(t, err)
 
@@ -358,7 +489,7 @@ func TestUnshardedCloneEmptySourceTables(t *testing.T) {
 	assert.NoError(t, err)
 
 	source.Database = "@replica"
-	clone := &Clone{
+	clone := &NewClone{
 		WriterConfig: WriterConfig{
 			ReaderConfig: ReaderConfig{
 				SourceTargetConfig: SourceTargetConfig{

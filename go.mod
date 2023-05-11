@@ -26,7 +26,7 @@ require (
 	google.golang.org/grpc v1.55.0
 	gopkg.in/yaml.v2 v2.4.0
 	software.sslmate.com/src/go-pkcs12 v0.0.0-20200830195227-52f69702a001
-	vitess.io/vitess v0.16.1
+	vitess.io/vitess v0.16.2
 )
 
 require (

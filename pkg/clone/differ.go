@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -346,11 +348,24 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 
 	if r.config.UseCRC32Checksum {
 		// start off by running a fast checksum query
-		sourceChecksum, err := checksumChunk(ctx, r.sourceRetry, "source", source, chunk)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		targetChecksum, err := checksumChunk(ctx, r.targetRetry, "target", target, chunk)
+		var sourceChecksum, targetChecksum int64
+
+		g, ctx := errgroup.WithContext(ctx)
+		g.Go(func() (err error) {
+			sourceChecksum, err = checksumChunk(ctx, r.sourceRetry, "source", source, chunk)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			return nil
+		})
+		g.Go(func() (err error) {
+			targetChecksum, err = checksumChunk(ctx, r.targetRetry, "target", target, chunk)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			return nil
+		})
+		err := g.Wait()
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -360,22 +375,36 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 		}
 	}
 
-	sourceStream, sizeBytes, err := bufferChunk(ctx, r.sourceRetry, source, "source", chunk)
+	var sourceStream, targetStream *bufferStream
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		sourceStream, sizeBytes, err = bufferChunk(ctx, r.sourceRetry, source, "source", chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		// Sort the snapshot using genericCompare which diff depends on
+		sourceStream.sort()
+		return nil
+	})
+	g.Go(func() (err error) {
+		targetStream, _, err = bufferChunk(ctx, r.targetRetry, target, "target", chunk)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		// Sort the snapshot using genericCompare which diff depends on
+		targetStream.sort()
+		return nil
+	})
+	err = g.Wait()
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	// Sort the snapshot using genericCompare which diff depends on
-	sourceStream.sort()
-	targetStream, _, err := bufferChunk(ctx, r.targetRetry, target, "target", chunk)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
+
 	diffs, err := StreamDiff(ctx, chunk.Table, sourceStream, targetStream)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	// Sort the snapshot using genericCompare which diff depends on
-	targetStream.sort()
 
 	return diffs, nil
 }

@@ -321,6 +321,19 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 }
 
 func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
+	// Make sure we have both a source and target connection before we start to minimize
+	// the amount of time in between the reads
+	source, err := r.source.Conn(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer source.Close()
+	target, err := r.target.Conn(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer target.Close()
+
 	var sizeBytes uint64
 	timer := prometheus.NewTimer(diffDuration.WithLabelValues(chunk.Table.Name))
 	defer func() {
@@ -333,11 +346,11 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 
 	if r.config.UseCRC32Checksum {
 		// start off by running a fast checksum query
-		sourceChecksum, err := checksumChunk(ctx, r.sourceRetry, "source", r.source, chunk)
+		sourceChecksum, err := checksumChunk(ctx, r.sourceRetry, "source", source, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		targetChecksum, err := checksumChunk(ctx, r.targetRetry, "target", r.target, chunk)
+		targetChecksum, err := checksumChunk(ctx, r.targetRetry, "target", target, chunk)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -347,13 +360,13 @@ func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 		}
 	}
 
-	sourceStream, sizeBytes, err := bufferChunk(ctx, r.sourceRetry, r.source, "source", chunk)
+	sourceStream, sizeBytes, err := bufferChunk(ctx, r.sourceRetry, source, "source", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	// Sort the snapshot using genericCompare which diff depends on
 	sourceStream.sort()
-	targetStream, _, err := bufferChunk(ctx, r.targetRetry, r.target, "target", chunk)
+	targetStream, _, err := bufferChunk(ctx, r.targetRetry, target, "target", chunk)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

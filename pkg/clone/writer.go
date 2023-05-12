@@ -157,9 +157,43 @@ func (l *ThroughputLogger) maybeLog() {
 
 	now := time.Now()
 	sinceLastLog := now.Sub(l.lastLog)
-	if sinceLastLog > l.frequency {
-		l.log()
+	if sinceLastLog < l.frequency {
+		return
 	}
+
+	l.lastLog = now
+
+	var message string
+	bytesPerSecond := float64(l.bytes) / sinceLastLog.Seconds()
+	rowsPerSecond := float64(l.rows) / sinceLastLog.Seconds()
+	tables := strings.Join(l.tables.ToSlice(), ",")
+	if l.estimatedRows == 0 {
+		message = fmt.Sprintf("%s throughput: %v/s %v rows/s tables: %v",
+			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond), tables)
+	} else {
+		totalDuration := time.Since(l.start)
+		overallRowsPerSecond := float64(l.totalRows) / totalDuration.Seconds()
+		var percentDone float64
+		var timeRemaining time.Duration
+		if l.totalRows > l.estimatedRows {
+			percentDone = 100
+			timeRemaining = 0
+		} else {
+			rowsRemaining := l.estimatedRows - l.totalRows
+			fractionRemaining := float64(rowsRemaining) / float64(l.estimatedRows)
+			percentDone = float64(100) * (1 - fractionRemaining)
+			timeRemaining = time.Duration((float64(rowsRemaining) / overallRowsPerSecond) * float64(time.Second))
+		}
+		message = fmt.Sprintf("%s throughput: %v/s %v rows/s total rows: %d tables: %v "+
+			"(estimated rows: %d estimated done: %2.f%% estimated time remaining: %v)",
+			l.name, humanize.Bytes(uint64(bytesPerSecond)), l.humanizeFloat(rowsPerSecond),
+			l.totalRows, tables, l.estimatedRows, percentDone, l.humanizeDuration(timeRemaining))
+	}
+	atomic.StoreUint64(&l.rows, 0)
+	atomic.StoreUint64(&l.bytes, 0)
+	l.tables.Clear()
+
+	go log.Info(message)
 }
 
 func (l *ThroughputLogger) log() {

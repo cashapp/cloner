@@ -290,7 +290,6 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 		if contains(tableConfig.IgnoreColumns, columnName) {
 			continue
 		}
-		// Want to continue on generated columns
 		if column.Generated {
 			continue
 		}

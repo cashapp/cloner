@@ -224,6 +224,8 @@ func ignoredColumnsBitmap(config ReaderConfig, table *mysqlschema.Table) []bool 
 	for i, column := range table.Columns {
 		if contains(config.IgnoreColumns, table.Name+"."+column.Name) {
 			bitmap[i] = true
+		} else if column.Generated {
+			bitmap[i] = true
 		} else if hasConfig && contains(tableConfig.IgnoreColumns, column.Name) {
 			bitmap[i] = true
 		} else {
@@ -286,6 +288,10 @@ func loadTable(ctx context.Context, config ReaderConfig, databaseType DataSource
 			continue
 		}
 		if contains(tableConfig.IgnoreColumns, columnName) {
+			continue
+		}
+		// Want to continue on generated columns
+		if column.Generated {
 			continue
 		}
 		columnNames = append(columnNames, columnName)

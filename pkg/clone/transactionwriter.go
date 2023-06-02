@@ -617,6 +617,12 @@ func (m *Mutation) replace(ctx context.Context, tx DBWriter) error {
 	valueStrings := make([]string, 0, len(m.Rows))
 	valueArgs := make([]interface{}, 0, len(m.Rows)*len(tableSchema.Columns))
 	for _, row := range m.Rows {
+		if len(row) != len(m.Table.Columns) {
+			panic(fmt.Sprintf("row column count %d doesn't match the cached table schema columns: %v (%v), "+
+				"there may have been a schema change and you will most likely need to restart replication by deleting"+
+				" the checkpoint row in the target database",
+				len(row), m.Table.Name, m.Table.ColumnList))
+		}
 		valueStrings = append(valueStrings, values)
 		for i, val := range row {
 			if !m.Table.IgnoredColumnsBitmap[i] {

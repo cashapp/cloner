@@ -676,7 +676,8 @@ func TestIgnoredColumnsReplaceStatement(t *testing.T) {
 	defer ctrl.Finish()
 
 	table := &Table{
-		Name: "mytable",
+		Name:    "mytable",
+		Columns: []string{"mycolumn1", "mycolumn2", "mycolumn3", "mycolumn4"},
 		MysqlTable: &mysqlschema.Table{
 			Name: "mytable",
 			Columns: []mysqlschema.TableColumn{

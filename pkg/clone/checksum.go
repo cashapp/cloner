@@ -83,20 +83,7 @@ func (cmd *Checksum) repairDiffs(ctx context.Context, diffs []Diff) ([]Diff, err
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	for i := 0; i < cmd.RepairAttempts; i++ {
-		logrus.WithError(err).Warnf("found diffs")
-		cmd.reportDiffs(diffs)
-		logrus.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
-		diffs, err = repairer.repairDiffs(ctx, diffs)
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-		if len(diffs) == 0 {
-			logrus.Infof("all diffs repaired")
-			return nil, nil
-		}
-	}
-	return diffs, nil
+	return repairer.repair(ctx, diffs)
 }
 
 func (cmd *Checksum) reportDiffs(diffs []Diff) {
@@ -400,47 +387,54 @@ func (r *Repairer) repairDiff(ctx context.Context, diff Diff) (newDiff *Diff, er
 			panic(fmt.Sprintf("can't repair %s", diff.Type.String()))
 		}
 
-		sourceRow, err := r.readRow(ctx, diff)
+		newDiff, err = r.rediff(ctx, diff)
 		if err != nil {
 			return errors.WithStack(err)
-		}
-		targetRow, err := r.readRow(ctx, diff)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		if sourceRow == nil && targetRow != nil {
-			newDiff = &Diff{
-				Type:   Delete,
-				Row:    targetRow,
-				Target: nil,
-			}
-		} else if sourceRow != nil && targetRow == nil {
-			newDiff = &Diff{
-				Type:   Insert,
-				Row:    sourceRow,
-				Target: nil,
-			}
-		} else if sourceRow == nil && targetRow == nil {
-			newDiff = nil
-		} else {
-			rowsEqual, err := RowsEqual(sourceRow, targetRow)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			if rowsEqual {
-				newDiff = nil
-			} else {
-				newDiff = &Diff{
-					Type:   Update,
-					Row:    sourceRow,
-					Target: targetRow,
-				}
-			}
 		}
 		return nil
 	})
 
 	return newDiff, errors.WithStack(err)
+}
+
+func (r *Repairer) rediff(ctx context.Context, diff Diff) (*Diff, error) {
+	sourceRow, err := r.readRow(ctx, diff)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	targetRow, err := r.readRow(ctx, diff)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	if sourceRow == nil && targetRow != nil {
+		return &Diff{
+			Type:   Delete,
+			Row:    targetRow,
+			Target: nil,
+		}, nil
+	} else if sourceRow != nil && targetRow == nil {
+		return &Diff{
+			Type:   Insert,
+			Row:    sourceRow,
+			Target: nil,
+		}, nil
+	} else if sourceRow == nil && targetRow == nil {
+		return nil, nil
+	} else {
+		rowsEqual, err := RowsEqual(sourceRow, targetRow)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if rowsEqual {
+			return nil, nil
+		} else {
+			return &Diff{
+				Type:   Update,
+				Row:    sourceRow,
+				Target: targetRow,
+			}, nil
+		}
+	}
 }
 
 func (r *Repairer) readRow(ctx context.Context, diff Diff) (*Row, error) {
@@ -541,4 +535,45 @@ func (r *Repairer) deleteRow(ctx context.Context, diff Diff) error {
 	}
 	// We replaced the data in the row slice with pointers to the local vars, so lets put this back after the read
 	return nil
+}
+
+func (r *Repairer) repair(ctx context.Context, diffs []Diff) ([]Diff, error) {
+	logrus.Infof("rechecking %d diffs", len(diffs))
+	diffs, err := r.rediffAll(ctx, diffs)
+	if err != nil {
+		return diffs, errors.WithStack(err)
+	}
+	if len(diffs) == 0 {
+		logrus.Infof("all diffs good after recheck")
+		logrus.Infof("no diffs found")
+		return nil, nil
+	}
+	for i := 0; i < r.config.RepairAttempts; i++ {
+		logrus.Warnf("found diffs")
+		r.config.reportDiffs(diffs)
+		logrus.Infof("repair attempt %d out of %d", i+1, r.config.RepairAttempts)
+		diffs, err := r.repairDiffs(ctx, diffs)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if len(diffs) == 0 {
+			logrus.Infof("all diffs repaired")
+			return nil, nil
+		}
+	}
+	return diffs, nil
+}
+
+func (r *Repairer) rediffAll(ctx context.Context, diffs []Diff) ([]Diff, error) {
+	var newDiffs []Diff
+	for _, diff := range diffs {
+		newDiff, err := r.rediff(ctx, diff)
+		if err != nil {
+			return diffs, errors.WithStack(err)
+		}
+		if newDiff != nil {
+			newDiffs = append(newDiffs, *newDiff)
+		}
+	}
+	return newDiffs, nil
 }

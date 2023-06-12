@@ -132,6 +132,7 @@ func main() {
 				"--chunk-size", "5000",
 				"--ignore-tables", "history",
 				"--failed-chunk-retry-count", "10",
+				"--retry-with-table-lock",
 				"--read-retries", "10",
 			)
 			repairingChecksum.Stdout = os.Stdout

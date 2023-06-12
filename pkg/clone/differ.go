@@ -281,17 +281,33 @@ func (r *Reader) readChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	return diffs, nil
 }
 
+type ChunkRetryError struct {
+	Chunk Chunk
+}
+
+func (c *ChunkRetryError) Error() string {
+	return fmt.Sprintf("chunk %s[%d-%d) had diffs", c.Chunk.Table.Name, c.Chunk.Start, c.Chunk.End)
+}
+
+func (c *ChunkRetryError) Is(target error) bool {
+	_, ok := target.(*ChunkRetryError)
+	return ok
+}
+
 func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 	// TODO what we should actually do here is do a single pass through all of the successful chunks,
 	//      then keep retrying with the failed chunks until they all succeed,
 	//      but that will require larger code restructurings so let's wait with that for a bit
 	var err error
+	var diffs []Diff
 	if r.config.FailedChunkRetryCount == 0 {
-		return r.doDiffChunk(ctx, chunk)
+		diffs, err = r.doDiffChunk(ctx, chunk)
+		if err != nil {
+			return diffs, errors.WithStack(err)
+		}
 	} else {
-		var diffs []Diff
 		tries := 0
-		err := backoff.Retry(func() error {
+		err = backoff.Retry(func() error {
 			diffs = nil
 			diffs, err = r.doDiffChunk(ctx, chunk)
 			if err != nil {
@@ -310,16 +326,21 @@ func (r *Reader) diffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {
 						chunk.Table.Name, chunk.Start, chunk.End, r.config.FailedChunkRetryCount-tries)
 					tries++
 				}
-				return errors.Errorf("chunk %s[%d-%d) had diffs",
-					chunk.Table.Name, chunk.Start, chunk.End)
+				return &ChunkRetryError{Chunk: chunk}
 			}
 		}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(r.config.FailedChunkRetryCount)), ctx))
-		if len(diffs) > 0 {
-			return diffs, nil
-		} else {
-			return diffs, err
+		if errors.Is(err, &ChunkRetryError{}) {
+			err = nil
 		}
 	}
+	if len(diffs) > 0 && r.config.RetryWithTableLock {
+		diffs, err = r.diffChunkWithTableLock(ctx, chunk)
+		if err != nil {
+			return diffs, errors.WithStack(err)
+		}
+		return diffs, nil
+	}
+	return diffs, err
 }
 
 func (r *Reader) doDiffChunk(ctx context.Context, chunk Chunk) ([]Diff, error) {

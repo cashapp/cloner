@@ -59,7 +59,9 @@ type ReaderConfig struct {
 	// code reused by both checksum and clone so it's easier to put this here for now
 	WriteBatchSize int `help:"Default size of the write batch per transaction (can also be overridden per table)" default:"100"`
 
-	FailedChunkRetryCount int `help:"Retry a chunk if it fails the checksum, this can be used to checksum across a replica with a master" default:"0"`
+	FailedChunkRetryCount int           `help:"Retry a chunk if it fails the checksum, this can be used to checksum across a replica with a master" default:"0"`
+	RetryWithTableLock    bool          `help:"If a chunk fails to checksum then retry again with LOCK TABLES READ, then try to checksum the chunk again for a few times until TableLockMaxDuration is reached" default:"false"`
+	TableLockMaxDuration  time.Duration `help:"The maximum duration to hold a read lock for, this should be higher than the observed replication lag" default:"1m"`
 
 	Tables []string `help:"Which tables to process, default is all in the source schema"`
 

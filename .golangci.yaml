@@ -58,6 +58,8 @@ linters:
     - execinquery
     - unused
     - unparam
+    - tagalign
+    - depguard
 
 linters-settings:
   govet:

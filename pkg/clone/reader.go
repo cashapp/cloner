@@ -207,7 +207,7 @@ func (r *Reader) diffChunkWithTableLock(ctx context.Context, chunk Chunk) (diffs
 	if errors.Is(err, &ChunkRetryError{}) {
 		err = nil
 	}
-	lockDuration := time.Now().Sub(startTime)
+	lockDuration := time.Since(startTime)
 	if len(diffs) > 0 {
 		log.Infof("%d diffs found still in chunk %v after diffing with table lock, total lock duration: %v", len(diffs), chunk.String(), lockDuration)
 	} else {
@@ -219,6 +219,9 @@ func (r *Reader) diffChunkWithTableLock(ctx context.Context, chunk Chunk) (diffs
 func (r *Reader) lockTable(ctx context.Context) (*sql.Conn, error) {
 	log.Infof("locking table for reads only: %v", r.table.Name)
 	conn, err := r.source.Conn(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	_, err = conn.ExecContext(ctx, fmt.Sprintf("LOCK TABLE `%s` READ", r.table.Name))
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -230,8 +233,7 @@ func (r *Reader) lockTable(ctx context.Context) (*sql.Conn, error) {
 func (r *Reader) unlockTables(ctx context.Context, conn *sql.Conn) error {
 	log.Infof("unlocking table: %v", r.table.Name)
 	defer conn.Close()
-	conn, err := r.source.Conn(ctx)
-	_, err = conn.ExecContext(ctx, "UNLOCK TABLES")
+	_, err := conn.ExecContext(ctx, "UNLOCK TABLES")
 	if err != nil {
 		return errors.WithStack(err)
 	}

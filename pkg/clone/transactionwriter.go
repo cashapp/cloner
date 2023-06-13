@@ -779,7 +779,7 @@ func (m *Mutation) repair(ctx context.Context, tx DBWriter) (rowCount int, sizeB
 	batches, err := BatchTableWritesSync(diffs)
 	if err != nil {
 		err = errors.WithStack(err)
-		return
+		return rowCount, sizeBytes, err
 	}
 
 	writeCount := 0
@@ -794,7 +794,7 @@ func (m *Mutation) repair(ctx context.Context, tx DBWriter) (rowCount int, sizeB
 		batchRowCount, batchBytes, err = m.Write(ctx, tx)
 		if err != nil {
 			err = errors.WithStack(err)
-			return
+			return rowCount, sizeBytes, err
 		}
 		rowCount += batchRowCount
 		sizeBytes += batchBytes

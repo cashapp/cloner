@@ -249,15 +249,28 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 
 	diffs := make(chan Diff)
 
+	var repairer *Repairer
 	if cmd.RepairDirectly {
 		if cmd.RepairAttempts == 0 {
 			return nil, errors.Errorf("--repair-attempts needs to be >0")
 		}
-		repairer, err := NewRepairer(cmd)
+		repairer, err = NewRepairer(cmd)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
-		g.Go(func() error {
+	}
+
+	// Reporter
+	var foundDiffs []Diff
+	g.Go(func() error {
+		for diff := range diffs {
+			logrus.WithField("table", diff.Row.Table.Name).
+				WithField("diff_type", diff.Type.String()).
+				WithField("id", diff.Row.KeyValues()).
+				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
+			foundDiffs = append(foundDiffs, diff)
+		}
+		if repairer != nil {
 			retry := RetryOptions{
 				Limiter:       nil, // will we ever use concurrency limiter again? probably not?
 				AcquireMetric: writeLimiterDelay,
@@ -287,19 +300,6 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 					}
 				}
 			}
-			return nil
-		})
-	}
-
-	// Reporter
-	var foundDiffs []Diff
-	g.Go(func() error {
-		for diff := range diffs {
-			logrus.WithField("table", diff.Row.Table.Name).
-				WithField("diff_type", diff.Type.String()).
-				WithField("id", diff.Row.KeyValues()).
-				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
-			foundDiffs = append(foundDiffs, diff)
 		}
 		return nil
 	})

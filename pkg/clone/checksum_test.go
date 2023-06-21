@@ -94,3 +94,47 @@ func TestChecksumWithRepair(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(diffs))
 }
+
+func TestChecksumWithRepairDirectly(t *testing.T) {
+	source, err := startMysql()
+	assert.NoError(t, err)
+	defer source.Close()
+	err = insertBunchaData(context.Background(), source.Config(), 1000)
+	assert.NoError(t, err)
+
+	target, err := startMysql()
+	assert.NoError(t, err)
+	defer target.Close()
+	err = insertBunchaData(context.Background(), target.Config(), 10)
+	assert.NoError(t, err)
+
+	checksum := &Checksum{
+		IgnoreReplicationLag: true,
+		ReaderConfig: ReaderConfig{
+			SourceTargetConfig: SourceTargetConfig{
+				Source: source.Config(),
+				Target: target.Config(),
+			},
+			ChunkSize: 5, // Smaller chunk size to make sure we're exercising chunking
+			Config: Config{
+				Tables: map[string]TableConfig{
+					"customers":    {},
+					"transactions": {KeyColumns: []string{"customer_id", "id"}},
+				},
+			},
+		},
+	}
+	checksum.RepairAttempts = 1
+	checksum.RepairDirectly = true
+	err = kong.ApplyDefaults(checksum)
+	assert.NoError(t, err)
+	diffs, err := checksum.run(context.Background())
+	assert.NoError(t, err)
+	checksum.reportDiffs(diffs)
+
+	checksum.RepairAttempts = 0
+	checksum.RepairDirectly = false
+	diffs, err = checksum.repairDiffs(context.Background(), diffs)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(diffs))
+}

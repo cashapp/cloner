@@ -25,6 +25,7 @@ type Checksum struct {
 	MaxReplicationLag              time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
 	MaxReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
 	RepairAttempts                 int           `help:"How many times to try to repair diffs that are found" default:"0"`
+	RepairDirectly                 bool          `help:"Repair diffs as we find them"`
 
 	WriteRetries uint64        `help:"Number of retries" default:"5"`
 	WriteTimeout time.Duration `help:"Timeout for each write" default:"30s"`
@@ -247,6 +248,48 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	g, ctx := errgroup.WithContext(ctx)
 
 	diffs := make(chan Diff)
+
+	if cmd.RepairDirectly {
+		if cmd.RepairAttempts == 0 {
+			return nil, errors.Errorf("--repair-attempts needs to be >0")
+		}
+		repairer, err := NewRepairer(cmd)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		g.Go(func() error {
+			retry := RetryOptions{
+				Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+				AcquireMetric: writeLimiterDelay,
+				MaxRetries:    cmd.WriteRetries,
+				Timeout:       cmd.WriteTimeout,
+			}
+			for d := range diffs {
+				diff := d
+				var newDiff *Diff
+				for i := 0; i < cmd.RepairAttempts; i++ {
+					logrus.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
+					err := Retry(ctx, retry, func(ctx context.Context) error {
+						newDiff, err = repairer.repairDiff(ctx, diff)
+						if err != nil {
+							return errors.WithStack(err)
+						}
+						return nil
+					})
+					if err != nil {
+						logrus.WithError(err).Errorf("failed to repair diff: %v", err)
+					}
+					if newDiff == nil {
+						logrus.Infof("successfully repaired diff: %v", diff)
+						break
+					} else {
+						diff = *newDiff
+					}
+				}
+			}
+			return nil
+		})
+	}
 
 	// Reporter
 	var foundDiffs []Diff

@@ -52,6 +52,7 @@ type Reader struct {
 	sourceRetry RetryOptions
 	targetRetry RetryOptions
 	speedLogger *ThroughputLogger
+	repLag      ReplicationLagWaiter
 }
 
 func (r *Reader) Diff(ctx context.Context, diffs chan Diff) error {
@@ -120,6 +121,8 @@ func (r *Reader) read(ctx context.Context, diffsCh chan Diff, diff bool) error {
 }
 
 func (r *Reader) processChunk(ctx context.Context, diffsCh chan Diff, diff bool, chunk Chunk) (err error) {
+	r.repLag.WaitForGoodLag(ctx)
+
 	var diffs []Diff
 	if diff {
 		diffs, err = r.diffChunk(ctx, chunk)
@@ -240,20 +243,13 @@ func (r *Reader) unlockTables(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
-func NewReader(
-	config ReaderConfig,
-	table *Table,
-	speedLogger *ThroughputLogger,
-	source *sql.DB,
-	sourceLimiter core.Limiter,
-	target *sql.DB,
-	targetLimiter core.Limiter,
-) *Reader {
+func NewReader(config ReaderConfig, table *Table, speedLogger *ThroughputLogger, repLag ReplicationLagWaiter, source *sql.DB, sourceLimiter core.Limiter, target *sql.DB, targetLimiter core.Limiter) *Reader {
 	return &Reader{
 		config:      config,
 		table:       table,
 		source:      source,
 		speedLogger: speedLogger,
+		repLag:      repLag,
 		sourceRetry: RetryOptions{
 			Limiter:       sourceLimiter,
 			AcquireMetric: readLimiterDelay.WithLabelValues("source"),

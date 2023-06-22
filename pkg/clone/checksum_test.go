@@ -130,6 +130,7 @@ func TestChecksumWithRepairDirectly(t *testing.T) {
 	assert.NoError(t, err)
 	diffs, err := checksum.run(context.Background())
 	assert.NoError(t, err)
+	assert.Equal(t, 2000, len(diffs))
 
 	checksum.RepairAttempts = 0
 	checksum.RepairDirectly = false

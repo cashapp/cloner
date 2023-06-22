@@ -6,6 +6,7 @@ import (
 	"fmt"
 	_ "net/http/pprof"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dlmiddlecote/sqlstats"
@@ -19,13 +20,13 @@ import (
 type Checksum struct {
 	ReaderConfig
 
-	HeartbeatTable                 string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
-	TaskName                       string        `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
-	IgnoreReplicationLag           bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
-	MaxReplicationLag              time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
-	MaxReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
-	RepairAttempts                 int           `help:"How many times to try to repair diffs that are found" default:"0"`
-	RepairDirectly                 bool          `help:"Repair diffs as we find them"`
+	HeartbeatTable              string        `help:"Name of the table to use for heartbeats which emits the real replication lag as the 'replication_lag_seconds' metric" optional:"" default:"_cloner_heartbeat"`
+	TaskName                    string        `help:"The name of this task is used in heartbeat and checkpoints table as well as the name of the lease, only a single process can run as this task" default:"main"`
+	IgnoreReplicationLag        bool          `help:"Normally replication lag is checked before we start the checksum since the algorithm used assumes low replication lag, passing this flag ignores the check" default:"false"`
+	MaxReplicationLag           time.Duration `help:"The maximum replication lag we tolerate, this should be more than the heartbeat frequency used by the replication task" default:"1m"`
+	ReplicationLagCheckInterval time.Duration `help:"Maximum interval to check replication lag" default:"1m"`
+	RepairAttempts              int           `help:"How many times to try to repair diffs that are found" default:"0"`
+	RepairDirectly              bool          `help:"Repair diffs as we find them"`
 
 	WriteRetries uint64        `help:"Number of retries" default:"5"`
 	WriteTimeout time.Duration `help:"Timeout for each write" default:"30s"`
@@ -201,27 +202,19 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	defer prometheus.Unregister(targetReaderCollector)
 
 	logger := logrus.WithField("task", "checksum")
-	if !cmd.IgnoreReplicationLag {
-		for {
-			delay := cmd.MaxReplicationLagCheckInterval
-			lag, err := cmd.readLag(ctx, targetReader)
-			if err != nil {
-				logger.WithError(err).Warnf("failed to check replication lag, checking again in %v", delay)
-				continue
-			}
-			if lag < cmd.MaxReplicationLag {
-				logger.Infof("replication lag %v below %v",
-					lag, cmd.MaxReplicationLag)
-				break
-			}
-
-			delay = durationMin(lag, cmd.MaxReplicationLagCheckInterval)
-
-			logger.Infof("replication lag %v is still above %v, checking again in %v",
-				lag, cmd.MaxReplicationLag, delay)
-			time.Sleep(delay)
+	var repLag ReplicationLagWaiter
+	if cmd.IgnoreReplicationLag {
+		repLag = &IgnoreReplicationLagWaiter{}
+	} else {
+		replicationLagReader, err := NewReplicationLagReader(cmd)
+		if err != nil {
+			return nil, errors.WithStack(err)
 		}
+		replicationLagReader.Start(ctx)
+		defer replicationLagReader.Stop()
+		repLag = replicationLagReader
 	}
+	repLag.WaitForGoodLag(ctx)
 
 	var tablesToDo []string
 	for _, t := range tables {
@@ -320,6 +313,7 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 					cmd.ReaderConfig,
 					table,
 					readLogger,
+					repLag,
 					sourceReader,
 					sourceLimiter,
 					targetReader,
@@ -351,6 +345,164 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	}
 
 	return foundDiffs, err
+}
+
+type ReplicationLagWaiter interface {
+	WaitForGoodLag(ctx context.Context)
+}
+
+type IgnoreReplicationLagWaiter struct {
+}
+
+func (i *IgnoreReplicationLagWaiter) WaitForGoodLag(ctx context.Context) {
+}
+
+type ReplicationLagReader struct {
+	config *Checksum
+	source *sql.DB
+	target *sql.DB
+
+	cancelFunc context.CancelFunc
+
+	lagCond *sync.Cond
+	// lag is protected by lagCond.L
+	lag time.Duration
+}
+
+func NewReplicationLagReader(config *Checksum) (*ReplicationLagReader, error) {
+	m := sync.Mutex{}
+	nextLagReadCond := sync.NewCond(&m)
+	source, err := config.Source.ReaderDB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	target, err := config.Target.DB()
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &ReplicationLagReader{
+		config:  config,
+		source:  source,
+		target:  target,
+		lag:     time.Hour,
+		lagCond: nextLagReadCond,
+	}, nil
+}
+
+func (r *ReplicationLagReader) readLag(ctx context.Context, target *sql.DB) (time.Duration, error) {
+	retry := RetryOptions{
+		Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+		AcquireMetric: readLimiterDelay.WithLabelValues("target"),
+		MaxRetries:    r.config.ReadRetries,
+		Timeout:       r.config.ReadTimeout,
+	}
+
+	lag := time.Hour
+	err := Retry(ctx, retry, func(ctx context.Context) error {
+		stmt := fmt.Sprintf("SELECT time FROM %s WHERE task = ?", r.config.HeartbeatTable)
+		row := target.QueryRowContext(ctx, stmt, r.config.TaskName)
+		var lastHeartbeat time.Time
+		err := row.Scan(&lastHeartbeat)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// We haven't received the first heartbeat yet, maybe we're an hour behind, who knows?
+				// We're definitely more than 0 ms so let's go with one hour just to pick a number >0
+				lag = time.Hour
+			} else {
+				return errors.WithStack(err)
+			}
+		} else {
+			lag = time.Now().UTC().Sub(lastHeartbeat)
+		}
+		return nil
+	})
+	if err != nil {
+		return lag, errors.WithStack(err)
+	}
+	return lag, nil
+}
+
+func (r *ReplicationLagReader) Start(ctx context.Context) {
+	ctx, cancelFunc := context.WithCancel(ctx)
+	r.cancelFunc = cancelFunc
+	go r.mainLoop(ctx)
+}
+
+func (r *ReplicationLagReader) mainLoop(ctx context.Context) {
+	for {
+		err := r.updateLag(ctx)
+
+		if err != nil {
+			logrus.WithError(err).Warnf("failed to check replication lag, checking again in %v",
+				r.config.ReplicationLagCheckInterval)
+			continue
+		}
+
+		if !r.IsGoodLag() {
+			logrus.Infof("checksumming paused, replication lag %v is above %v, checking again in %v",
+				r.GetLag(), r.config.MaxReplicationLag, r.config.ReplicationLagCheckInterval)
+		}
+
+		select {
+		case <-time.After(r.config.ReplicationLagCheckInterval):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (r *ReplicationLagReader) updateLag(ctx context.Context) error {
+	r.lagCond.L.Lock()
+	defer r.lagCond.L.Unlock()
+	lag, err := r.config.readLag(ctx, r.target)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	r.lag = lag
+	r.lagCond.Broadcast()
+	return nil
+}
+
+func (r *ReplicationLagReader) GetLag() time.Duration {
+	r.lagCond.L.Lock()
+	defer r.lagCond.L.Unlock()
+	return r.lag
+}
+
+// WaitForGoodLag blocks the current goroutine until replication lag is < MaxReplicationLag or the context is cancelled
+func (r *ReplicationLagReader) WaitForGoodLag(ctx context.Context) {
+	for {
+		if r.IsGoodLag() {
+			return
+		}
+		select {
+		case <-CondWaitChan(r.lagCond):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (r *ReplicationLagReader) IsGoodLag() bool {
+	if r.config.IgnoreReplicationLag {
+		return true
+	}
+	return r.GetLag() < r.config.MaxReplicationLag
+}
+
+func (r *ReplicationLagReader) Stop() {
+	r.cancelFunc()
+}
+
+func CondWaitChan(cond *sync.Cond) chan interface{} {
+	ch := make(chan interface{})
+	go func() {
+		cond.L.Lock()
+		defer cond.L.Unlock()
+		cond.Wait()
+		close(ch)
+	}()
+	return ch
 }
 
 type Repairer struct {

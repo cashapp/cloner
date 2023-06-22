@@ -188,6 +188,7 @@ func (cmd *Clone) run() error {
 				cmd.ReaderConfig,
 				table,
 				readLogger,
+				&IgnoreReplicationLagWaiter{},
 				sourceReader,
 				sourceLimiter,
 				targetReader,

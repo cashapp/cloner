@@ -438,7 +438,7 @@ func (r *ReplicationLagReader) mainLoop(ctx context.Context) {
 		}
 
 		isGoodAfter := r.IsGoodLag()
-		if isGoodBefore && !isGoodAfter {
+		if !isGoodAfter {
 			logrus.Infof("checksumming paused, replication lag %v is above %v, checking again in %v",
 				r.GetLag(), r.config.MaxReplicationLag, r.config.ReplicationLagCheckInterval)
 		}

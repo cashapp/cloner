@@ -256,22 +256,20 @@ func (cmd *Checksum) run(ctx context.Context) ([]Diff, error) {
 	// Reporter
 	var foundDiffs []Diff
 	g.Go(func() error {
-		for diff := range diffs {
+		for d := range diffs {
+			diff := d
 			logrus.WithField("table", diff.Row.Table.Name).
 				WithField("diff_type", diff.Type.String()).
 				WithField("id", diff.Row.KeyValues()).
 				Errorf("diff %v %v id=%v", diff.Row.Table.Name, diff.Type, diff.Row.KeyValues())
 			foundDiffs = append(foundDiffs, diff)
-		}
-		if repairer != nil {
-			retry := RetryOptions{
-				Limiter:       nil, // will we ever use concurrency limiter again? probably not?
-				AcquireMetric: writeLimiterDelay,
-				MaxRetries:    cmd.WriteRetries,
-				Timeout:       cmd.WriteTimeout,
-			}
-			for d := range diffs {
-				diff := d
+			if repairer != nil {
+				retry := RetryOptions{
+					Limiter:       nil, // will we ever use concurrency limiter again? probably not?
+					AcquireMetric: writeLimiterDelay,
+					MaxRetries:    cmd.WriteRetries,
+					Timeout:       cmd.WriteTimeout,
+				}
 				var newDiff *Diff
 				for i := 0; i < cmd.RepairAttempts; i++ {
 					logrus.Infof("repair attempt %d out of %d", i+1, cmd.RepairAttempts)
@@ -430,6 +428,7 @@ func (r *ReplicationLagReader) Start(ctx context.Context) {
 
 func (r *ReplicationLagReader) mainLoop(ctx context.Context) {
 	for {
+		isGoodBefore := r.IsGoodLag()
 		err := r.updateLag(ctx)
 
 		if err != nil {
@@ -438,9 +437,14 @@ func (r *ReplicationLagReader) mainLoop(ctx context.Context) {
 			continue
 		}
 
-		if !r.IsGoodLag() {
+		isGoodAfter := r.IsGoodLag()
+		if isGoodBefore && !isGoodAfter {
 			logrus.Infof("checksumming paused, replication lag %v is above %v, checking again in %v",
 				r.GetLag(), r.config.MaxReplicationLag, r.config.ReplicationLagCheckInterval)
+		}
+		if !isGoodBefore && isGoodAfter {
+			logrus.Infof("checksumming resumed, replication lag %v is below %v",
+				r.GetLag(), r.config.MaxReplicationLag)
 		}
 
 		select {

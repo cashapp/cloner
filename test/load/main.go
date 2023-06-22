@@ -139,11 +139,7 @@ func main() {
 				"--repair-directly",
 			)
 			repairingChecksum.Stdout = os.Stdout
-			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "no diffs found", func() {
-				fmt.Println("test successful!")
-				os.Exit(0)
-			})
-			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "all diffs repaired", func() {
+			repairingChecksum.Stderr = OnFirstOutput(os.Stderr, "all diffs good after recheck", func() {
 				checksum := exec.Command(cloner,
 					"checksum",
 					"--metrics-port", "9103",

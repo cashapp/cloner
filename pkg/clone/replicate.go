@@ -252,12 +252,12 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	transactions := make(chan Transaction)
+	transactions := make(chan Transaction, r.config.ReplicationParallelism)
 	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
 		return r.transactionStreamer.Run(ctx, b, transactions)
 	}))
 
-	transactionsAfterSnapshot := make(chan Transaction)
+	transactionsAfterSnapshot := make(chan Transaction, r.config.ReplicationParallelism)
 	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
 		return r.snapshotter.Run(ctx, b, transactions, transactionsAfterSnapshot)
 	}))

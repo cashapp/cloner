@@ -64,7 +64,7 @@ func TestReverseReplication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Make sure they are equal before we start
-	diffs, err := doRunChecksum(ctx, source.Config(), target.Config(), func(config *Checksum) {
+	diffs, err := doRunChecksum(ctx, target.Config(), source.Config(), func(config *Checksum) {
 		config.IgnoreReplicationLag = true
 	})
 	require.NoError(t, err)

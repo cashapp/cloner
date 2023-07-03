@@ -99,7 +99,7 @@ type Replicate struct {
 	ServerID uint32 `help:"Unique identifier of this server, defaults to a hash of the TaskName" optional:""`
 
 	// TODO should this just be ReadParallelism
-	ChunkParallelism int `help:"Number of chunks to snapshot concurrently" default:"10"`
+	ChunkParallelism int `help:"Number of chunks to snapshot concurrently" default:"10"` // the size of the channel buffer
 
 	CheckpointTable      string        `help:"Name of the table to used on the target to save the current position in the replication stream" optional:"" default:"_cloner_checkpoint"`
 	WatermarkTable       string        `help:"Name of the table to use to reconcile chunk result sets during snapshot rebuilds" optional:"" default:"_cloner_watermark"`
@@ -252,12 +252,12 @@ func (r *Replicator) run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	transactions := make(chan Transaction)
+	transactions := make(chan Transaction, r.config.ReplicationParallelism)
 	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
 		return r.transactionStreamer.Run(ctx, b, transactions)
 	}))
 
-	transactionsAfterSnapshot := make(chan Transaction)
+	transactionsAfterSnapshot := make(chan Transaction, r.config.ReplicationParallelism)
 	g.Go(RestartLoop(ctx, r.config.ReconnectBackoff(), func(b backoff.BackOff) error {
 		return r.snapshotter.Run(ctx, b, transactions, transactionsAfterSnapshot)
 	}))
@@ -284,7 +284,7 @@ func RestartLoop(ctx context.Context, b backoff.BackOff, loop func(b backoff.Bac
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			default:
+			default: // yyuan TODO: check if this goes back to the loop
 			}
 			err := loop(b)
 			if errors.Is(err, context.Canceled) {

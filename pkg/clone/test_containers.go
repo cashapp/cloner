@@ -323,6 +323,7 @@ func startTidb() error {
 	return nil
 }
 
+// create a docker container with a MySQL database to mimic one database server
 func startMysql() (*DatabaseContainer, error) {
 	log.Debugf("starting MySQL")
 	// uses a sensible default on windows (tcp/http) and linux/osx (socket)

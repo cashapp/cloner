@@ -103,7 +103,7 @@ func (s *Snapshotter) Init(ctx context.Context) error {
 	return nil
 }
 
-func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source chan Transaction, sink chan Transaction) error {
+func (s *Snapshotter) Run(ctx context.Context, b backoff.BackOff, source <-chan Transaction, sink chan<- Transaction) error {
 	prometheus.MustRegister(s.sourceCollector)
 	defer prometheus.Unregister(s.sourceCollector)
 

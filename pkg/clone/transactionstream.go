@@ -69,7 +69,7 @@ func NewTransactionStreamer(config Replicate) (*TransactionStream, error) {
 	return &r, nil
 }
 
-func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output chan Transaction) error {
+func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output chan<- Transaction) error {
 	var err error
 
 	syncerCfg, err := s.config.Source.BinlogSyncerConfig(ctx, s.config.ServerID)

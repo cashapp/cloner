@@ -94,6 +94,7 @@ func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 			writeTime := time.Now().UTC()
 			count, err := h.write(ctx)
 			if err != nil {
+				logrus.Errorf("error writing a heart beat: %v", err)
 				return errors.WithStack(err)
 			}
 
@@ -172,6 +173,7 @@ func (h *Heartbeat) createTable(ctx context.Context) error {
 func (h *Heartbeat) write(ctx context.Context) (int64, error) {
 	var count int64
 	err := Retry(ctx, h.sourceRetry, func(ctx context.Context) error {
+		logrus.Infof("write a heart beat to source database")
 		return autotx.TransactWithOptions(ctx, h.source, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, "SET time_zone = \"+00:00\"")
 			if err != nil {

@@ -24,7 +24,7 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 	start := time.Now()
 	retries := 0
 	b := backoff.WithContext(backoff.WithMaxRetries(IndefiniteExponentialBackOff(), options.MaxRetries), ctx)
-	err := backoff.RetryNotify(func() (err error) {
+	operation := func() (err error) {
 		debug.SetPanicOnFault(true)
 		defer func() {
 			if r := recover(); r != nil {
@@ -66,11 +66,15 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 		err = f(ctx)
 
 		if isSchemaError(err) {
+			logrus.Infof("schema error, returning without retrying")
 			return backoff.Permanent(err)
 		}
 
 		return err
-	}, b, func(err error, duration time.Duration) {
+	}
+
+	err := backoff.RetryNotify(operation, b, func(err error, duration time.Duration) {
+		logrus.Warnf("failed operation due to %v, will retry after %s", err, duration)
 		retries++
 	})
 
@@ -80,6 +84,6 @@ func Retry(ctx context.Context, options RetryOptions, f func(context.Context) er
 func IndefiniteExponentialBackOff() *backoff.ExponentialBackOff {
 	exponentialBackOff := backoff.NewExponentialBackOff()
 	exponentialBackOff.MaxInterval = 1 * time.Minute
-	exponentialBackOff.MaxElapsedTime = 0
+	exponentialBackOff.MaxElapsedTime = 0 // never stops
 	return exponentialBackOff
 }

@@ -110,9 +110,9 @@ func (c *Conn) readInitialHandshake() error {
 // generate auth response data according to auth plugin
 //
 // NOTE: the returned boolean value indicates whether to add a \NUL to the end of data.
-//       it is quite tricky because MySQL server expects different formats of responses in different auth situations.
-//       here the \NUL needs to be added when sending back the empty password or cleartext password in 'sha256_password'
-//       authentication.
+// it is quite tricky because MySQL server expects different formats of responses in different auth situations.
+// here the \NUL needs to be added when sending back the empty password or cleartext password in 'sha256_password'
+// authentication.
 func (c *Conn) genAuthResponse(authData []byte) ([]byte, bool, error) {
 	// password hashing
 	switch c.authPluginName {
@@ -120,6 +120,8 @@ func (c *Conn) genAuthResponse(authData []byte) ([]byte, bool, error) {
 		return CalcPassword(authData[:20], []byte(c.password)), false, nil
 	case AUTH_CACHING_SHA2_PASSWORD:
 		return CalcCachingSha2Password(authData, c.password), false, nil
+	case AUTH_CLEAR_PASSWORD:
+		return []byte(c.password), true, nil
 	case AUTH_SHA256_PASSWORD:
 		if len(c.password) == 0 {
 			return nil, true, nil

@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/siddontang/go-log/loggers"
 
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
@@ -111,7 +114,14 @@ type BinlogSyncerConfig struct {
 	Option func(*client.Conn) error
 
 	// Set Logger
-	Logger *log.Logger
+	Logger loggers.Advanced
+
+	// Set Dialer
+	Dialer client.Dialer
+
+	RowsEventDecodeFunc func(*RowsEvent, []byte) error
+
+	DiscardGTIDSet bool
 }
 
 // BinlogSyncer syncs binlog event from server.
@@ -129,6 +139,9 @@ type BinlogSyncer struct {
 	nextPos Position
 
 	prevGset, currGset GTIDSet
+
+	// instead of GTIDSet.Clone, use this to speed up calculate prevGset
+	prevMySQLGTIDEvent *GTIDEvent
 
 	running bool
 
@@ -149,11 +162,15 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	if cfg.ServerID == 0 {
 		cfg.Logger.Fatal("can't use 0 as the server ID")
 	}
+	if cfg.Dialer == nil {
+		dialer := &net.Dialer{}
+		cfg.Dialer = dialer.DialContext
+	}
 
 	// Clear the Password to avoid outputing it in log.
 	pass := cfg.Password
 	cfg.Password = ""
-	cfg.Logger.Infof("create BinlogSyncer with config %v", cfg)
+	cfg.Logger.Infof("create BinlogSyncer with config %+v", cfg)
 	cfg.Password = pass
 
 	b := new(BinlogSyncer)
@@ -166,6 +183,7 @@ func NewBinlogSyncer(cfg BinlogSyncerConfig) *BinlogSyncer {
 	b.parser.SetTimestampStringLocation(b.cfg.TimestampStringLocation)
 	b.parser.SetUseDecimal(b.cfg.UseDecimal)
 	b.parser.SetVerifyChecksum(b.cfg.VerifyChecksum)
+	b.parser.SetRowsEventDecodeFunc(b.cfg.RowsEventDecodeFunc)
 	b.running = false
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 
@@ -202,7 +220,7 @@ func (b *BinlogSyncer) close() {
 		// Use a new connection to kill the binlog syncer
 		// because calling KILL from the same connection
 		// doesn't actually disconnect it.
-		c, err := b.newConnection()
+		c, err := b.newConnection(context.Background())
 		if err == nil {
 			b.killConnection(c, b.lastConnectionID)
 			c.Close()
@@ -233,7 +251,7 @@ func (b *BinlogSyncer) registerSlave() error {
 	}
 
 	var err error
-	b.c, err = b.newConnection()
+	b.c, err = b.newConnection(b.ctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -375,7 +393,7 @@ func (b *BinlogSyncer) prepare() error {
 func (b *BinlogSyncer) startDumpStream() *BinlogStreamer {
 	b.running = true
 
-	s := newBinlogStreamer()
+	s := NewBinlogStreamer()
 
 	b.wg.Add(1)
 	go b.onStream(s)
@@ -409,6 +427,7 @@ func (b *BinlogSyncer) StartSync(pos Position) (*BinlogStreamer, error) {
 func (b *BinlogSyncer) StartSyncGTID(gset GTIDSet) (*BinlogStreamer, error) {
 	b.cfg.Logger.Infof("begin to sync binlog from GTID set %s", gset)
 
+	b.prevMySQLGTIDEvent = nil
 	b.prevGset = gset
 
 	b.m.Lock()
@@ -605,6 +624,7 @@ func (b *BinlogSyncer) retrySync() error {
 	defer b.m.Unlock()
 
 	b.parser.Reset()
+	b.prevMySQLGTIDEvent = nil
 
 	if b.prevGset != nil {
 		msg := fmt.Sprintf("begin to re-sync from %s", b.prevGset.String())
@@ -764,7 +784,7 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 
 	needACK := false
 	if b.cfg.SemiSyncEnabled && (data[0] == SemiSyncIndicator) {
-		needACK = (data[1] == 0x01)
+		needACK = data[1] == 0x01
 		//skip semi sync header
 		data = data[2:]
 	}
@@ -786,21 +806,6 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		return b.currGset.Clone()
 	}
 
-	advanceCurrentGtidSet := func(gtid string) error {
-		if b.currGset == nil {
-			b.currGset = b.prevGset.Clone()
-		}
-		prev := b.currGset.Clone()
-		err := b.currGset.Update(gtid)
-		if err == nil {
-			// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
-			if !b.currGset.Equal(prev) {
-				b.prevGset = prev
-			}
-		}
-		return err
-	}
-
 	switch event := e.Event.(type) {
 	case *RotateEvent:
 		b.nextPos.Name = string(event.NextLogName)
@@ -810,24 +815,40 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		if b.prevGset == nil {
 			break
 		}
-		u, _ := uuid.FromBytes(event.SID)
-		err := advanceCurrentGtidSet(fmt.Sprintf("%s:%d", u.String(), event.GNO))
-		if err != nil {
-			return errors.Trace(err)
+		if b.currGset == nil {
+			b.currGset = b.prevGset.Clone()
 		}
+		u, _ := uuid.FromBytes(event.SID)
+		b.currGset.(*MysqlGTIDSet).AddGTID(u, event.GNO)
+		if b.prevMySQLGTIDEvent != nil {
+			u, _ = uuid.FromBytes(b.prevMySQLGTIDEvent.SID)
+			b.prevGset.(*MysqlGTIDSet).AddGTID(u, b.prevMySQLGTIDEvent.GNO)
+		}
+		b.prevMySQLGTIDEvent = event
 	case *MariadbGTIDEvent:
 		if b.prevGset == nil {
 			break
 		}
-		GTID := event.GTID
-		err := advanceCurrentGtidSet(fmt.Sprintf("%d-%d-%d", GTID.DomainID, GTID.ServerID, GTID.SequenceNumber))
+		if b.currGset == nil {
+			b.currGset = b.prevGset.Clone()
+		}
+		prev := b.currGset.Clone()
+		err = b.currGset.(*MariadbGTIDSet).AddSet(&event.GTID)
 		if err != nil {
 			return errors.Trace(err)
 		}
+		// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
+		if !b.currGset.Equal(prev) {
+			b.prevGset = prev
+		}
 	case *XIDEvent:
-		event.GSet = getCurrentGtidSet()
+		if !b.cfg.DiscardGTIDSet {
+			event.GSet = getCurrentGtidSet()
+		}
 	case *QueryEvent:
-		event.GSet = getCurrentGtidSet()
+		if !b.cfg.DiscardGTIDSet {
+			event.GSet = getCurrentGtidSet()
+		}
 	}
 
 	needStop := false
@@ -856,17 +877,21 @@ func (b *BinlogSyncer) LastConnectionID() uint32 {
 	return b.lastConnectionID
 }
 
-func (b *BinlogSyncer) newConnection() (*client.Conn, error) {
+func (b *BinlogSyncer) newConnection(ctx context.Context) (*client.Conn, error) {
 	var addr string
 	if b.cfg.Port != 0 {
-		addr = fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port)
+		addr = net.JoinHostPort(b.cfg.Host, strconv.Itoa(int(b.cfg.Port)))
 	} else {
 		addr = b.cfg.Host
 	}
 
-	return client.Connect(addr, b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
-		c.SetTLSConfig(b.cfg.TLSConfig)
-	})
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+
+	return client.ConnectWithDialer(timeoutCtx, "", addr, b.cfg.User, b.cfg.Password,
+		"", b.cfg.Dialer, func(c *client.Conn) {
+			c.SetTLSConfig(b.cfg.TLSConfig)
+		})
 }
 
 func (b *BinlogSyncer) killConnection(conn *client.Conn, id uint32) {

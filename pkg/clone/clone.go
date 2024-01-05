@@ -257,23 +257,3 @@ func (cmd *Clone) copyTableSchema(ctx context.Context, table *Table, source *sql
 	}
 	return nil
 }
-
-func removeElement[T comparable](slice []T, element T) []T {
-	return removeElementByIndex(slice, findIndex(slice, func(t T) bool {
-		return element == t
-	}))
-}
-
-func removeElementByIndex[T any](slice []T, index int) []T {
-	return append(slice[:index], slice[index+1:]...)
-}
-
-func findIndex[T any](slice []T, matchFunc func(T) bool) int {
-	for index, element := range slice {
-		if matchFunc(element) {
-			return index
-		}
-	}
-
-	return -1 // not found
-}

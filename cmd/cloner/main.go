@@ -18,6 +18,7 @@ const TimestampFormat = `2006-01-02T15:04:05.000`
 
 var cli struct {
 	Clone     clone.Clone     `cmd:"" help:"Best effort copy of databases"`
+	NewClone  clone.NewClone  `cmd:"" help:"Best effort copy of databases"`
 	Checksum  clone.Checksum  `cmd:"" help:"Find differences between databases"`
 	Replicate clone.Replicate `cmd:"" help:"Replicate from one database to another and consistent clone"`
 	Ping      clone.Ping      `cmd:"" help:"Ping the databases to check the config is right"`

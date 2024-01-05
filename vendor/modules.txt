@@ -114,7 +114,7 @@ github.com/go-mysql-org/go-mysql/packet
 github.com/go-mysql-org/go-mysql/replication
 github.com/go-mysql-org/go-mysql/schema
 github.com/go-mysql-org/go-mysql/utils
-# github.com/go-sql-driver/mysql v1.7.0
+# github.com/go-sql-driver/mysql v1.7.1
 ## explicit; go 1.13
 github.com/go-sql-driver/mysql
 # github.com/gogo/protobuf v1.3.2

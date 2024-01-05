@@ -127,7 +127,7 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 				continue
 			}
 			currentTransaction.Mutations = append(currentTransaction.Mutations, s.toMutation(e, event))
-		case *replication.XIDEvent:
+		case *replication.XIDEvent: // the last event in a transaction
 			gset := event.GSet
 			currentTransaction.FinalPosition = Position{
 				File:     nextPos.Name,
@@ -156,6 +156,7 @@ func (s *TransactionStream) Run(ctx context.Context, b backoff.BackOff, output c
 
 func (s *TransactionStream) toMutation(e *replication.BinlogEvent, event *replication.RowsEvent) Mutation {
 	mutationType := toMutationType(e.Header.EventType)
+	fmt.Printf("mutationType = %s, RowsEvent = %v\n", mutationType, event)
 	switch mutationType {
 	case Update:
 		if len(event.Rows)%2 != 0 {

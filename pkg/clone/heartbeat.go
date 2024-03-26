@@ -97,7 +97,7 @@ func (h *Heartbeat) Run(ctx context.Context, b backoff.BackOff) error {
 				return errors.WithStack(err)
 			}
 
-			// Read the current heartbeat time from the source database
+			// Read the current heartbeat time from the target database
 			lag, err := h.readLag(ctx)
 			if err != nil {
 				return errors.WithStack(err)

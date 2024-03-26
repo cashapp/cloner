@@ -78,7 +78,7 @@ func (w *TransactionWriter) Init(ctx context.Context) error {
 	return nil
 }
 
-func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transactions <-chan Transaction) error {
 	prometheus.MustRegister(w.targetCollector)
 	defer prometheus.Unregister(w.targetCollector)
 
@@ -90,7 +90,7 @@ func (w *TransactionWriter) Run(ctx context.Context, b backoff.BackOff, transact
 }
 
 // runSequential implements sequential replication
-func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+func (w *TransactionWriter) runSequential(ctx context.Context, b backoff.BackOff, transactions <-chan Transaction) error {
 	for {
 		var transaction Transaction
 		select {
@@ -478,7 +478,7 @@ func (s *transactionSet) Print(ctx context.Context) {
 }
 
 // runParallel implements parallelized replication
-func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, transactions chan Transaction) error {
+func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, transactions <-chan Transaction) error {
 	var currentlyExecutingTransactionSet *transactionSet
 	for {
 		nextTransactionSet, err := w.fillTransactionSet(ctx, transactions)
@@ -508,7 +508,7 @@ func (w *TransactionWriter) runParallel(ctx context.Context, b backoff.BackOff, 
 	}
 }
 
-func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions chan Transaction) (*transactionSet, error) {
+func (w *TransactionWriter) fillTransactionSet(ctx context.Context, transactions <-chan Transaction) (*transactionSet, error) {
 	size := 0
 	nextTransactionSet := &transactionSet{writer: w}
 	transactionSetTimeout := time.After(w.config.ParallelTransactionBatchTimeout)
